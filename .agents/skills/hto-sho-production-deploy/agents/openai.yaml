@@ -1,0 +1,4 @@
+interface:
+  display_name: "Хто Шо? Production Deploy"
+  short_description: "Guarded Laravel production deployment"
+  default_prompt: "Use $hto-sho-production-deploy to check and deploy the current branch to production safely."
