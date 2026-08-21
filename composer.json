@@ -8,6 +8,7 @@
     "require": {
         "php": "^8.3",
         "laravel/framework": "^13.17",
+        "laravel/mcp": "^0.9",
         "laravel/tinker": "^3.0"
     },
     "require-dev": {
@@ -43,7 +44,7 @@
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
-            "@php artisan dev"
+            "npx concurrently --kill-others --names=server,vite --prefix-colors=green,cyan \"cd public && php -d opcache.jit=0 -S 127.0.0.1:8001 ../vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php\" \"npm run dev -- --host 127.0.0.1\""
         ],
         "test": [
             "@php artisan config:clear --ansi @no_additional_args",

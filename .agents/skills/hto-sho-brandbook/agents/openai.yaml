@@ -1,0 +1,5 @@
+interface:
+  display_name: "Хто Шо? Brandbook"
+  short_description: "Brand system for Хто Шо? visuals and copy"
+  brand_color: "#F24B35"
+  default_prompt: "Use $hto-sho-brandbook to create a brand-consistent Хто Шо? asset."

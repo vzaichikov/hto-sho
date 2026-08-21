@@ -1,0 +1,5 @@
+interface:
+  display_name: "Гусь Шо Mascot"
+  short_description: "Canonical mascot emotions, poses, and art"
+  brand_color: "#F24B35"
+  default_prompt: "Use $hto-sho-mascot to create a new on-model Гусь Шо expression."

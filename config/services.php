@@ -35,4 +35,14 @@ return [
         ],
     ],
 
+    'silpo_mcp' => [
+        'url' => env('SILPO_MCP_URL', 'https://mcp.silpo.ua/mcp'),
+        'client_name' => env('SILPO_MCP_CLIENT_NAME', 'Хто Шо?'),
+        'redirect_uri' => env(
+            'SILPO_MCP_REDIRECT_URI',
+            rtrim(env('APP_URL', 'http://127.0.0.1:8000'), '/').'/mcp/oauth/silpo/callback',
+        ),
+        'timeout' => (int) env('SILPO_MCP_TIMEOUT', 20),
+    ],
+
 ];
