@@ -40,17 +40,29 @@ class EventManagementTest extends TestCase
     public function test_event_context_is_optional_and_editable(): void
     {
         $user = User::factory()->create();
-        $event = Event::factory()->for($user)->create();
+        $event = Event::factory()->for($user)->create([
+            'title' => 'Тестовий шашлик',
+        ]);
 
         $this->actingAs($user)
             ->get(route('events.show', $event))
             ->assertOk()
+            ->assertSee('<title>Тестовий шашлик — Хто шо?</title>', escape: false)
             ->assertSee('Короткий опис')
             ->assertSee('Кількість людей')
             ->assertSee('Ще невідомо')
             ->assertSee('Бюджет, ₴')
             ->assertSee('Додати й оновити')
+            ->assertSee('Гусь чекає на новини')
+            ->assertSee(asset('images/brand/goose-sho.png'), escape: false)
             ->assertDontSee('<select', escape: false);
+
+        $this->actingAs($user)
+            ->withSession(['success' => 'Назву події оновлено.'])
+            ->get(route('events.show', $event))
+            ->assertOk()
+            ->assertSee('class="space-y-3 mt-4"', escape: false)
+            ->assertSee('data-flash-messages', escape: false);
 
         $this->actingAs($user)
             ->patch(route('events.update', $event), [

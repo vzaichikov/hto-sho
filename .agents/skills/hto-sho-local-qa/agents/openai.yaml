@@ -1,0 +1,5 @@
+interface:
+  display_name: "Хто Шо? Local QA"
+  short_description: "Guarded authenticated local browser QA"
+  brand_color: "#F24B35"
+  default_prompt: "Use $hto-sho-local-qa to test the authenticated local interface without starting OAuth."

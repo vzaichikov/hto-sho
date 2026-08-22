@@ -4,5 +4,8 @@ Before planning or editing, find the row whose globs match the file's path and r
 
 | Applies to | Rule file |
 | --- | --- |
+| resources/views/{components,events}/** | .ai/rules/componentsevents.md |
+| .agents/skills/hto-sho-local-qa/** | .ai/rules/hto-sho-local-qa.md |
+| {vite.config.js,resources/views/components/layouts/**} | .ai/rules/layouts.md |
 | resources/**/landing* | .ai/rules/resources.md |
-| app/Services/SilpoOAuthClient.php | .ai/rules/services.md |
+| app/Services/SilpoOAuthClient.php, app/Services/AiRequestFactory.php | .ai/rules/services.md |

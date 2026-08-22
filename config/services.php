@@ -45,4 +45,18 @@ return [
         'timeout' => (int) env('SILPO_MCP_TIMEOUT', 20),
     ],
 
+    'ai' => [
+        'provider' => env('AI_PROVIDER', 'openai'),
+        'model' => env('AI_MODEL', 'gpt-5.4-mini'),
+        'api_key' => env('AI_API_KEY'),
+        'providers' => [
+            'openai' => [
+                'base_url' => 'https://api.openai.com/v1',
+            ],
+            'ollama' => [
+                'base_url' => 'https://ollama.com/v1',
+            ],
+        ],
+    ],
+
 ];

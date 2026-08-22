@@ -4,14 +4,21 @@
 @source '../../storage/framework/views/*.php';
 
 @theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
-    --color-canvas: #f7f5ed;
-    --color-ink: #1d241f;
-    --color-muted: #687069;
-    --color-lime: #cdff41;
-    --color-orange: #ff7d3d;
-    --color-orange-dark: #a83c09;
+    --font-display: 'Neucha', cursive;
+    --color-canvas: #fff4dc;
+    --color-paper: #fffaf0;
+    --color-cream-deep: #f6e8ca;
+    --color-ink: #20201d;
+    --color-muted: #706c64;
+    --color-green: #4e9f62;
+    --color-green-dark: #347346;
+    --color-green-soft: #dcebb8;
+    --color-yellow: #f7c84b;
+    --color-orange: #f24b35;
+    --color-orange-dark: #d93422;
+    --color-beet: #ab2c62;
 }
 
 @layer base {
@@ -20,9 +27,18 @@
     }
 
     body {
-        background-image: linear-gradient(rgba(29, 36, 31, 0.025) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(29, 36, 31, 0.025) 1px, transparent 1px);
-        background-size: 28px 28px;
+        background-color: var(--color-canvas);
+        background-image:
+            radial-gradient(circle at 8% 4%, rgb(255 255 255 / 72%), transparent 24rem),
+            radial-gradient(circle at 92% 8%, rgb(247 200 75 / 20%), transparent 20rem),
+            linear-gradient(rgb(32 32 29 / 2.5%) 1px, transparent 1px),
+            linear-gradient(90deg, rgb(32 32 29 / 2.5%) 1px, transparent 1px);
+        background-size: auto, auto, 30px 30px, 30px 30px;
+    }
+
+    ::selection {
+        color: var(--color-ink);
+        background: var(--color-yellow);
     }
 
     button,
