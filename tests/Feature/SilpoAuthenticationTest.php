@@ -30,7 +30,7 @@ class SilpoAuthenticationTest extends TestCase
             ->assertDontSee('Реєстрація');
     }
 
-    public function test_oauth_routes_use_the_expected_loopback_paths_and_rate_limit(): void
+    public function test_oauth_routes_use_the_expected_local_domain_paths_and_rate_limit(): void
     {
         $connectRoute = Route::getRoutes()->getByName('mcp.oauth.silpo.connect');
         $callbackRoute = Route::getRoutes()->getByName('mcp.oauth.silpo.callback');
@@ -41,7 +41,7 @@ class SilpoAuthenticationTest extends TestCase
         $this->assertSame('mcp/oauth/silpo/callback', $callbackRoute->uri());
         $this->assertContains('throttle:silpo-oauth', $connectRoute->gatherMiddleware());
         $this->assertSame(
-            'http://127.0.0.1:8001/mcp/oauth/silpo/callback',
+            'https://hto-sho.local/mcp/oauth/silpo/callback',
             config('services.silpo_mcp.redirect_uri'),
         );
     }
@@ -74,7 +74,7 @@ class SilpoAuthenticationTest extends TestCase
 
             return $request->method() === 'POST'
                 && ($data['token_endpoint_auth_method'] ?? null) === 'none'
-                && ($data['application_type'] ?? null) === 'native'
+                && ($data['application_type'] ?? null) === 'web'
                 && ($data['client_name'] ?? null) === 'Хто Шо?'
                 && ! array_key_exists('scope', $data)
                 && ! array_key_exists('client_secret', $data);
@@ -217,7 +217,7 @@ class SilpoAuthenticationTest extends TestCase
         config()->set([
             'services.silpo_mcp.url' => 'https://mcp.example.test/mcp',
             'services.silpo_mcp.client_name' => 'Хто Шо?',
-            'services.silpo_mcp.redirect_uri' => 'http://127.0.0.1:8001/mcp/oauth/silpo/callback',
+            'services.silpo_mcp.redirect_uri' => 'https://hto-sho.local/mcp/oauth/silpo/callback',
         ]);
 
         Http::preventStrayRequests();
