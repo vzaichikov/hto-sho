@@ -41,4 +41,9 @@ class User extends Authenticatable
     {
         return $this->hasMany(Event::class);
     }
+
+    public function imageExtractions(): HasMany
+    {
+        return $this->hasMany(ImageExtraction::class);
+    }
 }

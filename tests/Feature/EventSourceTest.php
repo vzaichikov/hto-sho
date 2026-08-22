@@ -3,14 +3,17 @@
 namespace Tests\Feature;
 
 use App\CartSyncStatus;
+use App\EventSourceInclusion;
 use App\EventSourceStatus;
 use App\EventSourceType;
 use App\EventStatus;
+use App\Jobs\ProcessImageExtractionJob;
 use App\Models\Event;
 use App\Models\EventSource;
 use App\Models\User;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -18,7 +21,14 @@ class EventSourceTest extends TestCase
 {
     use DatabaseTransactions;
 
-    public function test_text_only_source_is_trimmed_stored_and_marks_event_for_processing(): void
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Queue::fake();
+    }
+
+    public function test_text_only_source_is_trimmed_stored_and_waits_for_manual_analysis(): void
     {
         Storage::fake('local');
         $user = User::factory()->create();
@@ -33,8 +43,10 @@ class EventSourceTest extends TestCase
 
         $this->assertSame(EventSourceType::Text, $source->type);
         $this->assertSame('Оля не їсть мʼясо.', $source->text);
-        $this->assertSame(EventSourceStatus::Pending, $source->status);
-        $this->assertSame(EventStatus::Processing, $event->refresh()->status);
+        $this->assertSame(EventSourceStatus::Processed, $source->status);
+        $this->assertSame(EventSourceInclusion::Included, $source->inclusion);
+        $this->assertSame(EventStatus::Draft, $event->refresh()->status);
+        $this->assertSame(1, $event->evidence_version);
         $this->assertNotNull($event->last_source_at);
     }
 
@@ -52,6 +64,7 @@ class EventSourceTest extends TestCase
         $this->assertSame(EventSourceType::Image, $imageSource->type);
         $this->assertStringStartsWith("events/{$user->id}/{$imageOnlyEvent->id}/", $imageSource->file_path);
         Storage::disk('local')->assertExists($imageSource->file_path);
+        Queue::assertPushed(ProcessImageExtractionJob::class, 1);
 
         $mixedEvent = Event::factory()->for($user)->create();
         $this->actingAs($user)->post(route('events.sources.store', $mixedEvent), [
@@ -79,15 +92,15 @@ class EventSourceTest extends TestCase
         $this->assertSame(1, $event->sources()->count());
     }
 
-    public function test_resubmitting_a_failed_source_retries_it_without_creating_a_duplicate(): void
+    public function test_text_source_does_not_enter_the_image_retry_flow(): void
     {
         $user = User::factory()->create();
-        $event = Event::factory()->for($user)->create(['status' => EventStatus::Failed]);
+        $event = Event::factory()->for($user)->create();
         $text = 'Повторіть обробку цього повідомлення.';
         $source = EventSource::factory()->for($event)->create([
             'text' => $text,
             'content_hash' => hash('sha256', $text),
-            'status' => EventSourceStatus::Failed,
+            'status' => EventSourceStatus::Processed,
             'processing_error' => 'Temporary failure',
             'processed_at' => now(),
         ]);
@@ -95,13 +108,11 @@ class EventSourceTest extends TestCase
         $this->actingAs($user)
             ->post(route('events.sources.store', $event), ['text' => $text])
             ->assertRedirect()
-            ->assertSessionHas('success');
+            ->assertSessionHas('info');
 
         $this->assertSame(1, $event->sources()->count());
-        $this->assertSame(EventSourceStatus::Pending, $source->refresh()->status);
-        $this->assertNull($source->processing_error);
-        $this->assertNull($source->processed_at);
-        $this->assertSame(EventStatus::Processing, $event->refresh()->status);
+        $this->assertSame(EventSourceStatus::Processed, $source->refresh()->status);
+        Queue::assertNothingPushed();
     }
 
     public function test_invalid_mime_oversized_file_and_empty_batch_are_rejected(): void
@@ -136,6 +147,8 @@ class EventSourceTest extends TestCase
             'status' => EventStatus::Ready,
             'state' => ['summary' => 'Готовий стан'],
             'state_version' => 4,
+            'evidence_version' => 4,
+            'state_evidence_version' => 4,
             'shopping_plan' => ['items' => [['name' => 'Вода']]],
             'plan_state_version' => 4,
             'cart_sync_status' => CartSyncStatus::Synced,
@@ -149,8 +162,9 @@ class EventSourceTest extends TestCase
 
         $event->refresh();
 
-        $this->assertSame(EventStatus::Processing, $event->status);
+        $this->assertSame(EventStatus::Ready, $event->status);
         $this->assertSame(CartSyncStatus::Stale, $event->cart_sync_status);
+        $this->assertSame(5, $event->evidence_version);
         $this->assertSame(4, $event->state_version);
         $this->assertSame(4, $event->plan_state_version);
         $this->assertSame(4, $event->cart_synced_state_version);
@@ -187,8 +201,9 @@ class EventSourceTest extends TestCase
         $event = Event::factory()->for($owner)->create([
             'status' => EventStatus::Processing,
             'state_version' => 2,
+            'evidence_version' => 3,
         ]);
-        EventSource::factory()->for($event)->create();
+        EventSource::factory()->for($event)->create(['status' => EventSourceStatus::Pending]);
 
         $this->actingAs($owner)
             ->getJson(route('events.status', $event))
@@ -196,7 +211,9 @@ class EventSourceTest extends TestCase
             ->assertJsonPath('status', 'processing')
             ->assertJsonPath('state_version', 2)
             ->assertJsonPath('sources_count', 1)
-            ->assertJsonPath('pending_sources_count', 1)
+            ->assertJsonPath('source_counts.pending', 1)
+            ->assertJsonPath('evidence_version', 3)
+            ->assertJsonPath('has_unanalyzed_changes', true)
             ->assertJsonPath('plan_current', false)
             ->assertJsonPath('cart_current', false);
 

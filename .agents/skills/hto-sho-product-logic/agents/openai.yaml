@@ -1,0 +1,13 @@
+interface:
+  display_name: "Хто Шо? Product Logic"
+  short_description: "Event-to-cart business logic for Хто Шо?"
+  brand_color: "#F24B35"
+  default_prompt: "Use $hto-sho-product-logic to design or review the event-to-cart behavior."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "silpo"
+      description: "OAuth-authenticated Silpo profile, catalog, and cart operations"
+      transport: "streamable_http"
+      url: "https://mcp.silpo.ua/mcp"

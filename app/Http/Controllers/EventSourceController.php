@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\DeleteEventSourceAction;
 use App\Actions\StoreEventSourcesAction;
 use App\EventSourceType;
 use App\Http\Requests\StoreEventSourcesRequest;
@@ -29,7 +30,7 @@ class EventSourceController extends Controller
             return back()->with('info', 'Ці джерела вже додані до події.');
         }
 
-        return back()->with('success', 'Джерела збережено. Готуємо оновлений підсумок.');
+        return back()->with('success', 'Джерела збережено. Картинки Гусь уже поніс на розбір.');
     }
 
     public function show(Event $event, EventSource $source): StreamedResponse
@@ -45,5 +46,16 @@ class EventSourceController extends Controller
             $source->original_name,
             ['Content-Disposition' => 'inline'],
         );
+    }
+
+    public function destroy(
+        Event $event,
+        EventSource $source,
+        DeleteEventSourceAction $deleteSource,
+    ): RedirectResponse {
+        Gate::authorize('update', $event);
+        $deleteSource->execute($event, $source);
+
+        return back()->with('success', 'Джерело видалено. Гусь удає, що нічого не бачив.');
     }
 }

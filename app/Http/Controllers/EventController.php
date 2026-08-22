@@ -43,7 +43,10 @@ class EventController extends Controller
         Gate::authorize('view', $event);
 
         $event->load([
-            'sources' => fn ($query) => $query->latest(),
+            'sources' => fn ($query) => $query
+                ->with('imageExtraction')
+                ->oldest('created_at')
+                ->oldest('id'),
         ]);
 
         return view('events.show', ['event' => $event]);

@@ -21,6 +21,42 @@
     --color-beet: #ab2c62;
 }
 
+@keyframes goose-work {
+    0%,
+    100% {
+        transform: rotate(-2deg) translateY(0);
+    }
+
+    50% {
+        transform: rotate(2deg) translateY(-5px);
+    }
+}
+
+.goose-working {
+    animation: goose-work 1.15s ease-in-out infinite;
+    transform-origin: 50% 85%;
+}
+
+[data-analysis-overlay][data-minimized='true'] [data-analysis-message],
+[data-analysis-overlay][data-minimized='true'] [data-analysis-progress],
+[data-analysis-overlay][data-minimized='true'] [data-analysis-progress-label] {
+    display: none;
+}
+
+[data-analysis-overlay][data-minimized='true'] {
+    width: min(15rem, calc(100vw - 2rem));
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    .goose-working {
+        animation: none;
+    }
+}
+
 @layer base {
     html {
         scroll-behavior: smooth;

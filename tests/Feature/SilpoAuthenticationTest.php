@@ -30,6 +30,28 @@ class SilpoAuthenticationTest extends TestCase
             ->assertDontSee('Реєстрація');
     }
 
+    public function test_landing_includes_privacy_and_terms_dialogs(): void
+    {
+        $this->get(route('landing'))
+            ->assertOk()
+            ->assertSee('href="#privacy-dialog"', escape: false)
+            ->assertSee('href="#terms-dialog"', escape: false)
+            ->assertSee('id="privacy-dialog"', escape: false)
+            ->assertSee('id="terms-dialog"', escape: false)
+            ->assertSee('Зайчиков Віктор Сергійович')
+            ->assertSee('ІНН 3197615355')
+            ->assertSee('Пароль від Сільпо ми не бачимо і не зберігаємо')
+            ->assertSee('не оформлює замовлення, не натискає «Оплатити» і не списує гроші');
+    }
+
+    public function test_landing_publishes_goose_favicons(): void
+    {
+        $this->get(route('landing'))
+            ->assertOk()
+            ->assertSee(asset('favicon.ico'), escape: false)
+            ->assertSee(asset('images/brand/favicon-goose.png'), escape: false);
+    }
+
     public function test_oauth_routes_use_the_expected_local_domain_paths_and_rate_limit(): void
     {
         $connectRoute = Route::getRoutes()->getByName('mcp.oauth.silpo.connect');

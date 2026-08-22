@@ -49,10 +49,10 @@ class EventManagementTest extends TestCase
             ->assertOk()
             ->assertSee('<title>Тестовий шашлик — Хто шо?</title>', escape: false)
             ->assertSee('Короткий опис')
-            ->assertSee('Кількість людей')
-            ->assertSee('Ще невідомо')
+            ->assertSee('Людей')
             ->assertSee('Бюджет, ₴')
-            ->assertSee('Додати й оновити')
+            ->assertSee('Додати до історії')
+            ->assertSee('Гусь, розгреби все')
             ->assertSee('Гусь чекає на новини')
             ->assertSee(asset('images/brand/goose-sho.png'), escape: false)
             ->assertDontSee('<select', escape: false);
@@ -82,55 +82,48 @@ class EventManagementTest extends TestCase
         $this->assertSame('3500.00', $event->budget_amount);
     }
 
-    public function test_ready_workspace_renders_current_state_needs_and_automatic_product_plan(): void
+    public function test_ready_workspace_renders_the_context_harness_without_generating_a_product_plan(): void
     {
         $user = User::factory()->create();
         $event = Event::factory()->for($user)->create([
             'title' => 'Пікнік',
             'status' => EventStatus::Ready,
             'state_version' => 3,
+            'evidence_version' => 3,
+            'state_evidence_version' => 3,
             'state' => [
                 'summary' => 'Зустріч для шести друзів.',
                 'participants' => [[
                     'name' => 'Оля',
                     'status' => 'буде',
+                    'preferences' => [],
                     'restrictions' => ['без мʼяса'],
+                    'allergies' => [],
                     'brings' => ['плед'],
+                    'source_ids' => [9],
                 ]],
-                'shopping_needs' => [[
-                    'name' => 'Вода',
-                    'quantity' => 6,
-                    'unit' => 'л',
+                'restrictions' => [[
+                    'participant' => 'Оля',
+                    'restriction' => 'без мʼяса',
+                    'severity' => 'hard',
+                    'source_ids' => [9],
                 ]],
-                'warnings' => ['Уточніть напої для Тараса.'],
+                'agreements' => [],
+                'warnings' => [['message' => 'Уточніть напої для Тараса.', 'source_ids' => [9]]],
+                'unresolved_questions' => [],
+                'source_ids' => [9],
             ],
-            'shopping_plan' => [
-                'items' => [[
-                    'name' => 'Вода негазована',
-                    'quantity' => 3,
-                    'price' => 30,
-                    'line_total' => 90,
-                    'matched_need' => 'Вода 6 л',
-                ]],
-                'total' => 90,
-                'unresolved_items' => [],
-            ],
-            'plan_state_version' => 3,
-            'estimated_total' => 90,
         ]);
 
         $this->actingAs($user)
             ->get(route('events.show', $event))
             ->assertOk()
-            ->assertSee('Що відомо')
+            ->assertSee('Що Гусь зрозумів')
             ->assertSee('Оля')
             ->assertSee('без мʼяса')
-            ->assertSee('Що треба купити')
-            ->assertSee('Вода')
-            ->assertSee('Кошик Сільпо')
-            ->assertSee('Вода негазована')
-            ->assertSee('Додати все в кошик')
-            ->assertSee('Потрібне уточнення')
+            ->assertSee('Історія контексту')
+            ->assertSee('Обережно')
+            ->assertDontSee('Кошик Сільпо')
             ->assertDontSee('<select', escape: false)
             ->assertDontSee('type="checkbox"', escape: false);
 

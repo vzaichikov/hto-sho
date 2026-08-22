@@ -315,11 +315,210 @@
           <span>ХТО ШО<i>?</i></span>
         </a>
         <p>© 2026 Хто шо? Гусь усе тримає під контролем.</p>
-        <div>
-          <a href="#top">Приватність</a>
-          <a href="#top">Умови</a>
+        <div class="footer-links">
+          <a href="#privacy-dialog" data-dialog-open="privacy-dialog">Приватність</a>
+          <a href="#terms-dialog" data-dialog-open="terms-dialog">Умови</a>
         </div>
       </div>
     </footer>
+
+    <dialog
+      class="legal-dialog legal-dialog-privacy"
+      id="privacy-dialog"
+      aria-labelledby="privacy-title"
+      data-legal-dialog
+    >
+      <article class="legal-card">
+        <header class="legal-header">
+          <div>
+            <p class="legal-eyebrow">Приватність без дрібного шрифту</p>
+            <h2 id="privacy-title">Гусь не пхає дзьоб, куди не просили</h2>
+            <p>Останнє оновлення: 22 серпня 2026 року</p>
+          </div>
+          <form method="dialog">
+            <button class="legal-close" type="submit" aria-label="Закрити політику приватності">×</button>
+          </form>
+        </header>
+
+        <div class="legal-body">
+          <aside class="legal-owner">
+            <span>Хто відповідає за гусака</span>
+            <strong>Зайчиков Віктор Сергійович</strong>
+            <p>Власник і адміністратор сервісу · ІНН 3197615355</p>
+          </aside>
+
+          <section class="legal-section">
+            <h3>Що потрапляє до нашого гнізда</h3>
+            <ul>
+              <li><strong>Вхід через Сільпо.</strong> Дані профілю, які повертає Сільпо, технічний ідентифікатор та OAuth-токени. Пароль від Сільпо ми не бачимо і не зберігаємо.</li>
+              <li><strong>Матеріали події.</strong> Назва й опис події, текст, скріншоти, назви файлів, домовленості, вподобання, алергії, обмеження, бюджет та інші дані, які ви самі додаєте.</li>
+              <li><strong>Результати роботи.</strong> Розпізнаний текст, висновки AI, попередження, список покупок, вибрані товари та стан синхронізації кошика.</li>
+              <li><strong>Технічні дані.</strong> Сесія входу, час дій і помилки, потрібні для безпеки та роботи сервісу. Рекламних трекерів Гусь не розводить.</li>
+            </ul>
+          </section>
+
+          <section class="legal-section">
+            <h3>Навіщо це все</h3>
+            <p>Щоб упізнати вас після входу, зберегти ваші події, прочитати надані матеріали, зібрати актуальний план і — лише після вашої команди — підібрати товари або оновити кошик Сільпо. Ми не продаємо ці дані й не будуємо з них рекламні профілі.</p>
+          </section>
+
+          <section class="legal-section">
+            <h3>Кому щось передається</h3>
+            <ul>
+              <li><strong>Налаштованому AI-сервісу — OpenAI або Ollama.</strong> Він отримує надане зображення, текст чи потрібний контекст, щоб розпізнати й узагальнити матеріали. OAuth-токени та зайві дані до AI не передаємо.</li>
+              <li><strong>Сільпо через офіційний OAuth і MCP.</strong> MCP — це захищене машинне зʼєднання, через яке сервіс може прочитати ваш профіль, знайти товари, перевірити поточний кошик і виконати запитану вами зміну. Оформлення замовлення та оплата сюди не входять.</li>
+              <li><strong>Інфраструктурі сервісу.</strong> База даних, приватне сховище файлів і черги обробки тримають інформацію, потрібну для роботи «Хто Шо?».</li>
+            </ul>
+          </section>
+
+          <section class="legal-section">
+            <h3>Як зберігаємо й видаляємо</h3>
+            <p>Скріншоти лежать у приватному сховищі, а події та результати — у базі даних. OAuth-токени й знімок профілю Сільпо зберігаються зашифрованими. Дані кожного користувача відокремлені від чужих.</p>
+            <p>Джерело або всю подію можна видалити в інтерфейсі. Разом із ними видаляються прикріплені приватні файли та повʼязані результати, щойно вони більше не потрібні іншому вашому джерелу. Не вантажте в чат те, чого Гусю знати не треба.</p>
+          </section>
+
+          <div class="legal-note">
+            <strong>Коротко:</strong> ви приносите чат — ми працюємо тільки заради вашої події. Ніяких таємних замовлень, продажу даних чи дзьобання паролів.
+          </div>
+
+          <form class="legal-actions" method="dialog">
+            <button type="submit">Зрозуміло, ґа-ґа</button>
+          </form>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog
+      class="legal-dialog legal-dialog-terms"
+      id="terms-dialog"
+      aria-labelledby="terms-title"
+      data-legal-dialog
+    >
+      <article class="legal-card">
+        <header class="legal-header">
+          <div>
+            <p class="legal-eyebrow">Умови без юридичного туману</p>
+            <h2 id="terms-title">Домовились на березі. І біля кошика.</h2>
+            <p>Останнє оновлення: 22 серпня 2026 року</p>
+          </div>
+          <form method="dialog">
+            <button class="legal-close" type="submit" aria-label="Закрити умови користування">×</button>
+          </form>
+        </header>
+
+        <div class="legal-body">
+          <aside class="legal-owner">
+            <span>Власник сервісу</span>
+            <strong>Зайчиков Віктор Сергійович</strong>
+            <p>ІНН 3197615355</p>
+          </aside>
+
+          <section class="legal-section">
+            <h3>1. Що це за сервіс</h3>
+            <p>«Хто Шо?» допомагає перетворити повідомлення та скріншоти про одну подію на зрозумілий контекст, список покупок і чернетку кошика Сільпо. Це помічник для планування, а не магазин, платіжний сервіс, лікар чи той друг, який «точно памʼятає», у кого алергія.</p>
+          </section>
+
+          <section class="legal-section">
+            <h3>2. Вхід і ваші матеріали</h3>
+            <ul>
+              <li>Ви входите через офіційний OAuth Сільпо й дозволяєте сервісу отримати потрібні дані профілю. Окремого пароля для «Хто Шо?» немає.</li>
+              <li>Завантажуючи чат, текст або зображення, ви підтверджуєте, що маєте право ними користуватися. Не додавайте чужі секрети, банківські дані та інформацію, без якої подія чудово проживе.</li>
+              <li>Ви можете редагувати подію, вилучати окремі джерела або видалити подію повністю.</li>
+            </ul>
+          </section>
+
+          <section class="legal-section">
+            <h3>3. AI може помилитися. Навіть у краватці.</h3>
+            <p>Розпізнавання скріншотів і висновки можуть бути неповними або неточними. Перед покупкою перевірте учасників, алергії, дієтичні обмеження, кількості, ціни й товари. Остаточне рішення завжди ваше; сервіс не надає медичних чи дієтологічних рекомендацій.</p>
+          </section>
+
+          <section class="legal-section">
+            <h3>4. Як працюємо із Сільпо MCP</h3>
+            <ul>
+              <li>Через MCP сервіс може читати потрібні дані профілю, каталогу, наявності, цін і вашого поточного кошика — у межах можливостей, які надає Сільпо.</li>
+              <li>Додавання, заміна або видалення товарів відбувається тільки після вашої явної дії синхронізації. Чужі до події товари в кошику чіпати не повинні.</li>
+              <li>«Хто Шо?» не оформлює замовлення, не натискає «Оплатити» і не списує гроші. Кошик залишається чернеткою для вашої перевірки.</li>
+              <li>Ціни, асортимент, наявність, доставка й оформлення регулюються самим Сільпо та можуть змінюватися швидше, ніж Гусь встигає сказати «ґа».</li>
+            </ul>
+          </section>
+
+          <section class="legal-section">
+            <h3>5. Нормальна поведінка</h3>
+            <p>Не ламайте сервіс, не обходьте захист, не завантажуйте шкідливі файли й не використовуйте «Хто Шо?» для незаконних дій. Ми можемо обмежити доступ, якщо хтось системно псує гніздо іншим.</p>
+          </section>
+
+          <section class="legal-section">
+            <h3>6. Доступність і зміни</h3>
+            <p>Ми стараємося тримати сервіс бадьорим, але не гарантуємо безперервну роботу AI, Сільпо MCP чи інших зовнішніх систем. Умови можуть оновлюватися разом із продуктом; актуальна редакція завжди живе в цьому вікні.</p>
+          </section>
+
+          <div class="legal-note">
+            <strong>Коротко:</strong> Гусь допомагає, ви перевіряєте, а купуєте й оплачуєте лише ви самі.
+          </div>
+
+          <form class="legal-actions" method="dialog">
+            <button type="submit">Домовились</button>
+          </form>
+        </div>
+      </article>
+    </dialog>
+
+    <script>
+      (() => {
+        const activeTriggers = new WeakMap();
+        const dialogs = document.querySelectorAll('[data-legal-dialog]');
+
+        const openDialog = (dialog, trigger = null) => {
+          if (!(dialog instanceof HTMLDialogElement) || dialog.open) {
+            return;
+          }
+
+          if (trigger instanceof HTMLElement) {
+            activeTriggers.set(dialog, trigger);
+          }
+
+          dialog.showModal();
+        };
+
+        document.querySelectorAll('[data-dialog-open]').forEach((trigger) => {
+          trigger.addEventListener('click', (event) => {
+            const dialog = document.getElementById(trigger.dataset.dialogOpen);
+
+            if (dialog instanceof HTMLDialogElement && typeof dialog.showModal === 'function') {
+              event.preventDefault();
+              openDialog(dialog, trigger);
+            }
+          });
+        });
+
+        dialogs.forEach((dialog) => {
+          dialog.addEventListener('click', (event) => {
+            if (event.target === dialog) {
+              dialog.close();
+            }
+          });
+
+          dialog.addEventListener('close', () => {
+            if (window.location.hash === `#${dialog.id}`) {
+              window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+            }
+
+            activeTriggers.get(dialog)?.focus();
+            activeTriggers.delete(dialog);
+          });
+        });
+
+        const openLinkedDialog = () => {
+          const linkedDialog = document.getElementById(window.location.hash.slice(1));
+
+          if (linkedDialog instanceof HTMLDialogElement && typeof linkedDialog.showModal === 'function') {
+            openDialog(linkedDialog);
+          }
+        };
+
+        window.addEventListener('hashchange', openLinkedDialog);
+        openLinkedDialog();
+      })();
+    </script>
 
 </x-layouts.landing>

@@ -27,6 +27,7 @@ class EventFactory extends Factory
             'people_count' => null,
             'status' => EventStatus::Draft,
             'state_version' => 0,
+            'evidence_version' => 0,
             'currency' => 'UAH',
             'cart_sync_status' => CartSyncStatus::NotSynced,
         ];
@@ -44,6 +45,8 @@ class EventFactory extends Factory
                 'warnings' => [],
             ],
             'state_version' => 1,
+            'evidence_version' => 1,
+            'state_evidence_version' => 1,
             'shopping_plan' => [
                 'items' => [],
                 'unresolved' => [],

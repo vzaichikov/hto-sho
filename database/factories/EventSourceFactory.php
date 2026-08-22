@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\EventSourceInclusion;
 use App\EventSourceStatus;
 use App\EventSourceType;
 use App\Models\Event;
@@ -30,7 +31,9 @@ class EventSourceFactory extends Factory
             'upload_batch' => (string) Str::ulid(),
             'position' => 0,
             'content_hash' => hash('sha256', $text),
-            'status' => EventSourceStatus::Pending,
+            'status' => EventSourceStatus::Processed,
+            'inclusion' => EventSourceInclusion::Included,
+            'processed_at' => now(),
         ];
     }
 }

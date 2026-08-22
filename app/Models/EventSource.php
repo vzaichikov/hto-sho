@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\EventSourceInclusion;
 use App\EventSourceStatus;
 use App\EventSourceType;
 use Database\Factories\EventSourceFactory;
@@ -12,6 +13,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 #[Fillable([
     'event_id',
+    'image_extraction_id',
     'type',
     'text',
     'file_path',
@@ -22,6 +24,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'position',
     'content_hash',
     'status',
+    'inclusion',
+    'used_cached_extraction',
     'processing_error',
     'processed_at',
 ])]
@@ -32,6 +36,7 @@ class EventSource extends Model
 
     protected $attributes = [
         'status' => 'pending',
+        'inclusion' => 'included',
     ];
 
     protected function casts(): array
@@ -39,6 +44,8 @@ class EventSource extends Model
         return [
             'type' => EventSourceType::class,
             'status' => EventSourceStatus::class,
+            'inclusion' => EventSourceInclusion::class,
+            'used_cached_extraction' => 'boolean',
             'processed_at' => 'datetime',
         ];
     }
@@ -46,5 +53,15 @@ class EventSource extends Model
     public function event(): BelongsTo
     {
         return $this->belongsTo(Event::class);
+    }
+
+    public function imageExtraction(): BelongsTo
+    {
+        return $this->belongsTo(ImageExtraction::class);
+    }
+
+    public function isIncluded(): bool
+    {
+        return $this->inclusion->isIncluded();
     }
 }
