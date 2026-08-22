@@ -69,10 +69,258 @@ if (sourceComposer) {
     });
 }
 
+const eventCreateForm = document.querySelector('[data-event-create]');
+
+if (eventCreateForm) {
+    const titleInput = eventCreateForm.querySelector('[data-create-title]');
+    const descriptionInput = eventCreateForm.querySelector('[data-create-description]');
+    const stepPanels = Array.from(eventCreateForm.querySelectorAll('[data-create-step]'));
+    const stepIndicators = Array.from(document.querySelectorAll('[data-create-step-indicator]'));
+    const stepLine = document.querySelector('[data-create-step-line]');
+    const stepLabel = document.querySelector('[data-create-step-label]');
+    const checkingPanel = eventCreateForm.querySelector('[data-create-checking]');
+    const submitButton = eventCreateForm.querySelector('[data-create-submit]');
+    const requestError = eventCreateForm.querySelector('[data-create-request-error]');
+    const serverError = document.querySelector('[data-create-server-error]');
+    const descriptionCount = eventCreateForm.querySelector('[data-create-description-count]');
+    let currentStep = Number(eventCreateForm.dataset.initialStep) === 2 ? 2 : 1;
+
+    const fieldError = (field) => eventCreateForm.querySelector(`[data-create-error="${field}"]`);
+
+    const setFieldError = (field, message = '') => {
+        const error = fieldError(field);
+        const input = field === 'title' ? titleInput : descriptionInput;
+
+        if (error) {
+            error.textContent = message;
+        }
+
+        input.toggleAttribute('aria-invalid', message !== '');
+    };
+
+    const setStep = (step) => {
+        currentStep = step;
+        checkingPanel.hidden = true;
+
+        stepPanels.forEach((panel) => {
+            panel.hidden = Number(panel.dataset.createStep) !== step;
+        });
+        stepIndicators.forEach((indicator) => {
+            const indicatorStep = Number(indicator.dataset.createStepIndicator);
+            const reached = indicatorStep <= step;
+            indicator.classList.toggle('bg-orange', reached);
+            indicator.classList.toggle('text-white', reached);
+            indicator.classList.toggle('border-ink', reached);
+            indicator.classList.toggle('bg-canvas', ! reached);
+            indicator.classList.toggle('text-muted', ! reached);
+            indicator.classList.toggle('border-ink/25', ! reached);
+
+            if (indicatorStep === step) {
+                indicator.setAttribute('aria-current', 'step');
+            } else {
+                indicator.removeAttribute('aria-current');
+            }
+        });
+        stepLine?.classList.toggle('bg-green', step === 2);
+        stepLine?.classList.toggle('bg-ink/10', step !== 2);
+
+        if (stepLabel) {
+            stepLabel.textContent = `Крок ${step} з 2`;
+        }
+    };
+
+    const validateTitle = () => {
+        titleInput.value = titleInput.value.trim();
+
+        if (titleInput.value === '') {
+            setFieldError('title', 'Без назви Гусь не знайде цю пригоду потім.');
+            titleInput.focus();
+
+            return false;
+        }
+
+        if (titleInput.value.length > 120) {
+            setFieldError('title', 'Назва розігналася далі 120 символів. Трошки підріжте.');
+            titleInput.focus();
+
+            return false;
+        }
+
+        setFieldError('title');
+
+        return true;
+    };
+
+    const validateDescription = () => {
+        descriptionInput.value = descriptionInput.value.trim();
+
+        if (descriptionInput.value === '') {
+            setFieldError('description', 'Підкиньте Гусю хоч кілька слів про задум.');
+            descriptionInput.focus();
+
+            return false;
+        }
+
+        if (descriptionInput.value.length > 500) {
+            setFieldError('description', 'Гусь просив коротко: до 500 символів, будь ласка.');
+            descriptionInput.focus();
+
+            return false;
+        }
+
+        setFieldError('description');
+
+        return true;
+    };
+
+    const showRequestError = (message = '') => {
+        requestError.textContent = message;
+        requestError.classList.toggle('hidden', message === '');
+
+        if (message === '') {
+            serverError?.classList.add('hidden');
+        }
+    };
+
+    const setChecking = (checking) => {
+        stepPanels.forEach((panel) => {
+            panel.hidden = checking || Number(panel.dataset.createStep) !== currentStep;
+        });
+        checkingPanel.hidden = ! checking;
+        submitButton.disabled = checking;
+    };
+
+    eventCreateForm.dataset.enhanced = 'true';
+    setStep(currentStep);
+
+    eventCreateForm.querySelector('[data-create-next]')?.addEventListener('click', () => {
+        if (validateTitle()) {
+            showRequestError();
+            setStep(2);
+            descriptionInput.focus();
+        }
+    });
+
+    eventCreateForm.querySelector('[data-create-back]')?.addEventListener('click', () => {
+        showRequestError();
+        setStep(1);
+        titleInput.focus();
+    });
+
+    eventCreateForm.querySelectorAll('[data-create-example]').forEach((example) => {
+        example.addEventListener('click', () => {
+            descriptionInput.value = example.dataset.createExample;
+            descriptionInput.dispatchEvent(new Event('input'));
+            descriptionInput.focus();
+        });
+    });
+
+    titleInput.addEventListener('input', () => setFieldError('title'));
+    descriptionInput.addEventListener('input', () => {
+        setFieldError('description');
+        descriptionCount.textContent = descriptionInput.value.length;
+    });
+
+    eventCreateForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        showRequestError();
+
+        if (! validateTitle()) {
+            setStep(1);
+
+            return;
+        }
+
+        if (! validateDescription()) {
+            setStep(2);
+
+            return;
+        }
+
+        setChecking(true);
+
+        try {
+            const response = await fetch(eventCreateForm.action, {
+                method: 'POST',
+                headers: { Accept: 'application/json' },
+                credentials: 'same-origin',
+                body: new FormData(eventCreateForm),
+            });
+            const payload = await response.json().catch(() => ({}));
+
+            if (response.ok && payload.redirect) {
+                window.location.assign(payload.redirect);
+
+                return;
+            }
+
+            setChecking(false);
+
+            if (response.status === 422 && payload.errors) {
+                const titleMessage = payload.errors.title?.[0] ?? '';
+                const descriptionMessage = payload.errors.description?.[0] ?? '';
+                setFieldError('title', titleMessage);
+                setFieldError('description', descriptionMessage);
+                setStep(titleMessage ? 1 : 2);
+                (titleMessage ? titleInput : descriptionInput).focus();
+
+                return;
+            }
+
+            setStep(2);
+            showRequestError(payload.message || 'Гусь загубив відповідь десь між дзьобом і сервером. Спробуйте ще раз.');
+        } catch {
+            setChecking(false);
+            setStep(2);
+            showRequestError('Гусь загубив звʼязок. Нічого не зберегли — перевірте мережу й повторіть.');
+        }
+    });
+}
+
 document.querySelectorAll('[data-confirm]').forEach((form) => {
     form.addEventListener('submit', (event) => {
         if (! window.confirm(form.dataset.confirm)) {
             event.preventDefault();
+        }
+    });
+});
+
+const correctionToggle = document.querySelector('[data-plan-correction-toggle]');
+const correctionPanel = document.querySelector('[data-plan-correction-panel]');
+
+if (correctionToggle && correctionPanel) {
+    const correctionInput = correctionPanel.querySelector('[data-plan-correction-input]');
+
+    correctionToggle.addEventListener('click', () => {
+        const willOpen = correctionPanel.classList.contains('hidden');
+
+        correctionPanel.classList.toggle('hidden', ! willOpen);
+        correctionToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+
+        if (willOpen) {
+            correctionInput?.focus();
+        }
+    });
+}
+
+const silpoDialog = document.querySelector('[data-silpo-dialog]');
+const silpoDialogButton = document.querySelector('[data-silpo-dialog-open]');
+
+if (silpoDialog instanceof HTMLDialogElement && silpoDialogButton) {
+    silpoDialogButton.addEventListener('click', () => silpoDialog.showModal());
+    silpoDialog.addEventListener('click', (event) => {
+        if (event.target === silpoDialog) {
+            silpoDialog.close('cancel');
+        }
+    });
+}
+
+document.querySelectorAll('[data-question-custom-input]').forEach((input) => {
+    input.addEventListener('input', () => {
+        const choice = input.closest('label')?.querySelector('[data-question-custom-choice]');
+
+        if (choice && input.value.trim() !== '') {
+            choice.checked = true;
         }
     });
 });
@@ -85,6 +333,7 @@ if (workspace) {
     const analysisButton = document.querySelector('[data-analysis-button]');
     const minimizeButton = document.querySelector('[data-analysis-minimize]');
     const initialStateVersion = Number(workspace.dataset.eventStateVersion);
+    const initialPlanStatus = workspace.dataset.eventPlanStatus;
 
     const setOverlay = (task) => {
         if (! overlay || ! task) {
@@ -160,7 +409,11 @@ if (workspace) {
                 statusBadge.textContent = data.status_label;
             }
 
-            if (sourceFinished || Number(data.state_version) !== initialStateVersion) {
+            if (
+                sourceFinished
+                || Number(data.state_version) !== initialStateVersion
+                || data.plan_generation_status !== initialPlanStatus
+            ) {
                 window.location.reload();
             }
         } catch {

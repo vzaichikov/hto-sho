@@ -8,9 +8,11 @@ use App\EventSourceStatus;
 use App\EventSourceType;
 use App\EventStatus;
 use App\Jobs\ProcessImageExtractionJob;
+use App\Jobs\SummarizeEventContextJob;
 use App\Models\Event;
 use App\Models\EventSource;
 use App\Models\User;
+use App\PlanGenerationStatus;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
@@ -28,7 +30,7 @@ class EventSourceTest extends TestCase
         Queue::fake();
     }
 
-    public function test_text_only_source_is_trimmed_stored_and_waits_for_manual_analysis(): void
+    public function test_text_only_source_is_trimmed_stored_and_starts_analysis_automatically(): void
     {
         Storage::fake('local');
         $user = User::factory()->create();
@@ -45,9 +47,10 @@ class EventSourceTest extends TestCase
         $this->assertSame('Оля не їсть мʼясо.', $source->text);
         $this->assertSame(EventSourceStatus::Processed, $source->status);
         $this->assertSame(EventSourceInclusion::Included, $source->inclusion);
-        $this->assertSame(EventStatus::Draft, $event->refresh()->status);
+        $this->assertSame(EventStatus::Processing, $event->refresh()->status);
         $this->assertSame(1, $event->evidence_version);
         $this->assertNotNull($event->last_source_at);
+        Queue::assertPushed(SummarizeEventContextJob::class, 1);
     }
 
     public function test_image_only_and_mixed_batches_are_stored_on_private_disk(): void
@@ -87,7 +90,7 @@ class EventSourceTest extends TestCase
         $this->actingAs($user)
             ->post(route('events.sources.store', $event), $payload)
             ->assertRedirect()
-            ->assertSessionHas('info', 'Ці джерела вже додані до події.');
+            ->assertSessionHas('info', 'Ці матеріали Гусь уже бачив.');
 
         $this->assertSame(1, $event->sources()->count());
     }
@@ -151,6 +154,7 @@ class EventSourceTest extends TestCase
             'state_evidence_version' => 4,
             'shopping_plan' => ['items' => [['name' => 'Вода']]],
             'plan_state_version' => 4,
+            'plan_generation_status' => PlanGenerationStatus::Ready,
             'cart_sync_status' => CartSyncStatus::Synced,
             'cart_synced_state_version' => 4,
             'cart_synced_at' => now(),
@@ -162,7 +166,7 @@ class EventSourceTest extends TestCase
 
         $event->refresh();
 
-        $this->assertSame(EventStatus::Ready, $event->status);
+        $this->assertSame(EventStatus::Processing, $event->status);
         $this->assertSame(CartSyncStatus::Stale, $event->cart_sync_status);
         $this->assertSame(5, $event->evidence_version);
         $this->assertSame(4, $event->state_version);

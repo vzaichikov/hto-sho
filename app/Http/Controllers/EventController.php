@@ -2,14 +2,21 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\CreateEventAction;
 use App\Actions\DeleteEventAction;
-use App\EventStatus;
+use App\Actions\UpdateEventAction;
+use App\Http\Requests\StoreEventRequest;
 use App\Http\Requests\UpdateEventRequest;
 use App\Models\Event;
+use App\Services\ContextAnalysisService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Throwable;
 
 class EventController extends Controller
 {
@@ -26,37 +33,101 @@ class EventController extends Controller
         return view('events.index', ['events' => $events]);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function create(): View
     {
         Gate::authorize('create', Event::class);
 
-        $event = $request->user()->events()->create([
-            'title' => 'Подія · '.now()->format('d.m H:i'),
-            'status' => EventStatus::Draft,
-        ]);
-
-        return redirect()->route('events.show', $event);
+        return view('events.create');
     }
 
-    public function show(Event $event): View
+    public function store(
+        StoreEventRequest $request,
+        ContextAnalysisService $analysis,
+        CreateEventAction $createEvent,
+    ): JsonResponse|RedirectResponse|Response {
+        $attributes = $request->validated();
+
+        try {
+            $review = $analysis->reviewEventDescription($attributes['description']);
+        } catch (Throwable $throwable) {
+            report($throwable);
+
+            return $this->aiUnavailableResponse($request, creating: true);
+        }
+
+        if (! $review->accepted) {
+            throw ValidationException::withMessages([
+                'description' => $review->reason->message(),
+            ]);
+        }
+
+        $event = $createEvent->execute($request->user(), $attributes);
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'redirect' => route('events.show', $event),
+            ], 201);
+        }
+
+        return redirect()
+            ->route('events.show', $event)
+            ->with('success', 'Задум смачний. Гусь уже розгрібає перший контекст.');
+    }
+
+    public function show(Request $request, Event $event): View
     {
         Gate::authorize('view', $event);
+
+        $activeTab = in_array($request->query('tab'), ['context', 'questions', 'plan', 'silpo'], true)
+            ? $request->query('tab')
+            : 'context';
 
         $event->load([
             'sources' => fn ($query) => $query
                 ->with('imageExtraction')
                 ->oldest('created_at')
                 ->oldest('id'),
+            'contextVersions' => fn ($query) => $query
+                ->where('state_version', '<', $event->state_version)
+                ->latest('state_version'),
         ]);
 
-        return view('events.show', ['event' => $event]);
+        return view('events.show', [
+            'event' => $event,
+            'activeTab' => $activeTab,
+        ]);
     }
 
-    public function update(UpdateEventRequest $request, Event $event): RedirectResponse
-    {
-        $event->update($request->validated());
+    public function update(
+        UpdateEventRequest $request,
+        Event $event,
+        ContextAnalysisService $analysis,
+        UpdateEventAction $updateEvent,
+    ): JsonResponse|RedirectResponse {
+        $attributes = $request->validated();
+        $descriptionChanged = ($attributes['description'] ?? null) !== $event->description;
 
-        return back()->with('success', 'Назву події оновлено.');
+        if ($descriptionChanged && filled($attributes['description'] ?? null)) {
+            try {
+                $review = $analysis->reviewEventDescription($attributes['description']);
+            } catch (Throwable $throwable) {
+                report($throwable);
+
+                return $this->aiUnavailableResponse($request, creating: false);
+            }
+
+            if (! $review->accepted) {
+                throw ValidationException::withMessages([
+                    'description' => $review->reason->message(),
+                ]);
+            }
+        }
+
+        $updateEvent->execute($event, $attributes);
+
+        return redirect()
+            ->route('events.show', ['event' => $event, 'tab' => 'context'])
+            ->with('success', 'Гусь запамʼятав зміни й уже оновлює план.');
     }
 
     public function destroy(Event $event, DeleteEventAction $deleteEvent): RedirectResponse
@@ -65,6 +136,25 @@ class EventController extends Controller
 
         $deleteEvent->execute($event);
 
-        return redirect()->route('events.index')->with('success', 'Подію та її джерела видалено.');
+        return redirect()->route('events.index')->with('success', 'Подію та всі її матеріали видалено.');
+    }
+
+    private function aiUnavailableResponse(Request $request, bool $creating): JsonResponse|RedirectResponse|Response
+    {
+        $message = 'Гусь завис над задумом. Нічого не зберегли — спробуйте ще раз.';
+
+        if ($request->expectsJson()) {
+            return response()->json(['message' => $message], 503);
+        }
+
+        if (! $creating) {
+            return back()->withInput()->with('error', $message);
+        }
+
+        return response()->view('events.create', [
+            'failureMessage' => $message,
+            'form' => $request->only(['title', 'description', 'alcohol_planned']),
+            'initialStep' => 2,
+        ], 503);
     }
 }

@@ -6,7 +6,6 @@ use App\EventSourceStatus;
 use App\EventSourceType;
 use App\ImageExtractionStatus;
 use App\Jobs\ProcessImageExtractionJob;
-use App\Jobs\SummarizeEventContextJob;
 use App\Models\Event;
 use App\Models\EventSource;
 use App\Models\ImageExtraction;
@@ -15,6 +14,8 @@ use Illuminate\Validation\ValidationException;
 
 class RetryEventSourceAction
 {
+    public function __construct(private readonly StartEventAnalysisAction $startAnalysis) {}
+
     public function execute(Event $event, EventSource $source): void
     {
         $activeTasks = DB::transaction(function () use ($event, $source): array {
@@ -32,7 +33,7 @@ class RetryEventSourceAction
             $extraction = ImageExtraction::query()->lockForUpdate()->find($lockedSource->image_extraction_id);
 
             if ($extraction === null) {
-                throw ValidationException::withMessages(['source' => 'OCR-кеш для цього зображення вже відсутній.']);
+                throw ValidationException::withMessages(['source' => 'Гусь уже не може пригадати цю картинку. Додайте її ще раз.']);
             }
 
             $extraction->update([
@@ -47,7 +48,6 @@ class RetryEventSourceAction
                 'processed_at' => null,
             ]);
 
-            $tasks = [];
             $eventIds = [];
 
             foreach ($extraction->sources()->with('event')->lockForUpdate()->get() as $relatedSource) {
@@ -58,23 +58,22 @@ class RetryEventSourceAction
                 ]);
                 $eventIds[$relatedSource->event_id] = $relatedSource->event_id;
 
-                if ($relatedSource->event->hasActiveAnalysis()) {
-                    $tasks[$relatedSource->event_id] = $relatedSource->event->analysis_task_id;
-                }
             }
 
             Event::query()->whereKey($eventIds)->increment('evidence_version');
             Event::query()->whereKey($eventIds)->update(['last_source_at' => now()]);
 
-            return [$extraction->id, $tasks];
+            return [$extraction->id, $eventIds];
         });
 
         ProcessImageExtractionJob::dispatch($activeTasks[0])->afterCommit();
 
-        foreach ($activeTasks[1] as $eventId => $taskId) {
-            SummarizeEventContextJob::dispatch($eventId, $taskId)
-                ->delay(now()->addSeconds(5))
-                ->afterCommit();
+        foreach ($activeTasks[1] as $eventId) {
+            $relatedEvent = Event::query()->find($eventId);
+
+            if ($relatedEvent !== null) {
+                $this->startAnalysis->execute($relatedEvent);
+            }
         }
     }
 }

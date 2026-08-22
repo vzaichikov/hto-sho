@@ -201,7 +201,7 @@ class ContextHarnessTest extends TestCase
             ->assertNotFound();
     }
 
-    public function test_history_is_chronological_and_ui_contains_polling_progress_and_reduced_motion_hooks(): void
+    public function test_compact_materials_are_newest_first_and_ui_keeps_polling_and_reduced_motion_hooks(): void
     {
         $user = User::factory()->create();
         $event = Event::factory()->for($user)->create();
@@ -219,10 +219,12 @@ class ContextHarnessTest extends TestCase
         $this->actingAs($user)
             ->get(route('events.show', $event))
             ->assertOk()
-            ->assertSeeInOrder(['Спочатку домовились про суботу.', 'Потім перенесли на неділю.'])
+            ->assertSeeInOrder(['Потім перенесли на неділю.', 'Спочатку домовились про суботу.'])
             ->assertSee('data-analysis-overlay', escape: false)
-            ->assertSee('data-source-history', escape: false)
-            ->assertSee('Гусь, розгреби все');
+            ->assertSee('data-source-card', escape: false)
+            ->assertSee('Що Гусь уже бачив')
+            ->assertSeeInOrder(['Контекст', 'Питання', 'Список', 'Сільпо'])
+            ->assertDontSee('Гусь, розгреби все');
 
         $javascript = file_get_contents(resource_path('js/app.js'));
         $css = file_get_contents(resource_path('css/app.css'));

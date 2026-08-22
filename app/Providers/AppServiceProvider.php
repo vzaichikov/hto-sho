@@ -21,5 +21,23 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('silpo-oauth', function (Request $request): Limit {
             return Limit::perMinute(10)->by($request->ip());
         });
+
+        RateLimiter::for('event-description-review', function (Request $request): Limit {
+            $message = 'Гусь не встигає так швидко клювати нові задуми. Перепочиньте хвилинку й повторіть.';
+
+            return Limit::perMinute(10)
+                ->by('user:'.($request->user()?->id ?? $request->ip()))
+                ->response(function (Request $request, array $headers) use ($message) {
+                    if ($request->expectsJson()) {
+                        return response()->json(['message' => $message], 429, $headers);
+                    }
+
+                    return response()->view('events.create', [
+                        'failureMessage' => $message,
+                        'form' => $request->only(['title', 'description']),
+                        'initialStep' => 2,
+                    ], 429, $headers);
+                });
+        });
     }
 }

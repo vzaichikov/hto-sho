@@ -58,7 +58,7 @@ class EventStatusController extends Controller
                 EventSourceStatus::Pending => 'Ще одна картинка? Ну звісно. Давайте сюди.',
                 EventSourceStatus::Processing => 'Гусь Шо дивиться на вашу картинку. Пильно. Трохи осудливо.',
                 EventSourceStatus::Processed => $source->used_cached_extraction
-                    ? 'Це вже бачили. OCR вдруге не ганяли.'
+                    ? 'Цю картинку Гусь упізнав і швидко пригадав головне.'
                     : 'Розібрано. І навіть без драматичної паузи.',
                 EventSourceStatus::Failed => 'Картинка відбилася від Гуся. Можна спробувати ще раз.',
             },
@@ -75,6 +75,8 @@ class EventStatusController extends Controller
             'state_evidence_version' => $event->state_evidence_version,
             'has_unanalyzed_changes' => $event->hasUnanalyzedChanges(),
             'plan_current' => $event->isPlanCurrent(),
+            'plan_generation_status' => $event->plan_generation_status->value,
+            'plan_generation_error' => $event->plan_generation_error,
             'cart_current' => $event->isCartCurrent(),
             'sources_count' => $event->sources->count(),
             'source_counts' => $counts,

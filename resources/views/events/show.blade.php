@@ -4,15 +4,42 @@
     $restrictions = $state['restrictions'] ?? [];
     $agreements = $state['agreements'] ?? [];
     $warnings = $state['warnings'] ?? [];
-    $questions = $state['unresolved_questions'] ?? [];
+    $rawQuestions = $state['unresolved_questions'] ?? [];
+    $questions = collect($rawQuestions)
+        ->filter(fn ($question) => is_array($question)
+            && isset($question['key'], $question['impact'], $question['options'])
+            && is_array($question['options']))
+        ->values()
+        ->all();
+    $needsQuestionRefresh = count($questions) !== count($rawQuestions);
+    $plan = $event->shopping_plan ?? [];
+    $planItems = collect($plan['items'] ?? []);
+    $planIsCurrent = $event->isPlanCurrent();
+    $hasBlockingQuestion = $needsQuestionRefresh || collect($questions)->contains('blocking', true);
+    $analysisActive = $event->hasActiveAnalysis();
+    $analysisProgress = $event->analysis_stage?->progress() ?? 0;
     $participantStatusLabels = [
         'confirmed' => 'Буде',
         'declined' => 'Не буде',
         'uncertain' => 'Ще думає',
-        'unknown' => 'Невідомо',
+        'unknown' => 'Поки невідомо',
     ];
-    $analysisActive = $event->hasActiveAnalysis();
-    $analysisProgress = $event->analysis_stage?->progress() ?? 0;
+    $categoryLabels = [
+        'food' => 'Їжа',
+        'water' => 'Вода',
+        'soft_drinks' => 'Безалкогольні напої',
+        'alcohol' => 'Алкоголь',
+        'supplies' => 'Речі для події',
+        'other' => 'Інше',
+    ];
+    $tabs = [
+        'context' => 'Контекст',
+        'questions' => 'Питання',
+        'plan' => 'Список',
+        'silpo' => 'Сільпо',
+    ];
+    $sourceById = $event->sources->keyBy('id');
+    $correctionPanelOpen = $errors->has('correction') || $errors->has('plan_state_version');
 @endphp
 
 <x-layouts.app :title="$event->title">
@@ -21,8 +48,9 @@
         data-event-workspace
         data-event-status-url="{{ route('events.status', $event) }}"
         data-event-state-version="{{ $event->state_version }}"
+        data-event-plan-status="{{ $event->plan_generation_status->value }}"
     >
-        <a class="inline-flex -rotate-1 items-center gap-2 rounded-sm bg-yellow/60 px-3 py-1.5 font-display text-lg transition hover:rotate-0 hover:bg-yellow" href="{{ route('events.index') }}">
+        <a class="inline-flex -rotate-1 items-center gap-2 rounded-sm bg-yellow/60 px-3 py-1.5 font-display text-lg transition hover:rotate-0 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="{{ route('events.index') }}">
             <span aria-hidden="true">←</span> До всіх подій
         </a>
 
@@ -31,19 +59,14 @@
         <header class="mt-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-3">
-                    <h1 class="truncate font-display text-4xl leading-none tracking-[-0.035em] sm:text-5xl">{{ $event->title }}</h1>
+                    <h1 class="max-w-full break-words font-display text-4xl leading-none tracking-[-0.035em] sm:text-5xl">{{ $event->title }}</h1>
                     <x-status-badge :status="$event->status" data-event-status-badge />
-                    @if ($event->hasUnanalyzedChanges() && $event->state !== null)
-                        <span class="rounded-full bg-yellow px-3 py-1 text-xs font-extrabold text-ink" data-stale-badge>Є нові дані</span>
-                    @endif
                 </div>
-                <p class="mt-2 text-sm text-muted">
-                    Контекст v{{ $event->state_version }} · докази r{{ $event->evidence_version }} · {{ $event->sources->count() }} джерел
-                </p>
+                <p class="mt-2 text-sm text-muted">Матеріалів: {{ $event->sources->count() }}</p>
             </div>
 
             <details class="relative shrink-0">
-                <summary class="cursor-pointer list-none rounded-full border-2 border-ink bg-paper px-4 py-2 text-sm font-extrabold shadow-[2px_2px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-yellow/30">Налаштування</summary>
+                <summary class="cursor-pointer list-none rounded-full border-2 border-ink bg-paper px-4 py-2 text-sm font-extrabold shadow-[2px_2px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-yellow/30 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green">Налаштування</summary>
                 <div class="absolute right-0 z-30 mt-3 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border-2 border-ink bg-paper p-4 shadow-[5px_6px_0_#20201D]">
                     <form method="POST" action="{{ route('events.update', $event) }}">
                         @csrf
@@ -62,252 +85,489 @@
                                 <input class="mt-2 w-full rounded-xl border border-ink/20 bg-canvas px-3 py-2.5 text-sm" id="budget_amount" name="budget_amount" type="number" min="0" step="0.01" value="{{ $event->budget_amount }}">
                             </div>
                         </div>
-                        <button class="mt-4 w-full rounded-xl bg-orange px-4 py-2.5 text-sm font-extrabold text-white hover:bg-orange-dark" type="submit">Зберегти</button>
+                        <button class="mt-4 w-full rounded-xl bg-orange px-4 py-2.5 text-sm font-extrabold text-white hover:bg-orange-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="submit">Зберегти й оновити</button>
                     </form>
 
-                    <form class="mt-4 border-t border-ink/10 pt-4" method="POST" action="{{ route('events.destroy', $event) }}" data-confirm="Видалити подію разом з усіма джерелами?">
+                    <form class="mt-4 border-t border-ink/10 pt-4" method="POST" action="{{ route('events.destroy', $event) }}" data-confirm="Видалити подію разом з усіма її матеріалами?">
                         @csrf
                         @method('DELETE')
-                        <button class="text-sm font-bold text-orange-dark hover:text-beet" type="submit">Видалити подію</button>
+                        <button class="text-sm font-bold text-orange-dark hover:text-beet focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="submit">Видалити подію</button>
                     </form>
                 </div>
             </details>
         </header>
 
-        <section class="mt-8 overflow-hidden rounded-[30px] border-2 border-ink bg-paper shadow-[7px_8px_0_#20201D]" id="composer">
-            <div class="relative min-h-28 overflow-hidden border-b-2 border-ink/10 bg-yellow/35 px-5 py-5 pr-28 sm:px-7 sm:pr-40">
-                <p class="font-display text-lg leading-none text-green-dark">Гусь чекає на новини</p>
-                <h2 class="mt-1 font-display text-3xl leading-none">Додавайте контекст як заманеться</h2>
-                <p class="mt-2 text-xs leading-5 text-muted sm:text-sm">Текст збережемо одразу. Кожну картинку окремо роздивиться фоновий job.</p>
-                <img class="absolute -bottom-24 right-2 w-28 drop-shadow-lg sm:-bottom-32 sm:right-6 sm:w-40" src="{{ asset('images/brand/goose-sho.png') }}" alt="" aria-hidden="true">
-            </div>
+        <nav class="mt-7 grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Кроки підготовки події">
+            @foreach ($tabs as $tab => $label)
+                <a
+                    class="group flex min-w-0 items-center gap-2 rounded-2xl border-2 px-3 py-3 text-sm font-extrabold transition focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green sm:px-4 {{ $activeTab === $tab ? 'border-ink bg-yellow text-ink shadow-[3px_3px_0_#20201D]' : 'border-ink/15 bg-paper text-muted hover:border-green hover:text-ink' }}"
+                    href="{{ route('events.show', ['event' => $event, 'tab' => $tab]) }}"
+                    @if ($activeTab === $tab) aria-current="step" @endif
+                >
+                    <span class="grid size-7 shrink-0 place-items-center rounded-full {{ $activeTab === $tab ? 'bg-ink text-paper' : 'bg-canvas text-green-dark group-hover:bg-green-soft' }}">{{ $loop->iteration }}</span>
+                    <span class="truncate">{{ $label }}</span>
+                </a>
+            @endforeach
+        </nav>
 
-            <form class="p-5 sm:p-7" method="POST" action="{{ route('events.sources.store', $event) }}" enctype="multipart/form-data" data-source-composer>
-                @csrf
-                <label class="sr-only" for="source-text">Текст переписки або уточнення</label>
-                <textarea class="min-h-36 w-full resize-y rounded-2xl border border-ink/20 bg-canvas p-4 text-base leading-7 outline-none placeholder:text-muted/70 focus:border-green focus:ring-4 focus:ring-green/15" id="source-text" name="text" maxlength="50000" placeholder="Наприклад: Марина не прийде, Саша бере вугілля, а в Олі алергія на арахіс…">{{ old('text') }}</textarea>
-
-                <div class="mt-4 rounded-2xl border-2 border-dashed border-green/45 bg-green-soft/20 p-5 text-center transition data-[dragging=true]:border-orange data-[dragging=true]:bg-orange/5" data-file-dropzone>
-                    <input class="sr-only" id="source-images" name="images[]" type="file" accept="image/jpeg,image/png,image/webp" multiple data-file-input>
-                    <label class="cursor-pointer" for="source-images">
-                        <span class="mx-auto grid size-11 -rotate-3 place-items-center rounded-[45%] bg-yellow font-display text-2xl transition hover:rotate-0" aria-hidden="true">↥</span>
-                        <span class="mt-3 block text-sm font-extrabold">Перетягніть, вставте або виберіть картинки</span>
-                        <span class="mt-1 block text-xs text-muted">JPG, PNG чи WebP · до 8 МБ · максимум 10 файлів</span>
-                    </label>
-                    <div class="mt-4 hidden grid-cols-2 gap-3 text-left sm:grid-cols-4" data-file-previews></div>
+        @if ($activeTab === 'context')
+            <section class="mt-7 overflow-hidden rounded-[30px] border-2 border-ink bg-paper shadow-[7px_8px_0_#20201D]" id="composer">
+                <div class="relative min-h-28 overflow-hidden border-b-2 border-ink/10 bg-yellow/35 px-5 py-5 pr-28 sm:px-7 sm:pr-40">
+                    <p class="font-display text-lg leading-none text-green-dark">Гусь слухає уважно</p>
+                    <h2 class="mt-1 font-display text-3xl leading-none">Підкиньте новий контекст</h2>
+                    <p class="mt-2 max-w-xl text-xs leading-5 text-muted sm:text-sm">Текст, уривки переписки чи картинки — усе, що допоможе скласти актуальний план.</p>
+                    <img class="absolute -bottom-24 right-2 w-28 drop-shadow-lg sm:-bottom-32 sm:right-6 sm:w-40" src="{{ asset('images/brand/goose-sho.png') }}" alt="" aria-hidden="true">
                 </div>
 
-                <button class="mt-5 inline-flex w-full items-center justify-center rounded-2xl bg-orange px-6 py-4 font-extrabold text-white shadow-[4px_4px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-orange-dark sm:w-auto" type="submit">
-                    Додати до історії <span class="ml-3 text-yellow" aria-hidden="true">→</span>
-                </button>
-            </form>
-        </section>
+                <form class="p-5 sm:p-7" method="POST" action="{{ route('events.sources.store', $event) }}" enctype="multipart/form-data" data-source-composer>
+                    @csrf
+                    <label class="sr-only" for="source-text">Текст переписки або уточнення</label>
+                    <textarea class="min-h-36 w-full resize-y rounded-2xl border border-ink/20 bg-canvas p-4 text-base leading-7 outline-none placeholder:text-muted/70 focus:border-green focus:ring-4 focus:ring-green/15" id="source-text" name="text" maxlength="50000" placeholder="Наприклад: Марина не прийде, Саша бере вугілля, а в Олі алергія на арахіс…">{{ old('text') }}</textarea>
 
-        <section class="mt-7 rounded-[26px] border-2 border-green bg-green-soft/45 p-5 sm:flex sm:items-center sm:justify-between sm:gap-8 sm:p-6">
-            <div>
-                <p class="font-display text-2xl leading-tight text-green-dark">Коли все накидали — кличте Гуся</p>
-                <p class="mt-1 max-w-2xl text-sm leading-6 text-muted">
-                    Повний підсумок запускається тільки вручну. Якщо ви додасте чи видалите щось під час роботи, task дочекається п’яти секунд тиші та почне синтез заново.
-                </p>
-            </div>
-            <form class="mt-4 shrink-0 sm:mt-0" method="POST" action="{{ route('events.analysis.store', $event) }}" data-analysis-form>
-                @csrf
-                <button class="w-full rounded-2xl bg-green px-6 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:cursor-wait disabled:opacity-55" type="submit" data-analysis-button @disabled($analysisActive)>
-                    {{ $analysisActive ? 'Гусь уже гребе…' : 'Гусь, розгреби все' }}
-                </button>
-            </form>
-        </section>
+                    <div class="mt-4 rounded-2xl border-2 border-dashed border-green/45 bg-green-soft/20 p-5 text-center transition data-[dragging=true]:border-orange data-[dragging=true]:bg-orange/5" data-file-dropzone>
+                        <input class="sr-only" id="source-images" name="images[]" type="file" accept="image/jpeg,image/png,image/webp" multiple data-file-input>
+                        <label class="cursor-pointer" for="source-images">
+                            <span class="mx-auto grid size-11 -rotate-3 place-items-center rounded-[45%] bg-yellow font-display text-2xl transition hover:rotate-0" aria-hidden="true">↥</span>
+                            <span class="mt-3 block text-sm font-extrabold">Перетягніть, вставте або виберіть картинки</span>
+                            <span class="mt-1 block text-xs text-muted">JPG, PNG чи WebP · до 8 МБ · максимум 10 файлів</span>
+                        </label>
+                        <div class="mt-4 hidden grid-cols-2 gap-3 text-left sm:grid-cols-4" data-file-previews></div>
+                    </div>
 
-        @if ($event->analysis_stage === \App\EventAnalysisStage::Failed)
-            <section class="mt-6 rounded-[22px] border border-orange/40 bg-orange/10 p-5 text-orange-dark">
-                <h2 class="font-bold">Гусь не впорався з full summary</h2>
-                <p class="mt-1 text-sm">{{ $event->analysis_error }}</p>
+                    <button class="mt-5 inline-flex w-full items-center justify-center rounded-2xl bg-orange px-6 py-4 font-extrabold text-white shadow-[4px_4px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-orange-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green sm:w-auto" type="submit">
+                        Додати й оновити <span class="ml-3 text-yellow" aria-hidden="true">→</span>
+                    </button>
+                </form>
             </section>
-        @endif
 
-        @if ($state !== [])
-            <section class="mt-9 rounded-[30px] border-2 border-ink bg-paper p-5 shadow-[6px_7px_0_#F7C84B] sm:p-7" data-context-summary>
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                        <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Спільний контекст</p>
-                        <h2 class="mt-1 font-display text-3xl">Що Гусь зрозумів</h2>
-                    </div>
-                    @if ($event->hasUnanalyzedChanges())
-                        <span class="rounded-full bg-yellow px-3 py-1 text-xs font-extrabold">Застарів, але ще корисний</span>
-                    @endif
-                </div>
-
-                <p class="mt-5 text-base leading-7 text-muted">{{ $state['summary'] ?? 'Підсумок без короткого опису.' }}</p>
-
-                @if ($warnings !== [])
-                    <div class="mt-5 rounded-2xl border border-orange/30 bg-orange/8 p-4">
-                        <p class="text-xs font-extrabold uppercase tracking-[0.12em] text-orange-dark">Обережно</p>
-                        <ul class="mt-2 space-y-2 text-sm leading-6">
-                            @foreach ($warnings as $warning)
-                                <li>→ {{ is_array($warning) ? ($warning['message'] ?? '') : $warning }}</li>
-                            @endforeach
-                        </ul>
-                    </div>
-                @endif
-
-                <div class="mt-6 grid gap-5 lg:grid-cols-2">
-                    <div>
-                        <h3 class="font-display text-2xl">Люди</h3>
-                        <div class="mt-3 space-y-3">
-                            @forelse ($participants as $participant)
-                                <article class="rounded-2xl bg-canvas p-4">
-                                    <div class="flex items-center justify-between gap-3">
-                                        <p class="font-extrabold">{{ $participant['name'] ?? 'Невідомий учасник' }}</p>
-                                        <span class="rounded-full bg-paper px-2.5 py-1 text-xs font-bold text-muted">{{ $participantStatusLabels[$participant['status'] ?? 'unknown'] ?? 'Невідомо' }}</span>
+            @if ($event->sources->isNotEmpty())
+                <details class="mt-6 rounded-[24px] border-2 border-ink/15 bg-paper p-4 sm:p-5">
+                    <summary class="cursor-pointer font-display text-2xl focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green">Що Гусь уже бачив <span class="text-base text-muted">({{ $event->sources->count() }})</span></summary>
+                    <div class="mt-4 space-y-3">
+                        @foreach ($event->sources->sortByDesc('created_at') as $source)
+                            @php
+                                $extraction = $source->imageExtraction;
+                                $materialLabel = match ($source->origin) {
+                                    'question_answer' => 'Відповідь організатора',
+                                    'plan_correction' => 'Коректива до списку',
+                                    default => $source->type === \App\EventSourceType::Image ? 'Картинка' : 'Нотатка',
+                                };
+                            @endphp
+                            <article class="rounded-2xl bg-canvas p-4" data-source-card data-source-id="{{ $source->id }}" data-source-status="{{ $source->status->value }}">
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="text-xs font-extrabold uppercase tracking-[0.1em] text-green-dark">{{ $materialLabel }}</span>
+                                        <span class="rounded-full bg-paper px-2.5 py-1 text-xs font-bold" data-source-status-label>{{ $source->status->label() }}</span>
+                                        @if ($source->inclusion === \App\EventSourceInclusion::Dismissed)
+                                            <span class="rounded-full bg-ink/8 px-2.5 py-1 text-xs font-bold text-muted">Гусь відклав убік</span>
+                                        @endif
                                     </div>
-                                    @foreach (['preferences' => 'Хоче', 'restrictions' => 'Не можна', 'allergies' => 'Алергії', 'brings' => 'Бере'] as $key => $label)
-                                        @if (($participant[$key] ?? []) !== [])
-                                            <p class="mt-2 text-xs leading-5"><b>{{ $label }}:</b> {{ implode(', ', $participant[$key]) }}</p>
-                                        @endif
-                                    @endforeach
-                                    @if (($participant['source_ids'] ?? []) !== [])
-                                        <p class="mt-2 text-[11px] font-bold text-muted">Джерела: {{ implode(', ', array_map(fn ($id) => '#'.$id, $participant['source_ids'])) }}</p>
-                                    @endif
-                                </article>
-                            @empty
-                                <p class="rounded-2xl border border-dashed border-ink/15 p-4 text-sm text-muted">Імен поки не назбиралось.</p>
-                            @endforelse
-                        </div>
-                    </div>
-
-                    <div class="space-y-5">
-                        @foreach ([['label' => 'Обмеження й алергії', 'items' => $restrictions, 'key' => 'restriction'], ['label' => 'Домовленості', 'items' => $agreements, 'key' => 'summary'], ['label' => 'Що ще спитати', 'items' => $questions, 'key' => 'question']] as $section)
-                            @if ($section['items'] !== [])
-                                <div>
-                                    <h3 class="font-display text-2xl">{{ $section['label'] }}</h3>
-                                    <ul class="mt-2 space-y-2 text-sm leading-6">
-                                        @foreach ($section['items'] as $item)
-                                            <li class="rounded-xl bg-canvas px-4 py-3">
-                                                {{ is_array($item) ? ($item[$section['key']] ?? '') : $item }}
-                                                @if (is_array($item) && ($item['source_ids'] ?? []) !== [])
-                                                    <span class="ml-1 text-xs font-bold text-muted">{{ implode(', ', array_map(fn ($id) => '#'.$id, $item['source_ids'])) }}</span>
-                                                @endif
-                                            </li>
-                                        @endforeach
-                                    </ul>
+                                    <time class="text-xs text-muted" datetime="{{ $source->created_at->toISOString() }}">{{ $source->created_at->format('d.m.Y H:i') }}</time>
                                 </div>
-                            @endif
-                        @endforeach
-                    </div>
-                </div>
-            </section>
-        @endif
 
-        <section class="mt-10" aria-labelledby="history-title">
-            <div class="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                    <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Від старого до нового</p>
-                    <h2 class="mt-1 font-display text-4xl" id="history-title">Історія контексту</h2>
-                </div>
-                <p class="text-sm text-muted">Кожен факт має адресу: source #ID</p>
-            </div>
-
-            <div class="mt-6 space-y-5" data-source-history>
-                @forelse ($event->sources as $source)
-                    @php $extraction = $source->imageExtraction; @endphp
-                    <article class="relative rounded-[24px] border-2 border-ink/15 bg-paper p-4 shadow-[4px_4px_0_rgb(32_32_29_/_10%)] sm:p-5" data-source-card data-source-id="{{ $source->id }}" data-source-status="{{ $source->status->value }}">
-                        <span class="absolute -left-2 -top-3 grid size-9 -rotate-3 place-items-center rounded-[45%] bg-yellow font-display text-lg shadow-sm">#{{ $source->id }}</span>
-
-                        <div class="flex flex-wrap items-center justify-between gap-2 pl-7">
-                            <div class="flex flex-wrap items-center gap-2">
-                                <span class="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">{{ $source->type === \App\EventSourceType::Image ? 'Зображення' : 'Текст' }}</span>
-                                <span class="rounded-full bg-canvas px-2.5 py-1 text-xs font-bold" data-source-status-label>{{ $source->status->label() }}</span>
-                                @if ($extraction?->classification)
-                                    <span class="rounded-full bg-green-soft px-2.5 py-1 text-xs font-bold text-green-dark">{{ $extraction->classification->label() }}</span>
-                                @endif
-                                @if ($source->used_cached_extraction)
-                                    <span class="rounded-full bg-yellow/45 px-2.5 py-1 text-xs font-bold">SHA-кеш</span>
-                                @endif
-                                @if ($source->inclusion === \App\EventSourceInclusion::Dismissed)
-                                    <span class="rounded-full bg-ink/8 px-2.5 py-1 text-xs font-bold text-muted">Не входить у summary</span>
-                                @elseif ($source->inclusion === \App\EventSourceInclusion::Forced)
-                                    <span class="rounded-full bg-orange/12 px-2.5 py-1 text-xs font-bold text-orange-dark">Додано вручну</span>
-                                @endif
-                            </div>
-                            <time class="text-xs text-muted" datetime="{{ $source->created_at->toISOString() }}">{{ $source->created_at->format('d.m.Y H:i:s') }}</time>
-                        </div>
-
-                        <div class="mt-4 grid gap-5 {{ $source->type === \App\EventSourceType::Image ? 'md:grid-cols-[minmax(0,19rem)_1fr]' : '' }}">
-                            @if ($source->type === \App\EventSourceType::Image)
-                                <a class="block overflow-hidden rounded-2xl bg-canvas" href="{{ route('events.sources.show', [$event, $source]) }}" target="_blank">
-                                    <img class="max-h-[26rem] w-full object-contain" src="{{ route('events.sources.show', [$event, $source]) }}" alt="{{ $source->original_name ?: 'Додане зображення' }}" loading="lazy">
-                                </a>
-                            @endif
-
-                            <div class="min-w-0">
-                                @if ($source->type === \App\EventSourceType::Text)
-                                    <p class="whitespace-pre-wrap text-sm leading-7">{{ $source->text }}</p>
-                                @else
-                                    @if (in_array($source->status, [\App\EventSourceStatus::Pending, \App\EventSourceStatus::Processing], true))
-                                        @php $sourceProgress = $source->status === \App\EventSourceStatus::Pending ? 12 : 62; @endphp
-                                        <div class="rounded-2xl bg-yellow/20 p-4" aria-live="polite">
-                                            <p class="text-sm font-bold" data-source-message>{{ $source->status === \App\EventSourceStatus::Pending ? 'Ще одна картинка? Ну звісно. Давайте сюди.' : 'Гусь Шо дивиться на вашу картинку. Пильно. Трохи осудливо.' }}</p>
-                                            <div class="mt-3 h-2 overflow-hidden rounded-full bg-ink/10">
-                                                <div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: {{ $sourceProgress }}%" data-source-progress></div>
-                                            </div>
-                                        </div>
+                                <div class="mt-3 {{ $source->type === \App\EventSourceType::Image ? 'grid gap-4 sm:grid-cols-[8rem_1fr]' : '' }}">
+                                    @if ($source->type === \App\EventSourceType::Image)
+                                        <a class="block overflow-hidden rounded-xl bg-paper focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="{{ route('events.sources.show', [$event, $source]) }}" target="_blank">
+                                            <img class="h-28 w-full object-cover" src="{{ route('events.sources.show', [$event, $source]) }}" alt="{{ $source->original_name ?: 'Додана картинка' }}" loading="lazy">
+                                        </a>
                                     @endif
 
-                                    @if ($source->status === \App\EventSourceStatus::Processed)
-                                        @if ($extraction?->source_summary)
-                                            <div>
-                                                <p class="text-xs font-extrabold uppercase tracking-[0.12em] text-green-dark">Коротко</p>
-                                                <p class="mt-1 text-sm leading-6">{{ $extraction->source_summary }}</p>
+                                    <div class="min-w-0">
+                                        @if ($source->type === \App\EventSourceType::Text)
+                                            <p class="whitespace-pre-wrap text-sm leading-6">{{ $source->text }}</p>
+                                        @elseif (in_array($source->status, [\App\EventSourceStatus::Pending, \App\EventSourceStatus::Processing], true))
+                                            <p class="text-sm font-bold" data-source-message>Гусь уважно роздивляється картинку.</p>
+                                            <div class="mt-2 h-2 overflow-hidden rounded-full bg-ink/10">
+                                                <div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: {{ $source->status === \App\EventSourceStatus::Pending ? 12 : 62 }}%" data-source-progress></div>
                                             </div>
-                                        @endif
-                                        @if ($extraction?->ocr_text)
-                                            <details class="mt-4 rounded-2xl bg-canvas p-4">
-                                                <summary class="cursor-pointer text-sm font-extrabold">Показати OCR</summary>
-                                                <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-muted">{{ $extraction->ocr_text }}</p>
-                                            </details>
-                                        @endif
-                                        @if ($extraction?->classification === \App\ImageClassification::Irrelevant)
-                                            <div class="mt-4 rounded-2xl border border-ink/10 bg-ink/4 p-4">
-                                                <p class="text-sm font-bold">Гусь це відкинув</p>
-                                                <p class="mt-1 text-sm leading-6 text-muted">{{ $extraction->dismissal_reason }}</p>
-                                                <form class="mt-3" method="POST" action="{{ route('events.sources.inclusion', [$event, $source]) }}">
+                                        @elseif ($source->status === \App\EventSourceStatus::Processed)
+                                            @if ($extraction?->source_summary)
+                                                <p class="text-sm leading-6">{{ $extraction->source_summary }}</p>
+                                            @endif
+                                            @if ($extraction?->ocr_text)
+                                                <details class="mt-3 rounded-xl bg-paper p-3">
+                                                    <summary class="cursor-pointer text-sm font-extrabold">Що Гусь прочитав</summary>
+                                                    <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{{ $extraction->ocr_text }}</p>
+                                                </details>
+                                            @endif
+                                            @if ($extraction?->classification === \App\ImageClassification::Irrelevant)
+                                                <div class="mt-3 rounded-xl border border-ink/10 bg-paper p-3">
+                                                    <p class="text-sm font-bold">Гусь відклав це вбік</p>
+                                                    <p class="mt-1 text-sm leading-6 text-muted">{{ $extraction->dismissal_reason }}</p>
+                                                    <form class="mt-2" method="POST" action="{{ route('events.sources.inclusion', [$event, $source]) }}">
+                                                        @csrf
+                                                        @method('PATCH')
+                                                        <input type="hidden" name="inclusion" value="{{ $source->inclusion === \App\EventSourceInclusion::Forced ? \App\EventSourceInclusion::Dismissed->value : \App\EventSourceInclusion::Forced->value }}">
+                                                        <button class="text-sm font-extrabold text-orange-dark underline decoration-2 underline-offset-4" type="submit">
+                                                            {{ $source->inclusion === \App\EventSourceInclusion::Forced ? 'Гусь мав рацію — відкласти' : 'Гусь, це все ж важливо' }}
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            @endif
+                                        @else
+                                            <div class="rounded-xl border border-orange/35 bg-orange/8 p-3">
+                                                <p class="text-sm font-extrabold text-orange-dark">Картинка не піддалася Гусю.</p>
+                                                <p class="mt-1 text-sm text-muted">{{ $source->processing_error }}</p>
+                                                <form class="mt-2" method="POST" action="{{ route('events.sources.retry', [$event, $source]) }}">
                                                     @csrf
-                                                    @method('PATCH')
-                                                    <input type="hidden" name="inclusion" value="{{ $source->inclusion === \App\EventSourceInclusion::Forced ? \App\EventSourceInclusion::Dismissed->value : \App\EventSourceInclusion::Forced->value }}">
-                                                    <button class="text-sm font-extrabold text-orange-dark underline decoration-2 underline-offset-4" type="submit">
-                                                        {{ $source->inclusion === \App\EventSourceInclusion::Forced ? 'Ні, Гусь мав рацію — відкинути' : 'Гусь, це все ж важливо' }}
-                                                    </button>
+                                                    <button class="text-sm font-extrabold underline decoration-2 underline-offset-4" type="submit">Гусь, ще раз</button>
                                                 </form>
                                             </div>
                                         @endif
-                                    @elseif ($source->status === \App\EventSourceStatus::Failed)
-                                        <div class="rounded-2xl border border-orange/35 bg-orange/8 p-4">
-                                            <p class="text-sm font-extrabold text-orange-dark">Не розібрав: {{ $source->processing_error }}</p>
-                                            <form class="mt-3" method="POST" action="{{ route('events.sources.retry', [$event, $source]) }}">
-                                                @csrf
-                                                <button class="text-sm font-extrabold underline decoration-2 underline-offset-4" type="submit">Гусь, ще раз</button>
-                                            </form>
-                                        </div>
-                                    @endif
-                                @endif
 
-                                <form class="mt-4 flex justify-end border-t border-ink/8 pt-3" method="POST" action="{{ route('events.sources.destroy', [$event, $source]) }}" data-confirm="Видалити source #{{ $source->id }} та його приватний файл?">
-                                    @csrf
-                                    @method('DELETE')
-                                    <button class="text-xs font-extrabold text-muted hover:text-orange-dark" type="submit">Видалити джерело</button>
-                                </form>
+                                        <form class="mt-3 flex justify-end border-t border-ink/8 pt-2" method="POST" action="{{ route('events.sources.destroy', [$event, $source]) }}" data-confirm="Прибрати цей матеріал із події?">
+                                            @csrf
+                                            @method('DELETE')
+                                            <button class="text-xs font-extrabold text-muted hover:text-orange-dark" type="submit">Прибрати матеріал</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </article>
+                        @endforeach
+                    </div>
+                </details>
+            @endif
+
+            <section class="mt-7 rounded-[30px] border-2 border-ink bg-paper p-5 shadow-[6px_7px_0_#F7C84B] sm:p-7" data-context-summary>
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Актуальна картина</p>
+                        <h2 class="mt-1 font-display text-3xl">Що Гусь зрозумів</h2>
+                    </div>
+                    @if ($event->hasUnanalyzedChanges())
+                        <span class="rounded-full bg-yellow px-3 py-1 text-xs font-extrabold">Гусь почув нове й уже перераховує</span>
+                    @endif
+                </div>
+
+                @if ($state === [])
+                    <div class="mt-5 rounded-2xl border border-dashed border-green/45 bg-green-soft/20 p-5">
+                        <p class="font-bold">{{ $analysisActive ? 'Гусь уже збирає першу картину докупи.' : 'Поки Гусю бракує контексту.' }}</p>
+                        <p class="mt-1 text-sm text-muted">Додайте кілька слів або картинку вище — далі все підхопиться саме.</p>
+                    </div>
+                @else
+                    <p class="mt-5 text-base leading-7 text-muted">{{ $state['summary'] ?? 'Головне вже зібрано, але короткий опис десь вислизнув.' }}</p>
+
+                    @if ($warnings !== [])
+                        <div class="mt-5 rounded-2xl border border-orange/30 bg-orange/8 p-4">
+                            <p class="text-xs font-extrabold uppercase tracking-[0.12em] text-orange-dark">На що звернути увагу</p>
+                            <ul class="mt-2 space-y-2 text-sm leading-6">
+                                @foreach ($warnings as $warning)
+                                    <li>→ {{ is_array($warning) ? ($warning['message'] ?? '') : $warning }}</li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @endif
+
+                    <div class="mt-6 grid gap-5 lg:grid-cols-2">
+                        <div>
+                            <h3 class="font-display text-2xl">Люди</h3>
+                            <div class="mt-3 space-y-3">
+                                @forelse ($participants as $participant)
+                                    <article class="rounded-2xl bg-canvas p-4">
+                                        <div class="flex items-center justify-between gap-3">
+                                            <p class="font-extrabold">{{ $participant['name'] ?? 'Невідомий учасник' }}</p>
+                                            <span class="rounded-full bg-paper px-2.5 py-1 text-xs font-bold text-muted">{{ $participantStatusLabels[$participant['status'] ?? 'unknown'] ?? 'Поки невідомо' }}</span>
+                                        </div>
+                                        @foreach (['preferences' => 'Хоче', 'restrictions' => 'Не можна', 'allergies' => 'Алергії', 'brings' => 'Бере'] as $key => $label)
+                                            @if (($participant[$key] ?? []) !== [])
+                                                <p class="mt-2 text-xs leading-5"><b>{{ $label }}:</b> {{ implode(', ', $participant[$key]) }}</p>
+                                            @endif
+                                        @endforeach
+                                        @if (($participant['source_ids'] ?? []) !== [])
+                                            <details class="mt-3 text-xs text-muted">
+                                                <summary class="cursor-pointer font-bold">Звідки Гусь це взяв</summary>
+                                                <ul class="mt-2 space-y-1">
+                                                    @foreach ($participant['source_ids'] as $sourceId)
+                                                        @if ($sourceById->has($sourceId))
+                                                            @php $factSource = $sourceById->get($sourceId); @endphp
+                                                            <li>{{ $factSource->origin === 'question_answer' ? 'Відповідь організатора' : ($factSource->type === \App\EventSourceType::Image ? 'Картинка' : 'Нотатка') }} · {{ $factSource->created_at->format('d.m.Y H:i') }}</li>
+                                                        @endif
+                                                    @endforeach
+                                                </ul>
+                                            </details>
+                                        @endif
+                                    </article>
+                                @empty
+                                    <p class="rounded-2xl border border-dashed border-ink/15 p-4 text-sm text-muted">Імен поки не назбиралось.</p>
+                                @endforelse
                             </div>
                         </div>
-                    </article>
-                @empty
-                    <div class="rounded-[26px] border-2 border-dashed border-green/45 bg-paper/60 px-6 py-12 text-center">
-                        <p class="font-display text-4xl text-green-dark" aria-hidden="true">↑</p>
-                        <h3 class="mt-3 font-display text-3xl">Тут ще тихо</h3>
-                        <p class="mx-auto mt-2 max-w-md text-sm leading-6 text-muted">Люди непередбачувані. Додайте перше повідомлення, а потім ще одне — коли вони, звісно, передумають.</p>
+
+                        <div class="space-y-5">
+                            @foreach ([['label' => 'Обмеження й алергії', 'items' => $restrictions, 'key' => 'restriction'], ['label' => 'Домовленості', 'items' => $agreements, 'key' => 'summary']] as $section)
+                                @if ($section['items'] !== [])
+                                    <div>
+                                        <h3 class="font-display text-2xl">{{ $section['label'] }}</h3>
+                                        <ul class="mt-2 space-y-2 text-sm leading-6">
+                                            @foreach ($section['items'] as $item)
+                                                <li class="rounded-xl bg-canvas px-4 py-3">
+                                                    {{ is_array($item) ? ($item[$section['key']] ?? '') : $item }}
+                                                    @if (is_array($item) && ($item['source_ids'] ?? []) !== [])
+                                                        <details class="mt-2 text-xs text-muted">
+                                                            <summary class="cursor-pointer font-bold">Звідки Гусь це взяв</summary>
+                                                            <ul class="mt-2 space-y-1">
+                                                                @foreach ($item['source_ids'] as $sourceId)
+                                                                    @if ($sourceById->has($sourceId))
+                                                                        @php $factSource = $sourceById->get($sourceId); @endphp
+                                                                        <li>{{ $factSource->origin === 'question_answer' ? 'Відповідь організатора' : ($factSource->type === \App\EventSourceType::Image ? 'Картинка' : 'Нотатка') }} · {{ $factSource->created_at->format('d.m.Y H:i') }}</li>
+                                                                    @endif
+                                                                @endforeach
+                                                            </ul>
+                                                        </details>
+                                                    @endif
+                                                </li>
+                                            @endforeach
+                                        </ul>
+                                    </div>
+                                @endif
+                            @endforeach
+                        </div>
                     </div>
-                @endforelse
-            </div>
-        </section>
+                @endif
+
+                @if ($event->analysis_stage === \App\EventAnalysisStage::Failed)
+                    <div class="mt-5 rounded-2xl border border-orange/40 bg-orange/10 p-4 text-orange-dark">
+                        <p class="font-bold">Гусь перечепився й не зміг оновити картину.</p>
+                        <p class="mt-1 text-sm">{{ $event->analysis_error }}</p>
+                        <form class="mt-3" method="POST" action="{{ route('events.analysis.store', $event) }}" data-analysis-form>
+                            @csrf
+                            <button class="rounded-xl bg-orange px-4 py-2.5 text-sm font-extrabold text-white" type="submit" data-analysis-button>Гусь, спробуй ще раз</button>
+                        </form>
+                    </div>
+                @endif
+            </section>
+
+            @if ($event->contextVersions->isNotEmpty())
+                <section class="mt-7" aria-labelledby="context-history-title">
+                    <h2 class="font-display text-3xl" id="context-history-title">Як Гусь розумів це раніше</h2>
+                    <div class="mt-3 space-y-3">
+                        @foreach ($event->contextVersions as $contextVersion)
+                            <details class="rounded-2xl border border-ink/15 bg-paper p-4">
+                                <summary class="cursor-pointer text-sm font-extrabold">Картина на {{ $contextVersion->created_at->format('d.m.Y H:i') }}</summary>
+                                <p class="mt-3 text-sm leading-6 text-muted">{{ $contextVersion->state['summary'] ?? 'Короткий опис не зберігся.' }}</p>
+                            </details>
+                        @endforeach
+                    </div>
+                </section>
+            @endif
+        @elseif ($activeTab === 'questions')
+            <section class="mt-7 rounded-[30px] border-2 border-ink bg-paper p-5 shadow-[6px_7px_0_#F7C84B] sm:p-7">
+                <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Уточнення від Гуся</p>
+                <h2 class="mt-1 font-display text-4xl">Питання до людей</h2>
+
+                @if ($state === [])
+                    <div class="mt-5 rounded-2xl border border-dashed border-green/45 bg-green-soft/20 p-5">
+                        <p class="font-bold">Спершу Гусю треба зрозуміти саму подію.</p>
+                        <a class="mt-3 inline-flex font-extrabold text-orange-dark underline decoration-2 underline-offset-4" href="{{ route('events.show', ['event' => $event, 'tab' => 'context']) }}">Перейти до контексту</a>
+                    </div>
+                @elseif ($needsQuestionRefresh)
+                    <div class="mt-5 rounded-2xl border border-orange/35 bg-orange/10 p-5">
+                        <p class="font-display text-2xl text-orange-dark">Гусь хоче освіжити питання</p>
+                        <p class="mt-1 text-sm text-muted">Суть події збережена. Треба лише ще раз скласти зручні варіанти відповідей.</p>
+                        <form class="mt-3" method="POST" action="{{ route('events.analysis.store', $event) }}" data-analysis-form>
+                            @csrf
+                            <button class="rounded-xl bg-orange px-4 py-2.5 text-sm font-extrabold text-white" type="submit" data-analysis-button>Гусь, освіжи питання</button>
+                        </form>
+                    </div>
+                @elseif ($questions === [])
+                    <div class="mt-5 rounded-2xl bg-green-soft/45 p-5">
+                        <p class="font-display text-2xl text-green-dark">Усе важливе вже зʼясовано</p>
+                        <p class="mt-1 text-sm text-muted">Гусь не має питань. Підозріло добре, але ходімо до списку.</p>
+                        <a class="mt-3 inline-flex font-extrabold text-orange-dark underline decoration-2 underline-offset-4" href="{{ route('events.show', ['event' => $event, 'tab' => 'plan']) }}">Подивитися список</a>
+                    </div>
+                @else
+                    @if ($event->hasUnanalyzedChanges())
+                        <p class="mt-4 rounded-2xl bg-yellow/45 p-4 text-sm font-bold">Гусь почув нове й уже перераховує. Питання нижче ще корисні, але скоро можуть змінитися.</p>
+                    @endif
+
+                    <form class="mt-6 space-y-5" method="POST" action="{{ route('events.answers.store', $event) }}" data-questions-form>
+                        @csrf
+                        <input type="hidden" name="state_version" value="{{ $event->state_version }}">
+
+                        @foreach ($questions as $question)
+                            <fieldset class="rounded-[24px] border-2 {{ ($question['blocking'] ?? false) ? 'border-orange/50' : 'border-ink/15' }} bg-canvas p-4 sm:p-5">
+                                <input type="hidden" name="answers[{{ $loop->index }}][question_key]" value="{{ $question['key'] }}">
+                                <legend class="px-1 font-display text-2xl leading-tight">{{ $question['question'] }}</legend>
+                                <p class="mt-2 text-sm leading-6 text-muted">{{ $question['impact'] }}</p>
+
+                                <div class="mt-4 space-y-3">
+                                    @foreach ($question['options'] as $option)
+                                        <label class="flex cursor-pointer items-start gap-3 rounded-2xl border border-ink/15 bg-paper p-4 transition hover:border-green has-[:checked]:border-green has-[:checked]:ring-3 has-[:checked]:ring-green/15">
+                                            <input class="mt-1 size-4 shrink-0 accent-green" type="radio" name="answers[{{ $loop->parent->index }}][selection]" value="{{ $option['label'] }}">
+                                            <span>
+                                                <span class="flex flex-wrap items-center gap-2 font-extrabold">
+                                                    {{ $option['label'] }}
+                                                    @if ($option['recommended'])
+                                                        <span class="rounded-full bg-yellow px-2.5 py-1 text-[11px] uppercase tracking-wide">Гусь радить</span>
+                                                    @endif
+                                                </span>
+                                                @if ($option['description'] !== '')
+                                                    <span class="mt-1 block text-sm leading-5 text-muted">{{ $option['description'] }}</span>
+                                                @endif
+                                            </span>
+                                        </label>
+                                    @endforeach
+
+                                    <label class="block rounded-2xl border border-ink/15 bg-paper p-4 focus-within:border-green focus-within:ring-3 focus-within:ring-green/15">
+                                        <span class="flex items-center gap-3 font-extrabold">
+                                            <input class="size-4 accent-green" type="radio" name="answers[{{ $loop->index }}][selection]" value="__custom__" data-question-custom-choice>
+                                            Своя відповідь
+                                        </span>
+                                        <input class="mt-3 w-full rounded-xl border border-ink/20 bg-canvas px-3 py-2.5 text-sm outline-none focus:border-green" name="answers[{{ $loop->index }}][custom]" maxlength="2000" placeholder="Напишіть як є" data-question-custom-input>
+                                    </label>
+                                </div>
+                            </fieldset>
+                        @endforeach
+
+                        <p class="text-sm text-muted">Можна відповісти лише на ті питання, які вже вдалося зʼясувати.</p>
+                        <button class="w-full rounded-2xl bg-orange px-6 py-4 font-extrabold text-white shadow-[4px_4px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-orange-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green sm:w-auto" type="submit">Передати відповіді Гусю</button>
+                    </form>
+                @endif
+            </section>
+        @elseif ($activeTab === 'plan')
+            <section class="mt-7 rounded-[30px] border-2 border-ink bg-paper p-5 shadow-[6px_7px_0_#F7C84B] sm:p-7">
+                <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Що знадобиться</p>
+                <h2 class="mt-1 font-display text-4xl">Загальний список</h2>
+
+                @if ($plan === [])
+                    <div class="mt-5 rounded-2xl border border-dashed border-green/45 bg-green-soft/20 p-5">
+                        @if ($state === [])
+                            <p class="font-bold">Без контексту навіть Гусь не вгадає, що тут їдять.</p>
+                            <a class="mt-3 inline-flex font-extrabold text-orange-dark underline decoration-2 underline-offset-4" href="{{ route('events.show', ['event' => $event, 'tab' => 'context']) }}">Додати контекст</a>
+                        @elseif ($event->plan_generation_status === \App\PlanGenerationStatus::Failed)
+                            <p class="font-bold">Гусь перечепився й не склав список.</p>
+                            <p class="mt-1 text-sm text-muted">Попередній підсумок цілий. Попросіть Гуся спробувати ще раз.</p>
+                            <form class="mt-3" method="POST" action="{{ route('events.analysis.store', $event) }}" data-analysis-form>
+                                @csrf
+                                <button class="rounded-xl bg-orange px-4 py-2.5 text-sm font-extrabold text-white" type="submit" data-analysis-button>Гусь, спробуй ще раз</button>
+                            </form>
+                        @else
+                            <p class="font-bold">Гусь уже рахує, скільки всього треба.</p>
+                            <p class="mt-1 text-sm text-muted">Вода, напої, їжа й дрібниці для події теж у полі зору.</p>
+                        @endif
+                    </div>
+                @else
+                    <div class="mt-5 grid gap-3 sm:grid-cols-2">
+                        <button
+                            class="w-full rounded-2xl border-2 border-ink bg-yellow/55 px-5 py-4 font-extrabold text-ink shadow-[3px_3px_0_#20201D] transition enabled:hover:-translate-y-0.5 enabled:hover:bg-yellow disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green"
+                            type="button"
+                            data-plan-correction-toggle
+                            aria-controls="plan-correction-panel"
+                            aria-expanded="{{ $correctionPanelOpen ? 'true' : 'false' }}"
+                            @disabled(! $planIsCurrent)
+                        >Внести корективу</button>
+                        <button
+                            class="w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition enabled:hover:-translate-y-0.5 enabled:hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green"
+                            type="button"
+                            data-silpo-dialog-open
+                            @disabled(! $planIsCurrent || $hasBlockingQuestion)
+                        >Відправити Гуся в Сільпо</button>
+                    </div>
+
+                    <div class="mt-4 rounded-[22px] border-2 border-ink/15 bg-canvas p-4 sm:p-5 {{ $correctionPanelOpen ? '' : 'hidden' }}" id="plan-correction-panel" data-plan-correction-panel>
+                        <form method="POST" action="{{ route('events.plan-corrections.store', $event) }}">
+                            @csrf
+                            <input type="hidden" name="plan_state_version" value="{{ $event->plan_state_version }}">
+                            <label class="font-display text-2xl" for="plan-correction">Що Гусю змінити?</label>
+                            <p class="mt-1 text-sm leading-6 text-muted">Напишіть як людині: «води вдвічі менше», «прибрати одноразовий посуд» або «додати фрукти».</p>
+                            <textarea
+                                class="mt-3 min-h-28 w-full resize-y rounded-2xl border border-ink/20 bg-paper p-4 text-base leading-7 outline-none placeholder:text-muted/70 focus:border-green focus:ring-4 focus:ring-green/15"
+                                id="plan-correction"
+                                name="correction"
+                                maxlength="2000"
+                                placeholder="Наприклад: замість 6 літрів пива візьмемо 12 банок по 0,5 л"
+                                data-plan-correction-input
+                            >{{ old('correction') }}</textarea>
+                            @error('correction')
+                                <p class="mt-2 text-sm font-bold text-orange-dark">{{ $message }}</p>
+                            @enderror
+                            @error('plan_state_version')
+                                <p class="mt-2 text-sm font-bold text-orange-dark">{{ $message }}</p>
+                            @enderror
+                            <button class="mt-4 w-full rounded-2xl bg-orange px-5 py-3.5 font-extrabold text-white shadow-[3px_3px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-orange-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green sm:w-auto" type="submit">Передати корективу Гусю</button>
+                        </form>
+                    </div>
+
+                    @if ($planIsCurrent && $hasBlockingQuestion)
+                        <div class="mt-4 rounded-2xl border border-orange/35 bg-orange/10 p-4 text-sm font-bold text-orange-dark">
+                            Є важливе питання про безпеку або кількість. Спершу потрібна людська відповідь.
+                            <a class="ml-1 underline decoration-2 underline-offset-4" href="{{ route('events.show', ['event' => $event, 'tab' => 'questions']) }}">Відповісти Гусю</a>
+                        </div>
+                    @endif
+
+                    @if ($event->plan_generation_status === \App\PlanGenerationStatus::Failed)
+                        <div class="mt-5 rounded-2xl border border-orange/35 bg-orange/10 p-4">
+                            <p class="text-sm font-bold text-orange-dark">Гусь перечепився, але попередній список цілий.</p>
+                            <form class="mt-3" method="POST" action="{{ route('events.analysis.store', $event) }}" data-analysis-form>
+                                @csrf
+                                <button class="rounded-xl bg-orange px-4 py-2.5 text-sm font-extrabold text-white" type="submit" data-analysis-button>Гусь, спробуй ще раз</button>
+                            </form>
+                        </div>
+                    @elseif (! $planIsCurrent)
+                        <p class="mt-5 rounded-2xl bg-yellow/45 p-4 text-sm font-bold">Гусь почув нове й уже перераховує. Поки залишаємо попередній список перед очима.</p>
+                    @endif
+
+                    <p class="mt-5 text-base leading-7 text-muted">{{ $plan['summary'] }}</p>
+                    @if ($plan['serves'] ?? null)
+                        <p class="mt-2 text-sm font-bold text-green-dark">Розраховано на {{ $plan['serves'] }} людей</p>
+                    @endif
+
+                    <div class="mt-6 grid gap-5 lg:grid-cols-2">
+                        @foreach ($categoryLabels as $category => $label)
+                            @php $categoryItems = $planItems->where('category', $category); @endphp
+                            @if ($categoryItems->isNotEmpty())
+                                <section class="rounded-[22px] bg-canvas p-4">
+                                    <h3 class="font-display text-2xl">{{ $label }}</h3>
+                                    <ul class="mt-3 divide-y divide-ink/10">
+                                        @foreach ($categoryItems as $item)
+                                            <li class="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
+                                                <div>
+                                                    <p class="font-extrabold">{{ $item['name'] }}</p>
+                                                    @if ($item['note'] !== '')
+                                                        <p class="mt-1 text-xs leading-5 text-muted">{{ $item['note'] }}</p>
+                                                    @endif
+                                                </div>
+                                                <p class="shrink-0 rounded-full bg-paper px-3 py-1 text-sm font-extrabold">{{ rtrim(rtrim(number_format((float) $item['quantity'], 2, '.', ''), '0'), '.') }} {{ $item['unit'] }}</p>
+                                            </li>
+                                        @endforeach
+                                    </ul>
+                                </section>
+                            @endif
+                        @endforeach
+                    </div>
+
+                    @if (($plan['warnings'] ?? []) !== [])
+                        <div class="mt-5 rounded-2xl border border-orange/30 bg-orange/8 p-4">
+                            <p class="font-extrabold text-orange-dark">Що варто перевірити</p>
+                            <ul class="mt-2 space-y-2 text-sm leading-6">
+                                @foreach ($plan['warnings'] as $warning)
+                                    <li>→ {{ $warning }}</li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @endif
+                @endif
+            </section>
+            @if ($plan !== [])
+                <dialog class="m-auto w-[min(32rem,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-[28px] border-2 border-ink bg-paper p-0 text-ink shadow-[8px_9px_0_#20201D] backdrop:bg-ink/55" data-silpo-dialog aria-labelledby="silpo-dialog-title">
+                    <div class="p-5 sm:p-7">
+                        <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Перед стартом</p>
+                        <h3 class="mt-1 font-display text-3xl leading-tight" id="silpo-dialog-title">Відправити Гуся в Сільпо?</h3>
+                        <p class="mt-4 text-base leading-7 text-muted">Гусь піде збирати кошик. Це займе деякий час.</p>
+                        <form class="mt-6 grid gap-3 sm:grid-cols-2" method="dialog">
+                            <button class="rounded-2xl border-2 border-ink bg-paper px-5 py-3.5 font-extrabold transition hover:bg-yellow/30 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" value="cancel">Не зараз</button>
+                            <button class="rounded-2xl bg-green px-5 py-3.5 font-extrabold text-white shadow-[3px_3px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" value="confirm" data-silpo-dialog-confirm>Нехай іде</button>
+                        </form>
+                    </div>
+                </dialog>
+            @endif
+        @elseif ($activeTab === 'silpo')
+            <section class="mt-7 rounded-[30px] border-2 border-ink bg-paper p-5 shadow-[6px_7px_0_#F7C84B] sm:p-7">
+                <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Поки тихо</p>
+                <h2 class="mt-1 font-display text-4xl">Кошик Сільпо</h2>
+                <p class="mt-4 text-base leading-7 text-muted">Тут зʼявиться справжній кошик Сільпо. Поки що Гусь лише готується.</p>
+            </section>
+        @endif
     </div>
 
     <aside class="fixed left-1/2 top-1/2 z-50 {{ $analysisActive ? '' : 'hidden' }} w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[24px] border-2 border-ink bg-paper p-4 shadow-[6px_7px_0_#20201D]" data-analysis-overlay data-minimized="false" aria-live="polite">
@@ -315,14 +575,14 @@
             <img class="goose-working -ml-1 size-16 shrink-0 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо працює">
             <div class="min-w-0 flex-1" data-analysis-details>
                 <div class="flex items-start justify-between gap-2">
-                    <p class="font-display text-xl leading-tight">Повний розгріб</p>
-                    <button class="rounded-full bg-canvas px-2.5 py-1 text-xs font-bold" type="button" data-analysis-minimize aria-label="Згорнути прогрес">−</button>
+                    <p class="font-display text-xl leading-tight">Гусь працює</p>
+                    <button class="rounded-full bg-canvas px-2.5 py-1 text-xs font-bold" type="button" data-analysis-minimize aria-label="Згорнути повідомлення">−</button>
                 </div>
                 <p class="mt-1 text-sm leading-5 text-muted" data-analysis-message>{{ $event->analysis_stage?->message() }}</p>
                 <div class="mt-3 h-2 overflow-hidden rounded-full bg-ink/10">
                     <div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: {{ $analysisProgress }}%" data-analysis-progress></div>
                 </div>
-                <p class="mt-2 text-right text-xs font-bold text-muted"><span data-analysis-progress-label>{{ $analysisProgress }}</span>% по-чесному</p>
+                <span class="sr-only" data-analysis-progress-label>{{ $analysisProgress }}</span>
             </div>
         </div>
     </aside>

@@ -3,7 +3,6 @@
 namespace App\Actions;
 
 use App\CartSyncStatus;
-use App\Jobs\SummarizeEventContextJob;
 use App\Models\Event;
 use App\Models\EventSource;
 use App\Models\ImageExtraction;
@@ -12,12 +11,14 @@ use Illuminate\Support\Facades\Storage;
 
 class DeleteEventSourceAction
 {
+    public function __construct(private readonly StartEventAnalysisAction $startAnalysis) {}
+
     public function execute(Event $event, EventSource $source): void
     {
         $path = $source->file_path;
-        $activeTask = null;
+        $shouldAnalyze = false;
 
-        DB::transaction(function () use ($event, $source, &$activeTask): void {
+        DB::transaction(function () use ($event, $source, &$shouldAnalyze): void {
             $lockedEvent = Event::query()->lockForUpdate()->findOrFail($event->id);
             $lockedSource = EventSource::query()
                 ->whereBelongsTo($lockedEvent)
@@ -43,19 +44,15 @@ class DeleteEventSourceAction
                 'last_source_at' => now(),
             ]);
 
-            if ($lockedEvent->hasActiveAnalysis()) {
-                $activeTask = [$lockedEvent->id, $lockedEvent->analysis_task_id];
-            }
+            $shouldAnalyze = $changesEvidence;
         });
 
         if ($path !== null) {
             Storage::disk('local')->delete($path);
         }
 
-        if ($activeTask !== null) {
-            SummarizeEventContextJob::dispatch($activeTask[0], $activeTask[1])
-                ->delay(now()->addSeconds(5))
-                ->afterCommit();
+        if ($shouldAnalyze) {
+            $this->startAnalysis->execute($event->fresh());
         }
     }
 }

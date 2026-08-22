@@ -13,7 +13,7 @@ enum EventStatus: string
     {
         return match ($this) {
             self::Draft => 'Чернетка',
-            self::Processing => 'Аналізуємо',
+            self::Processing => 'Гусь працює',
             self::Ready => 'Готово',
             self::Failed => 'Потрібна увага',
         };

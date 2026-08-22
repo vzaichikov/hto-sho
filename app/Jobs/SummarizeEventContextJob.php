@@ -8,12 +8,15 @@ use App\EventSourceStatus;
 use App\EventSourceType;
 use App\EventStatus;
 use App\Models\Event;
+use App\Models\EventContextVersion;
 use App\Models\EventSource;
+use App\PlanGenerationStatus;
 use App\Services\ContextAnalysisService;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Throwable;
 use UnexpectedValueException;
 
@@ -77,8 +80,8 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             ->values()
             ->all();
 
-        if ($usableSources->isEmpty()) {
-            $this->markFailed('Немає придатних джерел для підсумку. Додайте текст або зрозуміле зображення.');
+        if ($usableSources->isEmpty() && blank($event->description)) {
+            $this->markFailed('Гусю бракує і задуму, і придатних джерел. Додайте короткий опис, текст або зрозуміле зображення.');
 
             return;
         }
@@ -111,8 +114,15 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             ->values()
             ->all();
 
-        $context = $analysis->summarizeEvent($evidence);
-        $state = $context->state;
+        $context = $analysis->summarizeEvent([
+            'title' => $event->title,
+            'description' => $event->description,
+            'alcohol_planned' => $event->alcohol_planned,
+            'people_count' => $event->people_count,
+            'budget_amount' => $event->budget_amount,
+            'currency' => $event->currency,
+        ], $evidence);
+        $state = $this->normalizeOrganizerConfirmedAlcohol($context->state, $event->alcohol_planned);
         $validSourceIds = $usableSources->pluck('id')->all();
 
         if (! $this->hasValidProvenance($state, $validSourceIds)) {
@@ -129,11 +139,11 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             ];
         }
 
-        $shouldRetry = DB::transaction(function () use ($event, $evidenceVersion, $state, $omittedSourceIds): bool {
+        $result = DB::transaction(function () use ($event, $evidenceVersion, $state, $omittedSourceIds): array {
             $lockedEvent = Event::query()->lockForUpdate()->findOrFail($event->id);
 
             if ($lockedEvent->analysis_task_id !== $this->taskId) {
-                return false;
+                return ['retry' => false, 'state_version' => null];
             }
 
             if (
@@ -147,12 +157,22 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
                         : EventAnalysisStage::WaitingForQuiet,
                 ]);
 
-                return true;
+                return ['retry' => true, 'state_version' => null];
             }
+
+            $stateVersion = $lockedEvent->state_version + 1;
+
+            EventContextVersion::query()->firstOrCreate([
+                'event_id' => $lockedEvent->id,
+                'state_version' => $stateVersion,
+            ], [
+                'evidence_version' => $evidenceVersion,
+                'state' => $state,
+            ]);
 
             $lockedEvent->update([
                 'state' => $state,
-                'state_version' => $lockedEvent->state_version + 1,
+                'state_version' => $stateVersion,
                 'state_evidence_version' => $evidenceVersion,
                 'status' => EventStatus::Ready,
                 'analysis_stage' => $omittedSourceIds === []
@@ -160,13 +180,21 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
                     : EventAnalysisStage::CompletedWithWarnings,
                 'analysis_error' => null,
                 'analysis_finished_at' => now(),
+                'plan_generation_status' => PlanGenerationStatus::Pending,
+                'plan_generation_error' => null,
             ]);
 
-            return false;
+            return ['retry' => false, 'state_version' => $stateVersion];
         });
 
-        if ($shouldRetry) {
+        if ($result['retry']) {
             $this->release(5);
+
+            return;
+        }
+
+        if (is_int($result['state_version'])) {
+            BuildEventShoppingPlanJob::dispatch($event->id, $result['state_version'])->afterCommit();
         }
     }
 
@@ -199,6 +227,7 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
         $evidence = [
             'source_id' => $source->id,
             'kind' => $source->type->value,
+            'origin' => $source->origin,
             'uploaded_at' => $source->created_at?->toIso8601String(),
             'position' => $source->position,
         ];
@@ -247,5 +276,43 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
                 'analysis_error' => $message,
                 'analysis_finished_at' => now(),
             ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function normalizeOrganizerConfirmedAlcohol(array $state, bool $alcoholPlanned): array
+    {
+        if (! $alcoholPlanned) {
+            return $state;
+        }
+
+        $state['unresolved_questions'] = collect($state['unresolved_questions'] ?? [])
+            ->reject(function (array $question): bool {
+                $text = Str::lower(Str::squish(
+                    ($question['question'] ?? '').' '.($question['impact'] ?? ''),
+                ));
+
+                if (! str_contains($text, 'алкогол')) {
+                    return false;
+                }
+
+                return preg_match('/(який|яке|які|скільки|кільк|обсяг|сорт|вид|міцн|літр|бан|пляш|хто)/u', $text) !== 1;
+            })
+            ->values()
+            ->all();
+
+        $state['warnings'] = collect($state['warnings'] ?? [])
+            ->reject(function (array $warning): bool {
+                $message = Str::lower($warning['message'] ?? '');
+
+                return str_contains($message, 'алкогол')
+                    && (str_contains($message, 'не підтвердж') || str_contains($message, 'не виріш'));
+            })
+            ->values()
+            ->all();
+
+        return $state;
     }
 }

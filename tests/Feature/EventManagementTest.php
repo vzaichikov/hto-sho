@@ -2,12 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\EventAnalysisStage;
 use App\EventSourceType;
 use App\EventStatus;
+use App\Jobs\SummarizeEventContextJob;
 use App\Models\Event;
 use App\Models\EventSource;
 use App\Models\User;
+use App\PlanGenerationStatus;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -22,23 +27,39 @@ class EventManagementTest extends TestCase
             ->assertRedirect(route('landing'));
     }
 
-    public function test_user_creates_an_empty_event_and_immediately_opens_workspace(): void
+    public function test_event_list_routes_creation_through_the_wizard(): void
     {
         $user = User::factory()->create();
 
-        $response = $this->actingAs($user)->post(route('events.store'));
+        $this->actingAs($user)
+            ->get(route('events.index'))
+            ->assertOk()
+            ->assertSee(route('events.create'), escape: false)
+            ->assertSee('Назвіть задум у двох коротких кроках')
+            ->assertDontSee('action="'.route('events.store').'"', escape: false);
 
-        $event = Event::query()->whereBelongsTo($user)->sole();
-
-        $response->assertRedirect(route('events.show', $event));
-        $this->assertTrue($event->user->is($user));
-        $this->assertMatchesRegularExpression('/^Подія · \d{2}\.\d{2} \d{2}:\d{2}$/', $event->title);
-        $this->assertSame(EventStatus::Draft, $event->status);
-        $this->assertSame(0, $event->state_version);
+        $this->assertSame(0, Event::query()->whereBelongsTo($user)->count());
     }
 
     public function test_event_context_is_optional_and_editable(): void
     {
+        Queue::fake();
+        Http::preventStrayRequests();
+        config()->set([
+            'services.ai.provider' => 'openai',
+            'services.ai.model' => 'gpt-5.4-mini',
+            'services.ai.api_key' => 'test-key',
+        ]);
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response([
+                'output' => [[
+                    'content' => [[
+                        'type' => 'output_text',
+                        'text' => json_encode(['accepted' => true, 'reason' => 'accepted']),
+                    ]],
+                ]],
+            ]),
+        ]);
         $user = User::factory()->create();
         $event = Event::factory()->for($user)->create([
             'title' => 'Тестовий шашлик',
@@ -51,10 +72,12 @@ class EventManagementTest extends TestCase
             ->assertSee('Короткий опис')
             ->assertSee('Людей')
             ->assertSee('Бюджет, ₴')
-            ->assertSee('Додати до історії')
-            ->assertSee('Гусь, розгреби все')
-            ->assertSee('Гусь чекає на новини')
+            ->assertSee('Додати й оновити')
+            ->assertSee('Підкиньте новий контекст')
+            ->assertSeeInOrder(['Контекст', 'Питання', 'Список', 'Сільпо'])
+            ->assertSee('aria-current="step"', escape: false)
             ->assertSee(asset('images/brand/goose-sho.png'), escape: false)
+            ->assertDontSee('Гусь, розгреби все')
             ->assertDontSee('<select', escape: false);
 
         $this->actingAs($user)
@@ -80,9 +103,11 @@ class EventManagementTest extends TestCase
         $this->assertSame('Зустрічаємось у парку після обіду.', $event->description);
         $this->assertSame(9, $event->people_count);
         $this->assertSame('3500.00', $event->budget_amount);
+        $this->assertSame(1, $event->evidence_version);
+        Queue::assertPushed(SummarizeEventContextJob::class, 1);
     }
 
-    public function test_ready_workspace_renders_the_context_harness_without_generating_a_product_plan(): void
+    public function test_ready_workspace_renders_all_four_human_facing_steps(): void
     {
         $user = User::factory()->create();
         $event = Event::factory()->for($user)->create([
@@ -95,24 +120,54 @@ class EventManagementTest extends TestCase
                 'summary' => 'Зустріч для шести друзів.',
                 'participants' => [[
                     'name' => 'Оля',
-                    'status' => 'буде',
+                    'status' => 'confirmed',
                     'preferences' => [],
                     'restrictions' => ['без мʼяса'],
                     'allergies' => [],
                     'brings' => ['плед'],
-                    'source_ids' => [9],
+                    'source_ids' => [],
                 ]],
                 'restrictions' => [[
                     'participant' => 'Оля',
                     'restriction' => 'без мʼяса',
                     'severity' => 'hard',
-                    'source_ids' => [9],
+                    'source_ids' => [],
                 ]],
                 'agreements' => [],
-                'warnings' => [['message' => 'Уточніть напої для Тараса.', 'source_ids' => [9]]],
-                'unresolved_questions' => [],
-                'source_ids' => [9],
+                'warnings' => [['message' => 'Уточніть напої для Тараса.', 'source_ids' => []]],
+                'unresolved_questions' => [[
+                    'key' => 'q_alcohol',
+                    'question' => 'Чи потрібен алкоголь?',
+                    'impact' => 'Відповідь змінить склад напоїв.',
+                    'blocking' => false,
+                    'options' => [[
+                        'label' => 'Не додавати',
+                        'description' => 'Безпечний варіант до уточнення.',
+                        'recommended' => true,
+                    ], [
+                        'label' => 'Додати пиво',
+                        'description' => 'Якщо компанія це підтвердила.',
+                        'recommended' => false,
+                    ]],
+                    'source_ids' => [],
+                ]],
+                'source_ids' => [],
             ],
+            'shopping_plan' => [
+                'summary' => 'Їжа й напої для пікніка.',
+                'serves' => 6,
+                'items' => [[
+                    'name' => 'Вода питна',
+                    'category' => 'water',
+                    'quantity' => 6,
+                    'unit' => 'л',
+                    'note' => 'По літру на людину.',
+                ]],
+                'warnings' => [],
+                'unanswered_question_keys' => ['q_alcohol'],
+            ],
+            'plan_state_version' => 3,
+            'plan_generation_status' => PlanGenerationStatus::Ready,
         ]);
 
         $this->actingAs($user)
@@ -121,11 +176,45 @@ class EventManagementTest extends TestCase
             ->assertSee('Що Гусь зрозумів')
             ->assertSee('Оля')
             ->assertSee('без мʼяса')
-            ->assertSee('Історія контексту')
-            ->assertSee('Обережно')
+            ->assertSee('На що звернути увагу')
             ->assertDontSee('Кошик Сільпо')
+            ->assertDontSee('OCR')
+            ->assertDontSee('SHA-кеш')
+            ->assertDontSee('source #')
+            ->assertDontSee('full summary')
+            ->assertDontSee('фоновий job')
             ->assertDontSee('<select', escape: false)
             ->assertDontSee('type="checkbox"', escape: false);
+
+        $this->actingAs($user)
+            ->get(route('events.show', ['event' => $event, 'tab' => 'questions']))
+            ->assertOk()
+            ->assertSee('Чи потрібен алкоголь?')
+            ->assertSee('Гусь радить')
+            ->assertSee('Своя відповідь');
+
+        $this->actingAs($user)
+            ->get(route('events.show', ['event' => $event, 'tab' => 'plan']))
+            ->assertOk()
+            ->assertSee('Загальний список')
+            ->assertSee('Вода питна')
+            ->assertSee('Розраховано на 6 людей')
+            ->assertSee('Внести корективу')
+            ->assertSee('Передати корективу Гусю')
+            ->assertSee('Відправити Гуся в Сільпо')
+            ->assertSee('Відправити Гуся в Сільпо?')
+            ->assertSee('Гусь піде збирати кошик. Це займе деякий час.')
+            ->assertSee('Нехай іде')
+            ->assertSee('method="dialog"', escape: false)
+            ->assertDontSee('cart-sync');
+
+        $this->actingAs($user)
+            ->get(route('events.show', ['event' => $event, 'tab' => 'silpo']))
+            ->assertOk()
+            ->assertSee('Кошик Сільпо')
+            ->assertSee('Тут зʼявиться справжній кошик Сільпо. Поки що Гусь лише готується.')
+            ->assertDontSee('Вода питна')
+            ->assertDontSee('Відправити Гуся в Сільпо');
 
         $this->actingAs($user)
             ->get(route('events.index'))
@@ -146,6 +235,83 @@ class EventManagementTest extends TestCase
         $this->actingAs($stranger)->delete(route('events.destroy', $event))->assertForbidden();
 
         $this->assertDatabaseHas('events', ['id' => $event->id, 'title' => $event->title]);
+    }
+
+    public function test_tabs_explain_empty_loading_stale_and_error_states_without_technical_copy(): void
+    {
+        $user = User::factory()->create();
+        $empty = Event::factory()->for($user)->create();
+
+        $this->actingAs($user)
+            ->get(route('events.show', ['event' => $empty, 'tab' => 'plan']))
+            ->assertOk()
+            ->assertSee('Без контексту навіть Гусь не вгадає')
+            ->assertSee('Додати контекст');
+
+        $loading = Event::factory()->for($user)->create([
+            'status' => EventStatus::Processing,
+            'state' => $this->eventState(),
+            'state_version' => 1,
+            'evidence_version' => 1,
+            'state_evidence_version' => 1,
+            'plan_generation_status' => PlanGenerationStatus::Processing,
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('events.show', ['event' => $loading, 'tab' => 'plan']))
+            ->assertOk()
+            ->assertSee('Гусь уже рахує, скільки всього треба');
+
+        $stale = Event::factory()->for($user)->create([
+            'status' => EventStatus::Ready,
+            'state' => $this->eventState(),
+            'state_version' => 1,
+            'evidence_version' => 2,
+            'state_evidence_version' => 1,
+            'shopping_plan' => $this->eventPlan(),
+            'plan_state_version' => 1,
+            'plan_generation_status' => PlanGenerationStatus::Ready,
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('events.show', ['event' => $stale, 'tab' => 'plan']))
+            ->assertOk()
+            ->assertSee('Гусь почув нове й уже перераховує')
+            ->assertSee('Внести корективу')
+            ->assertSee('Відправити Гуся в Сільпо')
+            ->assertSee('disabled', escape: false);
+
+        $summaryError = Event::factory()->for($user)->create([
+            'status' => EventStatus::Failed,
+            'analysis_stage' => EventAnalysisStage::Failed,
+            'analysis_error' => 'Не вдалося перечитати матеріали.',
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('events.show', ['event' => $summaryError, 'tab' => 'context']))
+            ->assertOk()
+            ->assertSee('Гусь перечепився й не зміг оновити картину')
+            ->assertSee('Гусь, спробуй ще раз');
+
+        $planError = Event::factory()->for($user)->create([
+            'status' => EventStatus::Ready,
+            'state' => $this->eventState(),
+            'state_version' => 1,
+            'evidence_version' => 1,
+            'state_evidence_version' => 1,
+            'plan_generation_status' => PlanGenerationStatus::Failed,
+            'plan_generation_error' => 'Не вдалося скласти список.',
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('events.show', ['event' => $planError, 'tab' => 'plan']))
+            ->assertOk()
+            ->assertSee('Гусь перечепився й не склав список')
+            ->assertSee('Гусь, спробуй ще раз')
+            ->assertDontSee('OCR')
+            ->assertDontSee('job')
+            ->assertDontSee('task')
+            ->assertDontSee('source #');
     }
 
     public function test_deleting_an_event_removes_database_sources_and_private_files(): void
@@ -173,5 +339,37 @@ class EventManagementTest extends TestCase
         $this->assertDatabaseMissing('events', ['id' => $event->id]);
         $this->assertDatabaseMissing('event_sources', ['id' => $source->id]);
         Storage::disk('local')->assertMissing($path);
+    }
+
+    /** @return array<string, mixed> */
+    private function eventState(): array
+    {
+        return [
+            'summary' => 'Зустріч для друзів.',
+            'participants' => [],
+            'restrictions' => [],
+            'agreements' => [],
+            'warnings' => [],
+            'unresolved_questions' => [],
+            'source_ids' => [],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function eventPlan(): array
+    {
+        return [
+            'summary' => 'Список для зустрічі.',
+            'serves' => 6,
+            'items' => [[
+                'name' => 'Вода',
+                'category' => 'water',
+                'quantity' => 6,
+                'unit' => 'л',
+                'note' => '',
+            ]],
+            'warnings' => [],
+            'unanswered_question_keys' => [],
+        ];
     }
 }

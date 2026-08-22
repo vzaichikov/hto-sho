@@ -3,6 +3,8 @@
 namespace App\Data;
 
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 final readonly class EventContextData
 {
@@ -45,19 +47,39 @@ final readonly class EventContextData
             'warnings.*.source_ids.*' => ['integer'],
             'unresolved_questions' => ['present', 'array'],
             'unresolved_questions.*.question' => ['required', 'string', 'max:2000'],
+            'unresolved_questions.*.impact' => ['required', 'string', 'max:1000'],
+            'unresolved_questions.*.blocking' => ['required', 'boolean'],
+            'unresolved_questions.*.options' => ['required', 'array', 'min:3', 'max:4'],
+            'unresolved_questions.*.options.*.label' => ['required', 'string', 'max:500'],
+            'unresolved_questions.*.options.*.description' => ['present', 'string', 'max:1000'],
+            'unresolved_questions.*.options.*.recommended' => ['required', 'boolean'],
             'unresolved_questions.*.source_ids' => ['present', 'array'],
             'unresolved_questions.*.source_ids.*' => ['integer'],
-            'source_ids' => ['present', 'array', 'min:1'],
+            'source_ids' => ['present', 'array'],
             'source_ids.*' => ['integer'],
         ])->validate();
 
         foreach (['participants', 'restrictions', 'agreements', 'warnings', 'unresolved_questions'] as $section) {
             foreach ($validated[$section] as &$item) {
                 $item['source_ids'] = array_values(array_unique($item['source_ids']));
+
+                if ($section === 'unresolved_questions') {
+                    if (collect($item['options'])->where('recommended', true)->count() !== 1) {
+                        throw ValidationException::withMessages([
+                            'unresolved_questions' => 'Кожне питання мусить мати рівно одну пораду Гуся.',
+                        ]);
+                    }
+
+                    $item['key'] = 'q_'.substr(hash('sha256', Str::lower(Str::squish($item['question']))), 0, 32);
+                }
             }
             unset($item);
         }
 
+        $validated['unresolved_questions'] = collect($validated['unresolved_questions'])
+            ->unique('key')
+            ->values()
+            ->all();
         $validated['source_ids'] = array_values(array_unique($validated['source_ids']));
 
         return new self($validated);

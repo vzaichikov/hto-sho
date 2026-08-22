@@ -8,13 +8,12 @@
                 <h1 class="font-display text-5xl leading-[0.9] tracking-[-0.035em] sm:text-6xl">Ваші смачні плани</h1>
                 <p class="mt-4 max-w-lg text-sm leading-6 text-muted sm:text-base sm:leading-7">Створюйте подію, додавайте уривки переписки — і повертайтеся до одного актуального списку без перечитування чату.</p>
 
-                <form class="mt-6" method="POST" action="{{ route('events.store') }}">
-                    @csrf
-                    <button class="inline-flex items-center gap-3 rounded-2xl bg-orange px-5 py-3.5 text-sm font-extrabold text-white shadow-[4px_4px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-orange-dark" type="submit">
+                <div class="mt-6">
+                    <a class="inline-flex items-center gap-3 rounded-2xl bg-orange px-5 py-3.5 text-sm font-extrabold text-white shadow-[4px_4px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-orange-dark" href="{{ route('events.create') }}">
                         <span class="grid size-7 place-items-center rounded-full bg-white/20 text-xl leading-none">+</span>
                         Нова подія
-                    </button>
-                </form>
+                    </a>
+                </div>
             </div>
 
             <span class="absolute right-36 top-7 hidden rotate-12 font-display text-5xl text-green lg:block" aria-hidden="true">♡</span>
@@ -25,11 +24,8 @@
             <div class="mt-10 rounded-[30px] border-2 border-dashed border-green/50 bg-paper/75 px-6 py-14 text-center">
                 <div class="mx-auto grid size-16 -rotate-6 place-items-center rounded-[45%] bg-yellow font-display text-4xl">?</div>
                 <h2 class="mt-6 font-display text-3xl">З чого почнемо?</h2>
-                <p class="mx-auto mt-2 max-w-md text-muted">Створіть подію та одразу додайте переписку або скриншоти. Назву придумаємо автоматично.</p>
-                <form class="mt-7" method="POST" action="{{ route('events.store') }}">
-                    @csrf
-                    <button class="rounded-2xl bg-orange px-6 py-4 font-extrabold text-white shadow-[4px_4px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-orange-dark" type="submit">Створити першу подію</button>
-                </form>
+                <p class="mx-auto mt-2 max-w-md text-muted">Назвіть задум у двох коротких кроках. Гусь перевірить напрям і одразу почне збирати перший контекст.</p>
+                <a class="mt-7 inline-flex rounded-2xl bg-orange px-6 py-4 font-extrabold text-white shadow-[4px_4px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-orange-dark" href="{{ route('events.create') }}">Створити першу подію</a>
             </div>
         @else
             <div class="mt-11 flex items-end justify-between gap-4">
@@ -52,7 +48,7 @@
                             <x-status-badge :status="$event->status" />
                         </div>
                         <h3 class="mt-6 font-display text-2xl leading-none tracking-tight transition group-hover:text-orange-dark">{{ $event->title }}</h3>
-                        <p class="mt-1 text-sm text-muted">Оновлено {{ $event->updated_at->diffForHumans() }} · {{ $event->sources_count }} джерел</p>
+                        <p class="mt-1 text-sm text-muted">Оновлено {{ $event->updated_at->diffForHumans() }} · матеріалів: {{ $event->sources_count }}</p>
 
                         <div class="mt-auto flex items-end justify-between border-t border-ink/10 pt-5">
                             <div>

@@ -15,6 +15,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'event_id',
     'image_extraction_id',
     'type',
+    'origin',
+    'metadata',
     'text',
     'file_path',
     'original_name',
@@ -37,6 +39,7 @@ class EventSource extends Model
     protected $attributes = [
         'status' => 'pending',
         'inclusion' => 'included',
+        'origin' => 'organizer_context',
     ];
 
     protected function casts(): array
@@ -46,6 +49,7 @@ class EventSource extends Model
             'status' => EventSourceStatus::class,
             'inclusion' => EventSourceInclusion::class,
             'used_cached_extraction' => 'boolean',
+            'metadata' => 'array',
             'processed_at' => 'datetime',
         ];
     }

@@ -26,8 +26,8 @@ class EventSourceInclusionController extends Controller
         return back()->with(
             'success',
             $inclusion === EventSourceInclusion::Forced
-                ? 'Гаразд, Гусь бере це джерело до уваги. Але дивиться підозріло.'
-                : 'Джерело знову не братиме участі у підсумку.',
+                ? 'Гаразд, Гусь бере цей матеріал до уваги й оновлює план.'
+                : 'Гусь відклав цей матеріал убік і оновлює план.',
         );
     }
 }

@@ -22,9 +22,17 @@ class UpdateEventRequest extends FormRequest
      */
     public function rules(): array
     {
+        $event = $this->route('event');
+        $descriptionIsUnchanged = $event instanceof Event
+            && $this->input('description') === $event->description;
+
         return [
             'title' => ['required', 'string', 'max:120'],
-            'description' => ['nullable', 'string', 'max:1000'],
+            'description' => [
+                $event instanceof Event && filled($event->description) ? 'required' : 'nullable',
+                'string',
+                $descriptionIsUnchanged ? 'max:1000' : 'max:500',
+            ],
             'people_count' => ['nullable', 'integer', 'min:1', 'max:10000'],
             'budget_amount' => ['nullable', 'numeric', 'min:0', 'max:9999999999.99'],
         ];
@@ -36,14 +44,25 @@ class UpdateEventRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'title.required' => 'Вкажіть назву події.',
-            'title.max' => 'Назва не може бути довшою за 120 символів.',
-            'description.max' => 'Опис не може бути довшим за 1000 символів.',
+            'title.required' => 'Без назви Гусь не знайде цю пригоду потім.',
+            'title.max' => 'Назва розігналася далі 120 символів. Трошки підріжте.',
+            'description.required' => 'Задум уже став частиною події — не лишайте Гуся без контексту.',
+            'description.max' => 'Гусь просив коротко: до 500 символів, будь ласка.',
             'people_count.integer' => 'Кількість людей має бути цілим числом.',
             'people_count.min' => 'Кількість людей має бути не меншою за 1.',
             'people_count.max' => 'Кількість людей завелика.',
             'budget_amount.numeric' => 'Бюджет має бути числом.',
             'budget_amount.min' => 'Бюджет не може бути відʼємним.',
         ];
+    }
+
+    protected function prepareForValidation(): void
+    {
+        $this->merge([
+            'title' => trim((string) $this->input('title')),
+            'description' => $this->filled('description')
+                ? trim((string) $this->input('description'))
+                : null,
+        ]);
     }
 }

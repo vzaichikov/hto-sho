@@ -9,7 +9,6 @@ use App\EventSourceType;
 use App\ImageClassification;
 use App\ImageExtractionStatus;
 use App\Jobs\ProcessImageExtractionJob;
-use App\Jobs\SummarizeEventContextJob;
 use App\Models\Event;
 use App\Models\EventSource;
 use App\Models\ImageExtraction;
@@ -22,6 +21,8 @@ use Throwable;
 
 class StoreEventSourcesAction
 {
+    public function __construct(private readonly StartEventAnalysisAction $startAnalysis) {}
+
     /**
      * @param  array<int, UploadedFile>  $images
      */
@@ -30,7 +31,7 @@ class StoreEventSourcesAction
         $batch = (string) Str::ulid();
         $storedPaths = [];
         $extractionIds = [];
-        $activeTask = null;
+        $shouldAnalyze = false;
 
         try {
             $created = DB::transaction(function () use (
@@ -40,7 +41,7 @@ class StoreEventSourcesAction
                 $batch,
                 &$storedPaths,
                 &$extractionIds,
-                &$activeTask,
+                &$shouldAnalyze,
             ): int {
                 $lockedEvent = Event::query()->lockForUpdate()->findOrFail($event->id);
                 $existingSources = $lockedEvent->sources()->get()->keyBy('content_hash');
@@ -171,9 +172,7 @@ class StoreEventSourcesAction
                         'last_source_at' => now(),
                     ]);
 
-                    if ($lockedEvent->hasActiveAnalysis()) {
-                        $activeTask = [$lockedEvent->id, $lockedEvent->analysis_task_id];
-                    }
+                    $shouldAnalyze = $evidenceChanges > 0;
                 }
 
                 return $created;
@@ -188,10 +187,8 @@ class StoreEventSourcesAction
             ProcessImageExtractionJob::dispatch($extractionId)->afterCommit();
         }
 
-        if ($activeTask !== null) {
-            SummarizeEventContextJob::dispatch($activeTask[0], $activeTask[1])
-                ->delay(now()->addSeconds(5))
-                ->afterCommit();
+        if ($shouldAnalyze) {
+            $this->startAnalysis->execute($event->fresh());
         }
 
         return $created;

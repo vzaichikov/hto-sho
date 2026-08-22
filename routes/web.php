@@ -1,8 +1,9 @@
 <?php
 
 use App\Http\Controllers\EventAnalysisController;
-use App\Http\Controllers\EventCartController;
+use App\Http\Controllers\EventAnswerController;
 use App\Http\Controllers\EventController;
+use App\Http\Controllers\EventPlanCorrectionController;
 use App\Http\Controllers\EventSourceController;
 use App\Http\Controllers\EventSourceInclusionController;
 use App\Http\Controllers\EventStatusController;
@@ -26,11 +27,12 @@ Route::middleware('auth')->group(function (): void {
 
     Route::resource('events', EventController::class)->only([
         'index',
+        'create',
         'store',
         'show',
         'update',
         'destroy',
-    ]);
+    ])->middlewareFor('store', 'throttle:event-description-review');
 
     Route::scopeBindings()->group(function (): void {
         Route::post('/events/{event}/sources', [EventSourceController::class, 'store'])
@@ -46,8 +48,10 @@ Route::middleware('auth')->group(function (): void {
     });
     Route::post('/events/{event}/analysis', EventAnalysisController::class)
         ->name('events.analysis.store');
+    Route::post('/events/{event}/answers', EventAnswerController::class)
+        ->name('events.answers.store');
+    Route::post('/events/{event}/plan-corrections', EventPlanCorrectionController::class)
+        ->name('events.plan-corrections.store');
     Route::get('/events/{event}/status', EventStatusController::class)
         ->name('events.status');
-    Route::post('/events/{event}/cart-sync', EventCartController::class)
-        ->name('events.cart-sync');
 });

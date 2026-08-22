@@ -5,6 +5,7 @@ namespace App\Models;
 use App\CartSyncStatus;
 use App\EventAnalysisStage;
 use App\EventStatus;
+use App\PlanGenerationStatus;
 use Database\Factories\EventFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -16,6 +17,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'user_id',
     'title',
     'description',
+    'alcohol_planned',
     'people_count',
     'status',
     'state',
@@ -24,6 +26,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'state_evidence_version',
     'shopping_plan',
     'plan_state_version',
+    'plan_generation_status',
+    'plan_generation_error',
     'budget_amount',
     'estimated_total',
     'currency',
@@ -49,8 +53,10 @@ class Event extends Model
         'status' => 'draft',
         'state_version' => 0,
         'evidence_version' => 0,
+        'alcohol_planned' => false,
         'currency' => 'UAH',
         'cart_sync_status' => 'not_synced',
+        'plan_generation_status' => 'not_started',
     ];
 
     protected function casts(): array
@@ -58,10 +64,13 @@ class Event extends Model
         return [
             'status' => EventStatus::class,
             'state' => 'array',
+            'alcohol_planned' => 'boolean',
             'state_version' => 'integer',
             'evidence_version' => 'integer',
             'state_evidence_version' => 'integer',
             'shopping_plan' => 'array',
+            'plan_state_version' => 'integer',
+            'plan_generation_status' => PlanGenerationStatus::class,
             'people_count' => 'integer',
             'budget_amount' => 'decimal:2',
             'estimated_total' => 'decimal:2',
@@ -84,12 +93,18 @@ class Event extends Model
         return $this->hasMany(EventSource::class);
     }
 
+    public function contextVersions(): HasMany
+    {
+        return $this->hasMany(EventContextVersion::class);
+    }
+
     public function isPlanCurrent(): bool
     {
         return $this->status === EventStatus::Ready
             && ! $this->hasUnanalyzedChanges()
             && $this->shopping_plan !== null
-            && $this->plan_state_version === $this->state_version;
+            && $this->plan_state_version === $this->state_version
+            && $this->plan_generation_status === PlanGenerationStatus::Ready;
     }
 
     public function hasUnanalyzedChanges(): bool

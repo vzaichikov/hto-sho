@@ -27,10 +27,14 @@ class EventSourceController extends Controller
         );
 
         if ($created === 0) {
-            return back()->with('info', 'Ці джерела вже додані до події.');
+            return redirect()
+                ->route('events.show', ['event' => $event, 'tab' => 'context'])
+                ->with('info', 'Ці матеріали Гусь уже бачив.');
         }
 
-        return back()->with('success', 'Джерела збережено. Картинки Гусь уже поніс на розбір.');
+        return redirect()
+            ->route('events.show', ['event' => $event, 'tab' => 'context'])
+            ->with('success', 'Гусь усе отримав і вже оновлює план.');
     }
 
     public function show(Event $event, EventSource $source): StreamedResponse
@@ -56,6 +60,8 @@ class EventSourceController extends Controller
         Gate::authorize('update', $event);
         $deleteSource->execute($event, $source);
 
-        return back()->with('success', 'Джерело видалено. Гусь удає, що нічого не бачив.');
+        return redirect()
+            ->route('events.show', ['event' => $event, 'tab' => 'context'])
+            ->with('success', 'Матеріал прибрано. Гусь уже перераховує.');
     }
 }

@@ -8,6 +8,7 @@ use App\EventSourceStatus;
 use App\EventSourceType;
 use App\EventStatus;
 use App\ImageClassification;
+use App\Jobs\BuildEventShoppingPlanJob;
 use App\Jobs\SummarizeEventContextJob;
 use App\Models\Event;
 use App\Models\EventSource;
@@ -18,6 +19,7 @@ use DateTimeInterface;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -30,6 +32,7 @@ class EventContextSummaryJobTest extends TestCase
         parent::setUp();
 
         Http::preventStrayRequests();
+        Queue::fake();
         config()->set([
             'services.ai.provider' => 'openai',
             'services.ai.model' => 'gpt-5.4-mini',
@@ -65,6 +68,16 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertSame(1, $event->state_version);
         $this->assertSame(2, $event->state_evidence_version);
         $this->assertSame([$older->id, $newer->id], $event->state['source_ids']);
+        $this->assertDatabaseHas('event_context_versions', [
+            'event_id' => $event->id,
+            'state_version' => 1,
+            'evidence_version' => 2,
+        ]);
+        Queue::assertPushed(BuildEventShoppingPlanJob::class, fn (BuildEventShoppingPlanJob $job): bool => $job->eventId === $event->id && $job->stateVersion === 1);
+
+        (new SummarizeEventContextJob($event->id, $taskId))
+            ->handle($this->app->make(ContextAnalysisService::class));
+        $this->assertSame(1, $event->contextVersions()->count());
         Http::assertSent(function (Request $request): bool {
             $prompt = $request['input'][0]['content'][0]['text'];
 
@@ -171,6 +184,42 @@ class EventContextSummaryJobTest extends TestCase
         });
     }
 
+    public function test_plan_correction_is_evidence_but_its_reference_plan_is_not_sent_to_summary(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $correction = EventSource::factory()->for($event)->create([
+            'origin' => 'plan_correction',
+            'text' => 'Води вдвічі менше.',
+            'metadata' => [
+                'base_plan_state_version' => 3,
+                'base_plan' => ['summary' => 'MUST_NOT_REACH_SUMMARY'],
+            ],
+        ]);
+        $payload = $this->summaryPayload([$correction->id]);
+        $payload['agreements'] = [[
+            'summary' => 'Для нового списку води потрібно вдвічі менше, ніж у варіанті, який бачив організатор.',
+            'source_ids' => [$correction->id],
+        ]];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse($payload)),
+        ]);
+
+        (new SummarizeEventContextJob($event->id, $taskId))
+            ->handle($this->app->make(ContextAnalysisService::class));
+
+        $event->refresh();
+        $this->assertSame([$correction->id], $event->state['agreements'][0]['source_ids']);
+        Http::assertSent(function (Request $request): bool {
+            $prompt = $request['input'][0]['content'][0]['text'];
+
+            return str_contains($prompt, '"origin": "plan_correction"')
+                && str_contains($prompt, 'Води вдвічі менше.')
+                && str_contains($prompt, 'Збережи її актуальний зміст у agreements')
+                && ! str_contains($prompt, 'MUST_NOT_REACH_SUMMARY')
+                && ! str_contains($prompt, '"base_plan"');
+        });
+    }
+
     public function test_failed_images_produce_an_explicit_partial_summary(): void
     {
         [$event, $taskId] = $this->activeEvent(2);
@@ -248,8 +297,91 @@ class EventContextSummaryJobTest extends TestCase
         $event->refresh();
         $this->assertSame(EventStatus::Failed, $event->status);
         $this->assertSame(EventAnalysisStage::Failed, $event->analysis_stage);
-        $this->assertStringContainsString('Немає придатних джерел', $event->analysis_error);
+        $this->assertStringContainsString('бракує і задуму, і придатних джерел', $event->analysis_error);
         Http::assertNothingSent();
+    }
+
+    public function test_organizer_context_can_produce_a_partial_state_without_uploaded_sources(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $event->update([
+            'title' => 'Пікнік біля води',
+            'description' => 'Хочемо пікнік на озері й щось нове від Гуся.',
+            'alcohol_planned' => true,
+            'people_count' => null,
+            'budget_amount' => null,
+        ]);
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse([
+                'summary' => 'Пікнік біля озера без уточненого складу компанії.',
+                'participants' => [],
+                'restrictions' => [],
+                'agreements' => [],
+                'warnings' => [],
+                'unresolved_questions' => [[
+                    'question' => 'Скільки людей буде на пікніку?',
+                    'impact' => 'Від цього залежать усі кількості.',
+                    'blocking' => true,
+                    'options' => [[
+                        'label' => 'Уточнити точну кількість',
+                        'description' => 'Найбезпечніше перед розрахунком.',
+                        'recommended' => true,
+                    ], [
+                        'label' => 'Поки не складати список',
+                        'description' => 'Повернутися, коли кількість буде відома.',
+                        'recommended' => false,
+                    ], [
+                        'label' => 'Назвати приблизний діапазон',
+                        'description' => 'Гусь складе обережний чернетковий розрахунок.',
+                        'recommended' => false,
+                    ]],
+                    'source_ids' => [],
+                ], [
+                    'question' => 'Чи потрібно додавати алкоголь до плану?',
+                    'impact' => 'Це змінить список напоїв.',
+                    'blocking' => false,
+                    'options' => [[
+                        'label' => 'Вважати алкоголь запланованим',
+                        'description' => 'Організатор уже підтвердив це під час створення.',
+                        'recommended' => true,
+                    ], [
+                        'label' => 'Не додавати алкоголь',
+                        'description' => 'Залишити лише безалкогольні напої.',
+                        'recommended' => false,
+                    ], [
+                        'label' => 'Уточнити пізніше',
+                        'description' => 'Повернутися до напоїв згодом.',
+                        'recommended' => false,
+                    ]],
+                    'source_ids' => [],
+                ]],
+                'source_ids' => [],
+            ])),
+        ]);
+
+        (new SummarizeEventContextJob($event->id, $taskId))
+            ->handle($this->app->make(ContextAnalysisService::class));
+
+        $event->refresh();
+        $this->assertSame(EventStatus::Ready, $event->status);
+        $this->assertSame(EventAnalysisStage::Completed, $event->analysis_stage);
+        $this->assertSame(1, $event->state_evidence_version);
+        $this->assertSame([], $event->state['source_ids']);
+        $this->assertCount(1, $event->state['unresolved_questions']);
+        $this->assertSame([], $event->state['unresolved_questions'][0]['source_ids']);
+        $this->assertStringNotContainsString('алкоголь', Str::lower($event->state['unresolved_questions'][0]['question']));
+        $this->assertStringStartsWith('q_', $event->state['unresolved_questions'][0]['key']);
+        Http::assertSent(function (Request $request): bool {
+            $prompt = $request['input'][0]['content'][0]['text'];
+
+            return str_contains($prompt, 'КОНТЕКСТ ОРГАНІЗАТОРА')
+                && str_contains($prompt, 'Хочемо пікнік на озері й щось нове від Гуся.')
+                && str_contains($prompt, '"alcohol_planned": true')
+                && str_contains($prompt, 'не питай, чи потрібен алкоголь')
+                && str_contains($prompt, 'ПАЧКИ ДЖЕРЕЛ:'."\n".'[]')
+                && str_contains($prompt, 'source_ids має бути порожнім масивом')
+                && str_contains($prompt, 'Не вигадуй учасників, кількості, алергії');
+        });
     }
 
     /** @return array{Event, string} */
