@@ -37,6 +37,7 @@ return [
 
     'silpo_mcp' => [
         'url' => env('SILPO_MCP_URL', 'https://mcp.silpo.ua/mcp'),
+        'shop_url' => 'https://silpo.ua',
         'client_name' => env('SILPO_MCP_CLIENT_NAME', 'Хто Шо?'),
         'redirect_uri' => env(
             'SILPO_MCP_REDIRECT_URI',

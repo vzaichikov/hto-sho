@@ -2,7 +2,11 @@
 
 namespace App\Providers;
 
+use App\Contracts\CartProductAgent;
+use App\Contracts\SilpoCartGateway;
 use App\Contracts\SilpoProfileGateway;
+use App\Services\CartProductDecisionService;
+use App\Services\McpSilpoCartGateway;
 use App\Services\McpSilpoProfileGateway;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -14,6 +18,8 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(SilpoProfileGateway::class, McpSilpoProfileGateway::class);
+        $this->app->bind(SilpoCartGateway::class, McpSilpoCartGateway::class);
+        $this->app->bind(CartProductAgent::class, CartProductDecisionService::class);
     }
 
     public function boot(): void
@@ -39,5 +45,8 @@ class AppServiceProvider extends ServiceProvider
                     ], 429, $headers);
                 });
         });
+
+        RateLimiter::for('cart-runs', fn (Request $request): Limit => Limit::perMinute(20)
+            ->by('user:'.($request->user()?->id ?? $request->ip())));
     }
 }

@@ -6,15 +6,21 @@ use App\Data\EventContextData;
 use App\Data\EventDescriptionReviewData;
 use App\Data\EventShoppingPlanData;
 use App\Data\ImageExtractionData;
+use App\HarnessEntryKind;
+use App\Models\HarnessRun;
 use Illuminate\Http\Client\Response;
 use JsonException;
 use RuntimeException;
+use Throwable;
 
 final class ContextAnalysisService
 {
-    public function __construct(private readonly AiRequestFactory $requestFactory) {}
+    public function __construct(
+        private readonly AiRequestFactory $requestFactory,
+        private readonly HarnessRecorder $harnessRecorder,
+    ) {}
 
-    public function reviewEventDescription(string $description): EventDescriptionReviewData
+    public function reviewEventDescription(string $description, ?HarnessRun $harnessRun = null): EventDescriptionReviewData
     {
         $prompt = <<<'PROMPT'
 Ти перевіряєш короткий задум події для українського застосунку «Хто Шо?». Це лише класифікація доречності перед створенням події, а не аналіз меню.
@@ -43,11 +49,16 @@ PROMPT;
             schema: $this->eventDescriptionReviewSchema(),
         );
 
-        return EventDescriptionReviewData::from($this->decodedPayload($this->send($payload)));
+        return EventDescriptionReviewData::from($this->decodedPayload(
+            $this->send($payload, $harnessRun, 'Перевірка опису події'),
+        ));
     }
 
-    public function extractImage(string $imageContents, string $mimeType): ImageExtractionData
-    {
+    public function extractImage(
+        string $imageContents,
+        string $mimeType,
+        ?HarnessRun $harnessRun = null,
+    ): ImageExtractionData {
         $prompt = <<<'PROMPT'
 Ти обробляєш одне джерело для українського застосунку планування подій «Хто Шо?». Однією відповіддю:
 1. класифікуй зображення як chat_screenshot, product_image або irrelevant;
@@ -86,15 +97,22 @@ PROMPT;
             imageDataUrl: 'data:'.$mimeType.';base64,'.base64_encode($imageContents),
         );
 
-        return ImageExtractionData::from($this->decodedPayload($this->send($payload)));
+        return ImageExtractionData::from($this->decodedPayload(
+            $this->send($payload, $harnessRun, 'OCR та класифікація зображення'),
+        ));
     }
 
     /**
      * @param  array{title: string, description: ?string, alcohol_planned: bool, people_count: ?int, budget_amount: ?string, currency: string}  $organizerContext
      * @param  array<int, array<string, mixed>>  $sourceBatches
+     * @param  array{open: array<int, array{key: string, question: string}>, answered: array<int, array{key: string, question: string, answer: string, source_id: int}>}  $questionLedger
      */
-    public function summarizeEvent(array $organizerContext, array $sourceBatches): EventContextData
-    {
+    public function summarizeEvent(
+        array $organizerContext,
+        array $sourceBatches,
+        array $questionLedger = ['open' => [], 'answered' => []],
+        ?HarnessRun $harnessRun = null,
+    ): EventContextData {
         $prompt = <<<'PROMPT'
 Ти складаєш поточний доказовий контекст події для українського застосунку «Хто Шо?». Усі джерела передані разом і згруповані за upload_batch. Не вважай порядок джерел або position історичним порядком: position означає лише порядок передавання файлів людиною і може бути помилковим.
 
@@ -130,6 +148,13 @@ participants.brings містить лише актуальні позитивн�
 
 Кожне unresolved question повинно пояснювати impact — що саме відповідь змінить у списку. Дай від трьох до чотирьох коротких options: одну пораду й дві-три альтернативи. Рівно один option має recommended=true: це безпечна робоча порада, а не вигаданий факт. Для алергій, кількості людей або алкоголю ніколи не рекомендуй небезпечне припущення. Якщо без відповіді не можна скласти безпечний список, blocking=true. Якщо контекст мовчить про алкоголь, постав окреме питання, не додавай алкоголь як факт і радь не додавати його до уточнення. Відповідай українською.
 
+Журнал питань є авторитетним для їх життєвого циклу:
+- якщо невирішене по суті питання вже є в open, поверни його незмінний key у question_key, навіть якщо перефразуєш текст;
+- для справді нового питання поверни question_key="__new__"; не вигадуй власних ключів;
+- ніколи не повертай питання з answered і не став семантично те саме питання іншими словами;
+- відповідь на кшталт «залишити без імен», «не додавати» або «поки не уточнювати» є повноцінним рішенням, а не приводом повторити питання;
+- нове уточнення після відповіді дозволене лише коли воно стосується іншого рішення, якого попередня відповідь справді не містить.
+
 КОНТЕКСТ ОРГАНІЗАТОРА:
 PROMPT;
 
@@ -141,6 +166,10 @@ PROMPT;
             $sourceBatches,
             JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT,
         );
+        $prompt .= "\n\nЖУРНАЛ ПИТАНЬ:\n".json_encode(
+            $questionLedger,
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT,
+        );
 
         $payload = $this->requestPayload(
             prompt: $prompt,
@@ -148,7 +177,23 @@ PROMPT;
             schema: $this->eventContextSchema(),
         );
 
-        return EventContextData::from($this->decodedPayload($this->send($payload)));
+        $knownQuestionKeys = collect($questionLedger['open'])
+            ->merge($questionLedger['answered'])
+            ->pluck('key')
+            ->filter(fn (mixed $key): bool => is_string($key))
+            ->values()
+            ->all();
+        $answeredQuestionKeys = collect($questionLedger['answered'])
+            ->pluck('key')
+            ->filter(fn (mixed $key): bool => is_string($key))
+            ->values()
+            ->all();
+
+        return EventContextData::from(
+            $this->decodedPayload($this->send($payload, $harnessRun, 'Синтез контексту події')),
+            $knownQuestionKeys,
+            $answeredQuestionKeys,
+        );
     }
 
     /**
@@ -160,6 +205,7 @@ PROMPT;
         array $organizerContext,
         array $state,
         array $planCorrections,
+        ?HarnessRun $harnessRun = null,
     ): EventShoppingPlanData {
         $prompt = <<<'PROMPT'
 Ти складаєш загальний список потрібного для події у застосунку «Хто Шо?». Спирайся лише на поточний контекст події та явні поля організатора.
@@ -207,7 +253,9 @@ PROMPT;
             schema: $this->eventShoppingPlanSchema(),
         );
 
-        return EventShoppingPlanData::from($this->decodedPayload($this->send($payload)));
+        return EventShoppingPlanData::from($this->decodedPayload(
+            $this->send($payload, $harnessRun, 'Побудова списку для події'),
+        ));
     }
 
     /**
@@ -255,15 +303,54 @@ PROMPT;
     }
 
     /** @param array<string, mixed> $payload */
-    private function send(array $payload): Response
-    {
+    private function send(
+        array $payload,
+        ?HarnessRun $harnessRun,
+        string $title,
+    ): Response {
         $endpoint = config('services.ai.provider') === 'openai'
             ? 'responses'
             : 'chat/completions';
 
-        return $this->requestFactory->make()
-            ->post($endpoint, $payload)
-            ->throw();
+        if ($harnessRun === null) {
+            return $this->requestFactory->make()
+                ->post($endpoint, $payload)
+                ->throw();
+        }
+
+        $baseUrl = rtrim((string) config('services.ai.providers.'.config('services.ai.provider').'.base_url'), '/');
+        $entry = $this->harnessRecorder->startExternal(
+            run: $harnessRun,
+            kind: HarnessEntryKind::Llm,
+            title: $title,
+            method: 'POST',
+            endpoint: $baseUrl.'/'.$endpoint,
+            requestPayload: $payload,
+        );
+        $startedAt = hrtime(true);
+
+        try {
+            $response = $this->requestFactory->make()
+                ->post($endpoint, $payload)
+                ->throw();
+            $responsePayload = $response->json();
+            $this->harnessRecorder->completeExternal(
+                entry: $entry,
+                responsePayload: is_array($responsePayload) ? $responsePayload : ['body' => $response->body()],
+                statusCode: $response->status(),
+                durationMs: (int) round((hrtime(true) - $startedAt) / 1_000_000),
+            );
+
+            return $response;
+        } catch (Throwable $throwable) {
+            $this->harnessRecorder->failExternal(
+                $entry,
+                $throwable,
+                (int) round((hrtime(true) - $startedAt) / 1_000_000),
+            );
+
+            throw $throwable;
+        }
     }
 
     /** @return array<string, mixed> */
@@ -403,8 +490,9 @@ PROMPT;
                     'items' => [
                         'type' => 'object',
                         'additionalProperties' => false,
-                        'required' => ['question', 'impact', 'blocking', 'options', 'source_ids'],
+                        'required' => ['question_key', 'question', 'impact', 'blocking', 'options', 'source_ids'],
                         'properties' => [
+                            'question_key' => ['type' => 'string'],
                             'question' => ['type' => 'string'],
                             'impact' => ['type' => 'string'],
                             'blocking' => ['type' => 'boolean'],

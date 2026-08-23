@@ -212,9 +212,12 @@ class EventManagementTest extends TestCase
             ->get(route('events.show', ['event' => $event, 'tab' => 'silpo']))
             ->assertOk()
             ->assertSee('Кошик Сільпо')
-            ->assertSee('Тут зʼявиться справжній кошик Сільпо. Поки що Гусь лише готується.')
+            ->assertSee('Справжній кошик')
+            ->assertSee('Гусь ще не ходив між прилавками для цієї події.')
+            ->assertSee('Відправити Гуся в Сільпо')
+            ->assertSee('data-silpo-dialog', escape: false)
             ->assertDontSee('Вода питна')
-            ->assertDontSee('Відправити Гуся в Сільпо');
+            ->assertDontSee('фоновий job');
 
         $this->actingAs($user)
             ->get(route('events.index'))

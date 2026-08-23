@@ -77,6 +77,27 @@ class EventAnswerTest extends TestCase
         Queue::assertNothingPushed();
     }
 
+    public function test_answered_question_disappears_immediately_and_badge_counts_only_open_questions(): void
+    {
+        $owner = User::factory()->create();
+        $event = $this->eventWithQuestions($owner);
+
+        $this->actingAs($owner)->post(route('events.answers.store', $event), [
+            'state_version' => 1,
+            'answers' => [[
+                'question_key' => 'q_people',
+                'answer' => 'Нас буде 8',
+            ]],
+        ]);
+
+        $this->actingAs($owner)
+            ->get(route('events.show', ['event' => $event, 'tab' => 'questions']))
+            ->assertOk()
+            ->assertDontSee('Скільки людей буде?')
+            ->assertSee('Чи потрібен алкоголь?')
+            ->assertSee('Невирішених питань: 1');
+    }
+
     public function test_old_unknown_and_foreign_questions_are_rejected(): void
     {
         $owner = User::factory()->create();

@@ -14,8 +14,11 @@ final readonly class EventContextData
     /**
      * @param  array<string, mixed>  $payload
      */
-    public static function from(array $payload): self
-    {
+    public static function from(
+        array $payload,
+        array $knownQuestionKeys = [],
+        array $answeredQuestionKeys = [],
+    ): self {
         $validated = Validator::make($payload, [
             'summary' => ['required', 'string', 'max:10000'],
             'participants' => ['present', 'array'],
@@ -46,6 +49,7 @@ final readonly class EventContextData
             'warnings.*.source_ids' => ['present', 'array'],
             'warnings.*.source_ids.*' => ['integer'],
             'unresolved_questions' => ['present', 'array'],
+            'unresolved_questions.*.question_key' => ['required', 'string', 'max:80'],
             'unresolved_questions.*.question' => ['required', 'string', 'max:2000'],
             'unresolved_questions.*.impact' => ['required', 'string', 'max:1000'],
             'unresolved_questions.*.blocking' => ['required', 'boolean'],
@@ -70,13 +74,25 @@ final readonly class EventContextData
                         ]);
                     }
 
-                    $item['key'] = 'q_'.substr(hash('sha256', Str::lower(Str::squish($item['question']))), 0, 32);
+                    $questionKey = $item['question_key'];
+
+                    if ($questionKey === '__new__') {
+                        $questionKey = 'q_'.Str::lower((string) Str::ulid());
+                    } elseif (! in_array($questionKey, $knownQuestionKeys, true)) {
+                        throw ValidationException::withMessages([
+                            'unresolved_questions' => 'Гусь повернув невідомий ключ питання.',
+                        ]);
+                    }
+
+                    $item['key'] = $questionKey;
+                    unset($item['question_key']);
                 }
             }
             unset($item);
         }
 
         $validated['unresolved_questions'] = collect($validated['unresolved_questions'])
+            ->reject(fn (array $question): bool => in_array($question['key'], $answeredQuestionKeys, true))
             ->unique('key')
             ->values()
             ->all();

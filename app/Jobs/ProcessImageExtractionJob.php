@@ -4,10 +4,15 @@ namespace App\Jobs;
 
 use App\EventSourceInclusion;
 use App\EventSourceStatus;
+use App\HarnessEntryKind;
+use App\HarnessRunStatus;
+use App\HarnessRunType;
 use App\ImageClassification;
 use App\ImageExtractionStatus;
+use App\Models\HarnessRun;
 use App\Models\ImageExtraction;
 use App\Services\ContextAnalysisService;
+use App\Services\HarnessRecorder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -39,7 +44,7 @@ class ProcessImageExtractionJob implements ShouldBeUnique, ShouldQueue
         return (string) $this->imageExtractionId;
     }
 
-    public function handle(ContextAnalysisService $analysis): void
+    public function handle(ContextAnalysisService $analysis, HarnessRecorder $harnessRecorder): void
     {
         $extraction = DB::transaction(function (): ?ImageExtraction {
             $lockedExtraction = ImageExtraction::query()->lockForUpdate()->find($this->imageExtractionId);
@@ -70,9 +75,29 @@ class ProcessImageExtractionJob implements ShouldBeUnique, ShouldQueue
             throw new RuntimeException('Original image is missing from private storage.');
         }
 
+        $source->load('event');
+        $harnessRun = $harnessRecorder->start(
+            event: $source->event,
+            type: HarnessRunType::ImageExtraction,
+            correlationId: 'image-'.$this->imageExtractionId,
+            metadata: [
+                'image_extraction_id' => $this->imageExtractionId,
+                'source_id' => $source->id,
+                'mime_type' => $source->mime_type,
+                'bytes' => Storage::disk('local')->size($source->file_path),
+                'sha256' => $source->content_hash,
+            ],
+        );
+        $harnessRecorder->append(
+            run: $harnessRun,
+            kind: HarnessEntryKind::Action,
+            title: 'Зображення передано на розбір',
+        );
+
         $result = $analysis->extractImage(
             Storage::disk('local')->get($source->file_path),
             $source->mime_type ?? 'image/jpeg',
+            $harnessRun,
         );
 
         $activeTasks = DB::transaction(function () use ($result): array {
@@ -123,10 +148,33 @@ class ProcessImageExtractionJob implements ShouldBeUnique, ShouldQueue
         });
 
         $this->dispatchActiveTasks($activeTasks);
+        $harnessRecorder->append(
+            run: $harnessRun,
+            kind: HarnessEntryKind::Action,
+            title: 'Розбір зображення збережено',
+            message: 'Класифікація: '.$result->classification->value,
+        );
+        $harnessRecorder->finish($harnessRun);
     }
 
     public function failed(?Throwable $exception): void
     {
+        $eventIds = ImageExtraction::query()
+            ->find($this->imageExtractionId)
+            ?->sources()
+            ->pluck('event_id')
+            ->all() ?? [];
+
+        HarnessRun::query()
+            ->whereIn('event_id', $eventIds)
+            ->where('type', HarnessRunType::ImageExtraction)
+            ->where('correlation_id', 'image-'.$this->imageExtractionId)
+            ->update([
+                'status' => HarnessRunStatus::Failed,
+                'error' => mb_substr($exception?->getMessage() ?? 'Image extraction failed.', 0, 2000),
+                'finished_at' => now(),
+            ]);
+
         $activeTasks = DB::transaction(function () use ($exception): array {
             $extraction = ImageExtraction::query()->lockForUpdate()->find($this->imageExtractionId);
 

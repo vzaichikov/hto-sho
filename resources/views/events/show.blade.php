@@ -4,14 +4,6 @@
     $restrictions = $state['restrictions'] ?? [];
     $agreements = $state['agreements'] ?? [];
     $warnings = $state['warnings'] ?? [];
-    $rawQuestions = $state['unresolved_questions'] ?? [];
-    $questions = collect($rawQuestions)
-        ->filter(fn ($question) => is_array($question)
-            && isset($question['key'], $question['impact'], $question['options'])
-            && is_array($question['options']))
-        ->values()
-        ->all();
-    $needsQuestionRefresh = count($questions) !== count($rawQuestions);
     $plan = $event->shopping_plan ?? [];
     $planItems = collect($plan['items'] ?? []);
     $planIsCurrent = $event->isPlanCurrent();
@@ -40,6 +32,7 @@
     ];
     $sourceById = $event->sources->keyBy('id');
     $correctionPanelOpen = $errors->has('correction') || $errors->has('plan_state_version');
+    $latestCartRun = $event->latestCartRun;
 @endphp
 
 <x-layouts.app :title="$event->title">
@@ -65,7 +58,10 @@
                 <p class="mt-2 text-sm text-muted">Матеріалів: {{ $event->sources->count() }}</p>
             </div>
 
-            <details class="relative shrink-0">
+            <div class="flex shrink-0 items-start gap-2">
+                <a class="rounded-full border-2 border-ink bg-paper px-4 py-2 text-sm font-extrabold shadow-[2px_2px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-yellow/30 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="{{ route('events.journal.index', $event) }}">Журнал</a>
+
+            <details class="relative">
                 <summary class="cursor-pointer list-none rounded-full border-2 border-ink bg-paper px-4 py-2 text-sm font-extrabold shadow-[2px_2px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-yellow/30 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green">Налаштування</summary>
                 <div class="absolute right-0 z-30 mt-3 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border-2 border-ink bg-paper p-4 shadow-[5px_6px_0_#20201D]">
                     <form method="POST" action="{{ route('events.update', $event) }}">
@@ -95,6 +91,7 @@
                     </form>
                 </div>
             </details>
+            </div>
         </header>
 
         <nav class="mt-7 grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Кроки підготовки події">
@@ -106,6 +103,9 @@
                 >
                     <span class="grid size-7 shrink-0 place-items-center rounded-full {{ $activeTab === $tab ? 'bg-ink text-paper' : 'bg-canvas text-green-dark group-hover:bg-green-soft' }}">{{ $loop->iteration }}</span>
                     <span class="truncate">{{ $label }}</span>
+                    @if ($tab === 'questions' && count($questions) > 0)
+                        <span class="ml-auto grid min-w-6 shrink-0 place-items-center rounded-full bg-orange px-1.5 py-0.5 text-xs font-black text-white" aria-label="Невирішених питань: {{ count($questions) }}">{{ count($questions) }}</span>
+                    @endif
                 </a>
             @endforeach
         </nav>
@@ -461,7 +461,7 @@
                             type="button"
                             data-silpo-dialog-open
                             @disabled(! $planIsCurrent || $hasBlockingQuestion)
-                        >Відправити Гуся в Сільпо</button>
+                        >Відправити Гуся в Сільпо?</button>
                     </div>
 
                     <div class="mt-4 rounded-[22px] border-2 border-ink/15 bg-canvas p-4 sm:p-5 {{ $correctionPanelOpen ? '' : 'hidden' }}" id="plan-correction-panel" data-plan-correction-panel>
@@ -548,25 +548,158 @@
                     @endif
                 @endif
             </section>
-            @if ($plan !== [])
-                <dialog class="m-auto w-[min(32rem,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-[28px] border-2 border-ink bg-paper p-0 text-ink shadow-[8px_9px_0_#20201D] backdrop:bg-ink/55" data-silpo-dialog aria-labelledby="silpo-dialog-title">
-                    <div class="p-5 sm:p-7">
-                        <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Перед стартом</p>
-                        <h3 class="mt-1 font-display text-3xl leading-tight" id="silpo-dialog-title">Відправити Гуся в Сільпо?</h3>
-                        <p class="mt-4 text-base leading-7 text-muted">Гусь піде збирати кошик. Це займе деякий час.</p>
-                        <form class="mt-6 grid gap-3 sm:grid-cols-2" method="dialog">
-                            <button class="rounded-2xl border-2 border-ink bg-paper px-5 py-3.5 font-extrabold transition hover:bg-yellow/30 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" value="cancel">Не зараз</button>
-                            <button class="rounded-2xl bg-green px-5 py-3.5 font-extrabold text-white shadow-[3px_3px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" value="confirm" data-silpo-dialog-confirm>Нехай іде</button>
-                        </form>
-                    </div>
-                </dialog>
-            @endif
         @elseif ($activeTab === 'silpo')
             <section class="mt-7 rounded-[30px] border-2 border-ink bg-paper p-5 shadow-[6px_7px_0_#F7C84B] sm:p-7">
-                <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Поки тихо</p>
+                <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Справжній кошик</p>
                 <h2 class="mt-1 font-display text-4xl">Кошик Сільпо</h2>
-                <p class="mt-4 text-base leading-7 text-muted">Тут зʼявиться справжній кошик Сільпо. Поки що Гусь лише готується.</p>
+                @if ($latestCartRun)
+                    <div class="mt-5 rounded-[22px] border-2 border-ink/15 bg-canvas p-5">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <p class="font-display text-2xl">{{ $latestCartRun->status->label() }}</p>
+                                <p class="mt-1 text-sm text-muted">{{ $latestCartRun->mode->label() }} · {{ $latestCartRun->staged_items ? count($latestCartRun->staged_items) : 0 }} позицій від Гуся</p>
+                            </div>
+                            @if ($latestCartRun->actual_total !== null)
+                                <p class="rounded-full bg-yellow px-4 py-2 font-extrabold">{{ number_format((float) $latestCartRun->actual_total, 2, ',', ' ') }} ₴</p>
+                            @endif
+                        </div>
+                    </div>
+                @else
+                    <p class="mt-4 text-base leading-7 text-muted">Гусь ще не ходив між прилавками для цієї події.</p>
+                @endif
+
+                @if ($plan !== [])
+                    <button
+                        class="mt-5 w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition enabled:hover:-translate-y-0.5 enabled:hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green sm:w-auto"
+                        type="button"
+                        data-silpo-dialog-open
+                        @disabled(! $planIsCurrent || $hasBlockingQuestion)
+                    >{{ $latestCartRun?->isActive() ? 'Повернутися до Гуся' : 'Відправити Гуся в Сільпо' }}</button>
+                @endif
             </section>
+        @endif
+
+        @if ($plan !== [])
+            <dialog
+                class="m-auto h-[min(58rem,calc(100dvh-1rem))] w-[min(72rem,calc(100vw-1rem))] overflow-hidden rounded-[30px] border-2 border-ink bg-paper p-0 text-ink shadow-[9px_10px_0_#20201D] backdrop:bg-ink/60"
+                data-silpo-dialog
+                data-preflight-url="{{ route('events.silpo.cart-preflight', $event) }}"
+                data-start-url="{{ route('events.cart-runs.store', $event) }}"
+                @if ($latestCartRun) data-run-url="{{ route('events.cart-runs.show', [$event, $latestCartRun]) }}" @endif
+                aria-labelledby="silpo-dialog-title"
+            >
+                <div class="flex h-full min-h-0 flex-col">
+                    <header class="flex items-start justify-between gap-4 border-b-2 border-ink/10 bg-yellow/35 px-5 py-4 sm:px-7">
+                        <div>
+                            <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Гусь у Сільпо</p>
+                            <h3 class="mt-1 font-display text-3xl leading-none sm:text-4xl" id="silpo-dialog-title">Збираємо справжній кошик</h3>
+                        </div>
+                        <form method="dialog">
+                            <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-rotate-6 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-silpo-dialog-close aria-label="Закрити">×</button>
+                        </form>
+                    </header>
+
+                    <div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6" data-silpo-dialog-body>
+                        <section class="grid min-h-72 place-items-center text-center" data-silpo-loading>
+                            <div>
+                                <img class="goose-working mx-auto size-28 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо перевіряє кошик">
+                                <p class="mt-3 font-display text-2xl">Гусь перевіряє маршрут і кошик…</p>
+                            </div>
+                        </section>
+
+                        <section class="hidden min-h-72 place-items-center" data-silpo-guard>
+                            <div class="max-w-2xl rounded-[26px] border-2 border-orange/40 bg-orange/8 p-6 text-center sm:p-8">
+                                <img class="mx-auto size-24 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="">
+                                <h4 class="mt-3 font-display text-3xl">Без маршруту — ніяк</h4>
+                                <p class="mt-3 text-base leading-7 text-muted" data-silpo-guard-message></p>
+                                <div class="mt-5 flex flex-col justify-center gap-3 sm:flex-row">
+                                    <a class="hidden rounded-2xl bg-green px-5 py-3.5 font-extrabold text-white shadow-[3px_3px_0_#20201D]" href="#" target="_blank" rel="noopener" data-silpo-guard-action></a>
+                                    <button class="rounded-2xl border-2 border-ink bg-paper px-5 py-3.5 font-extrabold transition hover:bg-yellow/35" type="button" data-silpo-recheck>Я вже зробив — перевірити</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="hidden" data-silpo-ready>
+                            <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.75fr)]">
+                                <div>
+                                    <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark">Маршрут є</p>
+                                    <h4 class="mt-1 font-display text-3xl">Кошик готовий прийняти Гуся</h4>
+                                    <div class="mt-4 grid gap-3 rounded-[22px] bg-canvas p-4 sm:grid-cols-2">
+                                        <div><p class="text-xs font-bold text-muted">Отримання</p><p class="mt-1 font-extrabold" data-silpo-delivery></p></div>
+                                        <div><p class="text-xs font-bold text-muted">Час</p><p class="mt-1 font-extrabold" data-silpo-timeslot></p></div>
+                                        <div><p class="text-xs font-bold text-muted">У кошику зараз</p><p class="mt-1 font-extrabold" data-silpo-existing-count></p></div>
+                                        <div><p class="text-xs font-bold text-muted">Поточна сума</p><p class="mt-1 font-extrabold" data-silpo-existing-total></p></div>
+                                    </div>
+                                    <p class="mt-4 text-sm font-bold">Гусь піде збирати кошик. Це займе деякий час.</p>
+                                    <p class="mt-2 text-sm leading-6 text-muted">Гусь збере товари окремо, а тоді одним махом оновить кількості. Замовлення, оплату й чужі товари не чіпає.</p>
+                                </div>
+
+                                <fieldset class="rounded-[22px] border-2 border-ink/15 bg-paper p-4">
+                                    <legend class="px-2 font-display text-2xl">Як ідемо?</legend>
+                                    <label class="mt-2 block cursor-pointer rounded-2xl border-2 border-green bg-green-soft/25 p-4 has-checked:bg-green-soft/55">
+                                        <span class="flex items-center gap-3 font-extrabold"><input class="size-4 accent-green" type="radio" name="silpo-mode" value="assisted" checked> З підстраховкою</span>
+                                        <span class="mt-1 block pl-7 text-sm leading-5 text-muted">Спитає лише якщо немає жодної адекватної альтернативи.</span>
+                                    </label>
+                                    <label class="mt-3 block cursor-pointer rounded-2xl border-2 border-ink/15 p-4 has-checked:border-green has-checked:bg-green-soft/25">
+                                        <span class="flex items-center gap-3 font-extrabold"><input class="size-4 accent-green" type="radio" name="silpo-mode" value="auto"> Повний автопілот</span>
+                                        <span class="mt-1 block pl-7 text-sm leading-5 text-muted">Не питає, пропускає безвихідні позиції та чесно позначає неповний кошик.</span>
+                                    </label>
+                                    <button class="mt-4 w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:opacity-50" type="button" data-silpo-start>Нехай іде</button>
+                                </fieldset>
+                            </div>
+                        </section>
+
+                        <section class="hidden" data-silpo-run>
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark" data-silpo-mode-label></p>
+                                    <h4 class="mt-1 font-display text-3xl" data-silpo-status-label>Гусь збирає кошик</h4>
+                                </div>
+                                <p class="rounded-full bg-yellow px-4 py-2 text-sm font-extrabold" data-silpo-progress-label>0%</p>
+                            </div>
+                            <div class="mt-3 h-3 overflow-hidden rounded-full bg-ink/10"><div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: 0%" data-silpo-progress></div></div>
+
+                            <div class="mt-5 grid min-h-0 gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(22rem,1.05fr)]">
+                                <section class="rounded-[22px] bg-ink p-4 text-paper sm:p-5">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <h5 class="font-display text-2xl text-yellow">Що там відбувається</h5>
+                                        <span class="size-2.5 animate-pulse rounded-full bg-green-soft" aria-hidden="true" data-silpo-live-dot></span>
+                                    </div>
+                                    <ol class="mt-4 max-h-[28rem] space-y-3 overflow-y-auto pr-2 text-sm leading-6" data-silpo-steps aria-live="polite"></ol>
+                                </section>
+
+                                <section class="rounded-[22px] border-2 border-ink/15 bg-canvas p-4 sm:p-5">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <h5 class="font-display text-2xl">Тимчасовий кошик</h5>
+                                        <p class="text-sm font-extrabold text-green-dark" data-silpo-staged-total>0,00 ₴</p>
+                                    </div>
+                                    <div class="mt-4 grid max-h-[23rem] gap-3 overflow-y-auto pr-1" data-silpo-staged-items>
+                                        <p class="rounded-2xl border border-dashed border-ink/20 bg-paper p-4 text-sm text-muted" data-silpo-staged-empty>Поки порожньо. Гусь лише зайшов.</p>
+                                    </div>
+                                    <details class="mt-4 rounded-2xl bg-paper p-4">
+                                        <summary class="cursor-pointer text-sm font-extrabold">Що вже було у вашому кошику <span data-silpo-existing-badge></span></summary>
+                                        <div class="mt-3 grid gap-2" data-silpo-existing-items></div>
+                                    </details>
+                                </section>
+                            </div>
+
+                            <div class="mt-5 hidden rounded-[22px] border-2 border-orange/35 bg-orange/8 p-4" data-silpo-blocker>
+                                <p class="font-display text-2xl">Гусю справді потрібна підказка</p>
+                                <p class="mt-2 text-sm leading-6 text-muted" data-silpo-blocker-message></p>
+                                <div class="mt-3 flex flex-col gap-3 sm:flex-row">
+                                    <input class="min-w-0 flex-1 rounded-2xl border border-ink/20 bg-paper px-4 py-3 outline-none focus:border-green focus:ring-3 focus:ring-green/15" type="text" maxlength="1000" placeholder="Напишіть коротко, що робити" data-silpo-answer>
+                                    <button class="rounded-2xl bg-orange px-5 py-3 font-extrabold text-white" type="button" data-silpo-continue>Підказати Гусю</button>
+                                </div>
+                            </div>
+
+                            <div class="mt-5 hidden rounded-[22px] border border-orange/30 bg-yellow/30 p-4" data-silpo-warnings>
+                                <p class="font-extrabold">Що треба перевірити</p>
+                                <ul class="mt-2 space-y-2 text-sm leading-6" data-silpo-warning-list></ul>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </dialog>
         @endif
     </div>
 

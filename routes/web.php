@@ -1,8 +1,11 @@
 <?php
 
+use App\Http\Controllers\ContinueEventCartRunController;
 use App\Http\Controllers\EventAnalysisController;
 use App\Http\Controllers\EventAnswerController;
+use App\Http\Controllers\EventCartRunController;
 use App\Http\Controllers\EventController;
+use App\Http\Controllers\EventJournalController;
 use App\Http\Controllers\EventPlanCorrectionController;
 use App\Http\Controllers\EventSourceController;
 use App\Http\Controllers\EventSourceInclusionController;
@@ -10,6 +13,7 @@ use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\LandingController;
 use App\Http\Controllers\LogoutController;
 use App\Http\Controllers\RetryEventSourceController;
+use App\Http\Controllers\SilpoCartPreflightController;
 use App\Http\Controllers\SilpoOAuthController;
 use Illuminate\Support\Facades\Route;
 
@@ -50,8 +54,23 @@ Route::middleware('auth')->group(function (): void {
         ->name('events.analysis.store');
     Route::post('/events/{event}/answers', EventAnswerController::class)
         ->name('events.answers.store');
+    Route::get('/events/{event}/journal', EventJournalController::class)
+        ->name('events.journal.index');
     Route::post('/events/{event}/plan-corrections', EventPlanCorrectionController::class)
         ->name('events.plan-corrections.store');
     Route::get('/events/{event}/status', EventStatusController::class)
         ->name('events.status');
+    Route::get('/events/{event}/silpo/cart-preflight', SilpoCartPreflightController::class)
+        ->middleware('throttle:cart-runs')
+        ->name('events.silpo.cart-preflight');
+    Route::post('/events/{event}/cart-runs', [EventCartRunController::class, 'store'])
+        ->middleware('throttle:cart-runs')
+        ->name('events.cart-runs.store');
+    Route::scopeBindings()->group(function (): void {
+        Route::get('/events/{event}/cart-runs/{cartRun}', [EventCartRunController::class, 'show'])
+            ->name('events.cart-runs.show');
+        Route::post('/events/{event}/cart-runs/{cartRun}/continue', ContinueEventCartRunController::class)
+            ->middleware('throttle:cart-runs')
+            ->name('events.cart-runs.continue');
+    });
 });

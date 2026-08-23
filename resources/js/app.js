@@ -304,10 +304,304 @@ if (correctionToggle && correctionPanel) {
 }
 
 const silpoDialog = document.querySelector('[data-silpo-dialog]');
-const silpoDialogButton = document.querySelector('[data-silpo-dialog-open]');
 
-if (silpoDialog instanceof HTMLDialogElement && silpoDialogButton) {
-    silpoDialogButton.addEventListener('click', () => silpoDialog.showModal());
+if (silpoDialog instanceof HTMLDialogElement) {
+    const loadingPanel = silpoDialog.querySelector('[data-silpo-loading]');
+    const guardPanel = silpoDialog.querySelector('[data-silpo-guard]');
+    const readyPanel = silpoDialog.querySelector('[data-silpo-ready]');
+    const runPanel = silpoDialog.querySelector('[data-silpo-run]');
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ?? '';
+    let runUrl = null;
+    let lastSequence = 0;
+    let pollTimer = null;
+    let pollPending = false;
+
+    const money = (value) => value === null || value === undefined
+        ? '—'
+        : `${new Intl.NumberFormat('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value))} ₴`;
+
+    const quantity = (value) => new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 3 }).format(Number(value ?? 0));
+
+    const showPanel = (target) => {
+        [loadingPanel, guardPanel, readyPanel, runPanel].forEach((panel) => {
+            panel?.classList.toggle('hidden', panel !== target);
+            panel?.classList.toggle('grid', panel === target && [loadingPanel, guardPanel].includes(panel));
+        });
+    };
+
+    const fetchJson = async (url, options = {}) => {
+        const response = await fetch(url, {
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                ...(options.method && options.method !== 'GET' ? {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                } : {}),
+                ...(options.headers ?? {}),
+            },
+            ...options,
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (! response.ok) {
+            const error = new Error(payload.message || 'Гусь загубив звʼязок із Сільпо. Спробуйте ще раз.');
+            error.payload = payload;
+            error.status = response.status;
+            throw error;
+        }
+
+        return payload;
+    };
+
+    const showGuard = (payload) => {
+        showPanel(guardPanel);
+        guardPanel.querySelector('[data-silpo-guard-message]').textContent = payload.message;
+        const action = guardPanel.querySelector('[data-silpo-guard-action]');
+
+        if (payload.action_url) {
+            action.href = payload.action_url;
+            action.textContent = payload.action_label || 'Відкрити Сільпо';
+            action.classList.remove('hidden');
+        } else {
+            action.classList.add('hidden');
+            action.removeAttribute('href');
+        }
+    };
+
+    const renderReadyCart = (cart) => {
+        readyPanel.querySelector('[data-silpo-delivery]').textContent = cart.delivery_label || 'Обраний спосіб';
+        readyPanel.querySelector('[data-silpo-timeslot]').textContent = cart.timeslot || 'Час обрано';
+        readyPanel.querySelector('[data-silpo-existing-count]').textContent = `${cart.items_count ?? 0} позицій`;
+        readyPanel.querySelector('[data-silpo-existing-total]').textContent = money(cart.total);
+        showPanel(readyPanel);
+    };
+
+    const productCard = (product, compact = false) => {
+        const card = document.createElement('article');
+        card.className = compact
+            ? 'flex items-center justify-between gap-3 rounded-xl bg-canvas px-3 py-2 text-sm'
+            : 'grid grid-cols-[3.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-ink/10 bg-paper p-3';
+
+        if (! compact) {
+            const visual = document.createElement('div');
+            visual.className = 'grid size-14 place-items-center overflow-hidden rounded-xl bg-white text-xl';
+            const imageUrl = typeof product.image === 'string' ? product.image : '';
+
+            if (/^https:\/\//i.test(imageUrl)) {
+                const image = document.createElement('img');
+                image.className = 'size-full object-contain';
+                image.src = imageUrl;
+                image.alt = '';
+                image.loading = 'lazy';
+                visual.append(image);
+            } else {
+                visual.textContent = '🧺';
+            }
+
+            card.append(visual);
+        }
+
+        const copy = document.createElement('div');
+        copy.className = 'min-w-0';
+        const name = document.createElement('p');
+        name.className = compact ? 'truncate font-bold' : 'line-clamp-2 text-sm font-extrabold';
+        name.textContent = product.name || 'Товар Сільпо';
+        const meta = document.createElement('p');
+        meta.className = 'mt-0.5 text-xs text-muted';
+        meta.textContent = `${quantity(product.quantity)} × ${money(product.price)}`;
+        copy.append(name, meta);
+
+        const total = document.createElement('p');
+        total.className = 'shrink-0 text-sm font-extrabold';
+        total.textContent = money(product.estimated_total ?? product.total ?? (Number(product.quantity ?? 0) * Number(product.price ?? 0)));
+        card.append(copy, total);
+
+        return card;
+    };
+
+    const renderProducts = (selector, products, compact = false) => {
+        const container = runPanel.querySelector(selector);
+        container.replaceChildren();
+
+        if (products.length === 0 && ! compact) {
+            const empty = document.createElement('p');
+            empty.className = 'rounded-2xl border border-dashed border-ink/20 bg-paper p-4 text-sm text-muted';
+            empty.textContent = 'Поки порожньо. Гусь лише зайшов.';
+            container.append(empty);
+
+            return;
+        }
+
+        products.forEach((product) => container.append(productCard(product, compact)));
+    };
+
+    const renderRun = (payload) => {
+        showPanel(runPanel);
+        runPanel.querySelector('[data-silpo-status-label]').textContent = payload.status_label;
+        runPanel.querySelector('[data-silpo-mode-label]').textContent = payload.mode_label;
+        runPanel.querySelector('[data-silpo-progress]').style.width = `${payload.progress}%`;
+        runPanel.querySelector('[data-silpo-progress-label]').textContent = `${payload.progress}%`;
+        runPanel.querySelector('[data-silpo-live-dot]').classList.toggle('hidden', payload.terminal);
+
+        const steps = runPanel.querySelector('[data-silpo-steps]');
+        payload.steps.forEach((step) => {
+            const row = document.createElement('li');
+            row.className = 'border-l-2 border-yellow/55 pl-3 text-paper/90';
+            row.dataset.sequence = step.sequence;
+            row.textContent = step.message;
+            steps.append(row);
+        });
+
+        if (payload.steps.length > 0) {
+            steps.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+
+        lastSequence = Math.max(lastSequence, Number(payload.last_sequence ?? 0));
+        renderProducts('[data-silpo-staged-items]', payload.staged_items);
+        renderProducts('[data-silpo-existing-items]', payload.existing_items, true);
+        runPanel.querySelector('[data-silpo-existing-badge]').textContent = `(${payload.existing_items.length})`;
+        runPanel.querySelector('[data-silpo-staged-total]').textContent = money(payload.estimated_total ?? 0);
+
+        const blocker = runPanel.querySelector('[data-silpo-blocker]');
+        blocker.classList.toggle('hidden', payload.status !== 'waiting_for_answer');
+        blocker.querySelector('[data-silpo-blocker-message]').textContent = payload.blocker || '';
+
+        const warnings = [...(payload.warnings ?? [])];
+
+        if (payload.error) {
+            warnings.push(payload.error);
+        }
+
+        const warningPanel = runPanel.querySelector('[data-silpo-warnings]');
+        const warningList = runPanel.querySelector('[data-silpo-warning-list]');
+        warningPanel.classList.toggle('hidden', warnings.length === 0);
+        warningList.replaceChildren();
+        warnings.forEach((warning) => {
+            const item = document.createElement('li');
+            item.textContent = `→ ${warning}`;
+            warningList.append(item);
+        });
+    };
+
+    const stopPolling = () => {
+        window.clearTimeout(pollTimer);
+        pollTimer = null;
+    };
+
+    const pollRun = async () => {
+        if (! runUrl || pollPending || ! silpoDialog.open) {
+            return;
+        }
+
+        if (document.hidden) {
+            pollTimer = window.setTimeout(pollRun, 1800);
+
+            return;
+        }
+
+        pollPending = true;
+
+        try {
+            const separator = runUrl.includes('?') ? '&' : '?';
+            const payload = await fetchJson(`${runUrl}${separator}after=${lastSequence}`);
+            renderRun(payload);
+
+            if (! payload.terminal && payload.status !== 'waiting_for_answer') {
+                pollTimer = window.setTimeout(pollRun, 1800);
+            }
+        } catch (error) {
+            showGuard({ message: error.message });
+        } finally {
+            pollPending = false;
+        }
+    };
+
+    const openRun = (url) => {
+        runUrl = url;
+        lastSequence = 0;
+        runPanel.querySelector('[data-silpo-steps]').replaceChildren();
+        stopPolling();
+        pollRun();
+    };
+
+    const preflight = async () => {
+        showPanel(loadingPanel);
+        stopPolling();
+
+        try {
+            const payload = await fetchJson(silpoDialog.dataset.preflightUrl);
+
+            if (payload.active_run_url) {
+                openRun(payload.active_run_url);
+
+                return;
+            }
+
+            renderReadyCart(payload.cart);
+        } catch (error) {
+            showGuard(error.payload ?? { message: error.message });
+        }
+    };
+
+    document.querySelectorAll('[data-silpo-dialog-open]').forEach((button) => {
+        button.addEventListener('click', () => {
+            silpoDialog.showModal();
+            preflight();
+        });
+    });
+
+    silpoDialog.querySelector('[data-silpo-start]').addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        const mode = silpoDialog.querySelector('input[name="silpo-mode"]:checked')?.value ?? 'assisted';
+        button.disabled = true;
+        button.textContent = 'Гусь натягує авоську…';
+
+        try {
+            const payload = await fetchJson(silpoDialog.dataset.startUrl, {
+                method: 'POST',
+                body: JSON.stringify({ mode }),
+            });
+            openRun(payload.run_url);
+        } catch (error) {
+            showGuard(error.payload ?? { message: error.message });
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Нехай іде';
+        }
+    });
+
+    silpoDialog.querySelector('[data-silpo-continue]').addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        const input = silpoDialog.querySelector('[data-silpo-answer]');
+        const answer = input.value.trim();
+
+        if (! answer || ! runUrl) {
+            input.focus();
+
+            return;
+        }
+
+        button.disabled = true;
+
+        try {
+            const current = await fetchJson(`${runUrl}?after=${lastSequence}`);
+            await fetchJson(current.continue_url, {
+                method: 'POST',
+                body: JSON.stringify({ answer }),
+            });
+            input.value = '';
+            openRun(runUrl);
+        } catch (error) {
+            showGuard(error.payload ?? { message: error.message });
+        } finally {
+            button.disabled = false;
+        }
+    });
+
+    silpoDialog.querySelector('[data-silpo-recheck]').addEventListener('click', preflight);
+    silpoDialog.querySelector('[data-silpo-dialog-close]').addEventListener('click', () => silpoDialog.close('cancel'));
+    silpoDialog.addEventListener('close', stopPolling);
     silpoDialog.addEventListener('click', (event) => {
         if (event.target === silpoDialog) {
             silpoDialog.close('cancel');

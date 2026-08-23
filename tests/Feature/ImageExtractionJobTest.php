@@ -14,6 +14,7 @@ use App\Models\EventSource;
 use App\Models\ImageExtraction;
 use App\Models\User;
 use App\Services\ContextAnalysisService;
+use App\Services\HarnessRecorder;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -59,7 +60,7 @@ class ImageExtractionJobTest extends TestCase
         ]);
 
         (new ProcessImageExtractionJob($extraction->id))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $extraction->refresh();
         $source->refresh();
@@ -95,7 +96,7 @@ class ImageExtractionJobTest extends TestCase
         ]);
 
         (new ProcessImageExtractionJob($extraction->id))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $this->assertSame(ImageClassification::Irrelevant, $extraction->refresh()->classification);
         $this->assertSame([], $extraction->message_timeline);

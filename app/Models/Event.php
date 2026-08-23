@@ -12,6 +12,9 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 #[Fillable([
     'user_id',
@@ -96,6 +99,74 @@ class Event extends Model
     public function contextVersions(): HasMany
     {
         return $this->hasMany(EventContextVersion::class);
+    }
+
+    public function cartRuns(): HasMany
+    {
+        return $this->hasMany(EventCartRun::class);
+    }
+
+    public function harnessRuns(): HasMany
+    {
+        return $this->hasMany(HarnessRun::class);
+    }
+
+    public function latestCartRun(): HasOne
+    {
+        return $this->hasOne(EventCartRun::class)->latestOfMany();
+    }
+
+    /** @return Collection<int, array<string, mixed>> */
+    public function unansweredQuestions(): Collection
+    {
+        $answerSources = ($this->relationLoaded('sources') ? $this->sources : $this->sources()->get())
+            ->where('origin', 'question_answer');
+        $answeredQuestionKeys = $answerSources
+            ->pluck('metadata.question_key')
+            ->filter(fn (mixed $key): bool => is_string($key))
+            ->unique();
+
+        return collect($this->state['unresolved_questions'] ?? [])
+            ->filter(fn (mixed $question): bool => is_array($question)
+                && is_string($question['key'] ?? null)
+                && isset($question['impact'], $question['options'])
+                && is_array($question['options']))
+            ->reject(fn (array $question): bool => $answeredQuestionKeys->containsStrict($question['key'])
+                || $this->questionMatchesRecordedAnswer($question, $answerSources))
+            ->values();
+    }
+
+    public function questionsNeedRefresh(): bool
+    {
+        $rawQuestions = collect($this->state['unresolved_questions'] ?? []);
+
+        return $rawQuestions->filter(fn (mixed $question): bool => is_array($question)
+            && is_string($question['key'] ?? null)
+            && isset($question['impact'], $question['options'])
+            && is_array($question['options']))->count() !== $rawQuestions->count();
+    }
+
+    /** @param Collection<int, EventSource> $answerSources */
+    private function questionMatchesRecordedAnswer(array $question, Collection $answerSources): bool
+    {
+        $sourceIds = collect($question['source_ids'] ?? [])->filter(fn (mixed $id): bool => is_int($id));
+        $optionLabels = collect($question['options'] ?? [])
+            ->pluck('label')
+            ->filter(fn (mixed $label): bool => is_string($label))
+            ->map(fn (string $label): string => Str::lower(Str::squish($label)));
+
+        if ($sourceIds->isEmpty() || $optionLabels->isEmpty()) {
+            return false;
+        }
+
+        return $answerSources
+            ->whereIn('id', $sourceIds)
+            ->contains(function (EventSource $source) use ($optionLabels): bool {
+                $answer = data_get($source->metadata, 'answer');
+
+                return is_string($answer)
+                    && $optionLabels->containsStrict(Str::lower(Str::squish($answer)));
+            });
     }
 
     public function isPlanCurrent(): bool

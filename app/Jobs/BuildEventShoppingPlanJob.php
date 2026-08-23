@@ -5,10 +5,15 @@ namespace App\Jobs;
 use App\EventSourceInclusion;
 use App\EventSourceStatus;
 use App\EventSourceType;
+use App\HarnessEntryKind;
+use App\HarnessRunStatus;
+use App\HarnessRunType;
 use App\Models\Event;
 use App\Models\EventSource;
+use App\Models\HarnessRun;
 use App\PlanGenerationStatus;
 use App\Services\ContextAnalysisService;
+use App\Services\HarnessRecorder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -42,7 +47,7 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
         return $this->eventId.':'.$this->stateVersion;
     }
 
-    public function handle(ContextAnalysisService $analysis): void
+    public function handle(ContextAnalysisService $analysis, HarnessRecorder $harnessRecorder): void
     {
         $event = Event::query()->find($this->eventId);
 
@@ -55,6 +60,18 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
             'plan_generation_error' => null,
         ]);
 
+        $harnessRun = $harnessRecorder->start(
+            event: $event,
+            type: HarnessRunType::ShoppingPlan,
+            correlationId: 'state-'.$this->stateVersion,
+            metadata: ['state_version' => $this->stateVersion],
+        );
+        $harnessRecorder->append(
+            run: $harnessRun,
+            kind: HarnessEntryKind::Action,
+            title: 'Гусь почав будувати список',
+        );
+
         $planCorrections = $this->planCorrections($event);
         $plan = $analysis->buildShoppingPlan([
             'title' => $event->title,
@@ -63,7 +80,7 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
             'people_count' => $event->people_count,
             'budget_amount' => $event->budget_amount,
             'currency' => $event->currency,
-        ], $event->state, $planCorrections)->plan;
+        ], $event->state, $planCorrections, $harnessRun)->plan;
 
         $this->guardPlanSafety($plan, $event->state, $event->alcohol_planned);
 
@@ -81,10 +98,28 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
                 'plan_generation_error' => null,
             ]);
         });
+
+        $harnessRecorder->append(
+            run: $harnessRun,
+            kind: HarnessEntryKind::Action,
+            title: 'Список збережено',
+            message: sprintf('Позицій: %d.', count($plan['items'] ?? [])),
+        );
+        $harnessRecorder->finish($harnessRun);
     }
 
     public function failed(?Throwable $exception): void
     {
+        HarnessRun::query()
+            ->where('event_id', $this->eventId)
+            ->where('type', HarnessRunType::ShoppingPlan)
+            ->where('correlation_id', 'state-'.$this->stateVersion)
+            ->update([
+                'status' => HarnessRunStatus::Failed,
+                'error' => mb_substr($exception?->getMessage() ?? 'Не вдалося скласти список.', 0, 2000),
+                'finished_at' => now(),
+            ]);
+
         Event::query()
             ->whereKey($this->eventId)
             ->where('state_version', $this->stateVersion)

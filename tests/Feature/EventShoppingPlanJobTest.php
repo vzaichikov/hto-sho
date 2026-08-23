@@ -9,6 +9,7 @@ use App\Models\EventSource;
 use App\Models\User;
 use App\PlanGenerationStatus;
 use App\Services\ContextAnalysisService;
+use App\Services\HarnessRecorder;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -39,7 +40,7 @@ class EventShoppingPlanJobTest extends TestCase
         ]);
 
         $job = new BuildEventShoppingPlanJob($event->id, 1);
-        $job->handle($this->app->make(ContextAnalysisService::class));
+        $job->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
 
@@ -80,7 +81,7 @@ class EventShoppingPlanJobTest extends TestCase
         });
 
         (new BuildEventShoppingPlanJob($event->id, 1))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame('Попередній правильний список.', $event->shopping_plan['summary']);
@@ -107,7 +108,7 @@ class EventShoppingPlanJobTest extends TestCase
         $this->expectExceptionMessage('assumes alcohol');
 
         (new BuildEventShoppingPlanJob($event->id, 1))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
     }
 
     public function test_creation_confirmation_allows_alcohol_without_a_redundant_confirmation_answer(): void
@@ -126,7 +127,7 @@ class EventShoppingPlanJobTest extends TestCase
         ]);
 
         (new BuildEventShoppingPlanJob($event->id, 1))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame(PlanGenerationStatus::Ready, $event->plan_generation_status);
@@ -161,7 +162,7 @@ class EventShoppingPlanJobTest extends TestCase
         ]);
 
         (new BuildEventShoppingPlanJob($event->id, 3))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         Http::assertSent(function (Request $request): bool {
             $prompt = $request['input'][0]['content'][0]['text'];

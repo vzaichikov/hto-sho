@@ -7,14 +7,20 @@ use App\EventSourceInclusion;
 use App\EventSourceStatus;
 use App\EventSourceType;
 use App\EventStatus;
+use App\HarnessEntryKind;
+use App\HarnessRunStatus;
+use App\HarnessRunType;
 use App\Models\Event;
 use App\Models\EventContextVersion;
 use App\Models\EventSource;
+use App\Models\HarnessRun;
 use App\PlanGenerationStatus;
 use App\Services\ContextAnalysisService;
+use App\Services\HarnessRecorder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
@@ -45,7 +51,7 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
         return $this->eventId.':'.$this->taskId;
     }
 
-    public function handle(ContextAnalysisService $analysis): void
+    public function handle(ContextAnalysisService $analysis, HarnessRecorder $harnessRecorder): void
     {
         $event = Event::query()->find($this->eventId);
 
@@ -114,6 +120,41 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             ->values()
             ->all();
 
+        $harnessRun = $harnessRecorder->start(
+            event: $event,
+            type: HarnessRunType::ContextSynthesis,
+            correlationId: $this->taskId,
+            metadata: [
+                'evidence_version' => $evidenceVersion,
+                'source_count' => $usableSources->count(),
+            ],
+        );
+        $harnessRecorder->append(
+            run: $harnessRun,
+            kind: HarnessEntryKind::Action,
+            title: 'Гусь зібрав джерела для нового контексту',
+            message: sprintf('Використано джерел: %d; пропущено через помилки: %d.', $usableSources->count(), count($omittedSourceIds)),
+        );
+
+        $usableSources
+            ->where('origin', 'question_answer')
+            ->each(function (EventSource $source) use ($harnessRecorder, $harnessRun): void {
+                if ($harnessRun->entries()
+                    ->where('kind', HarnessEntryKind::Answer)
+                    ->where('metadata->source_id', $source->id)
+                    ->exists()) {
+                    return;
+                }
+
+                $harnessRecorder->append(
+                    run: $harnessRun,
+                    kind: HarnessEntryKind::Answer,
+                    title: (string) data_get($source->metadata, 'question', 'Відповідь організатора'),
+                    message: (string) data_get($source->metadata, 'answer', $source->text),
+                    metadata: ['source_id' => $source->id, 'question_key' => data_get($source->metadata, 'question_key')],
+                );
+            });
+
         $context = $analysis->summarizeEvent([
             'title' => $event->title,
             'description' => $event->description,
@@ -121,7 +162,7 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             'people_count' => $event->people_count,
             'budget_amount' => $event->budget_amount,
             'currency' => $event->currency,
-        ], $evidence);
+        ], $evidence, $this->questionLedger($event, $usableSources), $harnessRun);
         $state = $this->normalizeOrganizerConfirmedAlcohol($context->state, $event->alcohol_planned);
         $validSourceIds = $usableSources->pluck('id')->all();
 
@@ -188,18 +229,52 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
         });
 
         if ($result['retry']) {
+            $harnessRecorder->append(
+                run: $harnessRun,
+                kind: HarnessEntryKind::Action,
+                title: 'Зʼявилися нові дані — запуск буде повторено',
+            );
             $this->release(5);
 
             return;
         }
 
         if (is_int($result['state_version'])) {
+            foreach ($state['unresolved_questions'] ?? [] as $question) {
+                $harnessRecorder->append(
+                    run: $harnessRun,
+                    kind: HarnessEntryKind::Question,
+                    title: (string) ($question['question'] ?? 'Питання до організатора'),
+                    message: (string) ($question['impact'] ?? ''),
+                    metadata: [
+                        'question_key' => $question['key'] ?? null,
+                        'blocking' => $question['blocking'] ?? false,
+                    ],
+                );
+            }
+            $harnessRecorder->append(
+                run: $harnessRun,
+                kind: HarnessEntryKind::Action,
+                title: 'Новий контекст збережено',
+                message: 'Версія стану: '.$result['state_version'],
+            );
+            $harnessRecorder->finish($harnessRun);
             BuildEventShoppingPlanJob::dispatch($event->id, $result['state_version'])->afterCommit();
         }
     }
 
     public function failed(?Throwable $exception): void
     {
+        HarnessRun::query()
+            ->where('event_id', $this->eventId)
+            ->where('type', HarnessRunType::ContextSynthesis)
+            ->where('correlation_id', $this->taskId)
+            ->update([
+                'status' => HarnessRunStatus::Failed,
+                'error' => mb_substr($exception?->getMessage() ?? 'Не вдалося скласти підсумок.', 0, 2000),
+                'finished_at' => now(),
+            ]);
+
         $this->markFailed(mb_substr(
             $exception?->getMessage() ?? 'Не вдалося скласти підсумок.',
             0,
@@ -213,6 +288,84 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             ->where('type', EventSourceType::Image)
             ->whereIn('status', [EventSourceStatus::Pending, EventSourceStatus::Processing])
             ->exists();
+    }
+
+    /**
+     * @return array{open: array<int, array{key: string, question: string}>, answered: array<int, array{key: string, question: string, answer: string, source_id: int}>}
+     */
+    private function questionLedger(Event $event, Collection $usableSources): array
+    {
+        $answerSources = $usableSources->where('origin', 'question_answer');
+        $answered = $answerSources
+            ->map(function (EventSource $source): ?array {
+                $key = data_get($source->metadata, 'question_key');
+                $question = data_get($source->metadata, 'question');
+                $answer = data_get($source->metadata, 'answer');
+
+                if (! is_string($key) || ! is_string($question) || ! is_string($answer)) {
+                    return null;
+                }
+
+                return [
+                    'key' => $key,
+                    'question' => $question,
+                    'answer' => $answer,
+                    'source_id' => $source->id,
+                ];
+            })
+            ->filter()
+            ->values();
+        $resolvedAliases = collect($event->state['unresolved_questions'] ?? [])
+            ->filter(fn (mixed $question): bool => is_array($question)
+                && is_string($question['key'] ?? null)
+                && is_string($question['question'] ?? null))
+            ->map(function (array $question) use ($answerSources): ?array {
+                $sourceIds = collect($question['source_ids'] ?? [])->filter(fn (mixed $id): bool => is_int($id));
+                $optionLabels = collect($question['options'] ?? [])
+                    ->pluck('label')
+                    ->filter(fn (mixed $label): bool => is_string($label))
+                    ->mapWithKeys(fn (string $label): array => [Str::lower(Str::squish($label)) => $label]);
+                $matchingSource = $answerSources
+                    ->whereIn('id', $sourceIds)
+                    ->first(function (EventSource $source) use ($optionLabels): bool {
+                        $answer = data_get($source->metadata, 'answer');
+
+                        return is_string($answer)
+                            && $optionLabels->has(Str::lower(Str::squish($answer)));
+                    });
+
+                if (! $matchingSource instanceof EventSource) {
+                    return null;
+                }
+
+                return [
+                    'key' => $question['key'],
+                    'question' => $question['question'],
+                    'answer' => (string) data_get($matchingSource->metadata, 'answer'),
+                    'source_id' => $matchingSource->id,
+                ];
+            })
+            ->filter();
+        $answered = $answered
+            ->merge($resolvedAliases)
+            ->unique('key')
+            ->values();
+        $answeredKeys = $answered->pluck('key');
+        $open = collect($event->state['unresolved_questions'] ?? [])
+            ->filter(fn (mixed $question): bool => is_array($question)
+                && is_string($question['key'] ?? null)
+                && is_string($question['question'] ?? null))
+            ->reject(fn (array $question): bool => $answeredKeys->containsStrict($question['key']))
+            ->map(fn (array $question): array => [
+                'key' => $question['key'],
+                'question' => $question['question'],
+            ])
+            ->values();
+
+        return [
+            'open' => $open->all(),
+            'answered' => $answered->all(),
+        ];
     }
 
     private function mustWaitForQuietWindow(Event $event): bool

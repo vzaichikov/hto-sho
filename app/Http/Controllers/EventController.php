@@ -5,15 +5,18 @@ namespace App\Http\Controllers;
 use App\Actions\CreateEventAction;
 use App\Actions\DeleteEventAction;
 use App\Actions\UpdateEventAction;
+use App\HarnessRunType;
 use App\Http\Requests\StoreEventRequest;
 use App\Http\Requests\UpdateEventRequest;
 use App\Models\Event;
 use App\Services\ContextAnalysisService;
+use App\Services\HarnessRecorder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use Throwable;
@@ -90,11 +93,14 @@ class EventController extends Controller
             'contextVersions' => fn ($query) => $query
                 ->where('state_version', '<', $event->state_version)
                 ->latest('state_version'),
+            'latestCartRun',
         ]);
 
         return view('events.show', [
             'event' => $event,
             'activeTab' => $activeTab,
+            'questions' => $event->unansweredQuestions()->all(),
+            'needsQuestionRefresh' => $event->questionsNeedRefresh(),
         ]);
     }
 
@@ -102,15 +108,24 @@ class EventController extends Controller
         UpdateEventRequest $request,
         Event $event,
         ContextAnalysisService $analysis,
+        HarnessRecorder $harnessRecorder,
         UpdateEventAction $updateEvent,
     ): JsonResponse|RedirectResponse {
         $attributes = $request->validated();
         $descriptionChanged = ($attributes['description'] ?? null) !== $event->description;
 
         if ($descriptionChanged && filled($attributes['description'] ?? null)) {
+            $harnessRun = $harnessRecorder->start(
+                event: $event,
+                type: HarnessRunType::DescriptionReview,
+                correlationId: (string) Str::ulid(),
+            );
+
             try {
-                $review = $analysis->reviewEventDescription($attributes['description']);
+                $review = $analysis->reviewEventDescription($attributes['description'], $harnessRun);
+                $harnessRecorder->finish($harnessRun);
             } catch (Throwable $throwable) {
+                $harnessRecorder->fail($harnessRun, $throwable);
                 report($throwable);
 
                 return $this->aiUnavailableResponse($request, creating: false);

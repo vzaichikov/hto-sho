@@ -15,6 +15,7 @@ use App\Models\EventSource;
 use App\Models\ImageExtraction;
 use App\Models\User;
 use App\Services\ContextAnalysisService;
+use App\Services\HarnessRecorder;
 use DateTimeInterface;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\Client\Request;
@@ -60,7 +61,7 @@ class EventContextSummaryJobTest extends TestCase
         ]);
 
         (new SummarizeEventContextJob($event->id, $taskId))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame(EventStatus::Ready, $event->status);
@@ -76,7 +77,7 @@ class EventContextSummaryJobTest extends TestCase
         Queue::assertPushed(BuildEventShoppingPlanJob::class, fn (BuildEventShoppingPlanJob $job): bool => $job->eventId === $event->id && $job->stateVersion === 1);
 
         (new SummarizeEventContextJob($event->id, $taskId))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
         $this->assertSame(1, $event->contextVersions()->count());
         Http::assertSent(function (Request $request): bool {
             $prompt = $request['input'][0]['content'][0]['text'];
@@ -146,7 +147,7 @@ class EventContextSummaryJobTest extends TestCase
         ]);
 
         (new SummarizeEventContextJob($event->id, $taskId))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame([], $event->state['warnings']);
@@ -205,7 +206,7 @@ class EventContextSummaryJobTest extends TestCase
         ]);
 
         (new SummarizeEventContextJob($event->id, $taskId))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame([$correction->id], $event->state['agreements'][0]['source_ids']);
@@ -237,7 +238,7 @@ class EventContextSummaryJobTest extends TestCase
         ]);
 
         (new SummarizeEventContextJob($event->id, $taskId))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame(EventAnalysisStage::CompletedWithWarnings, $event->analysis_stage);
@@ -270,12 +271,12 @@ class EventContextSummaryJobTest extends TestCase
         });
 
         $job = new SummarizeEventContextJob($event->id, $taskId);
-        $job->handle($this->app->make(ContextAnalysisService::class));
+        $job->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $this->assertNull($event->refresh()->state);
         $this->assertSame($taskId, $event->analysis_task_id);
 
-        $job->handle($this->app->make(ContextAnalysisService::class));
+        $job->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame(2, $requestNumber);
@@ -292,7 +293,7 @@ class EventContextSummaryJobTest extends TestCase
         ]);
 
         (new SummarizeEventContextJob($event->id, $taskId))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame(EventStatus::Failed, $event->status);
@@ -319,6 +320,7 @@ class EventContextSummaryJobTest extends TestCase
                 'agreements' => [],
                 'warnings' => [],
                 'unresolved_questions' => [[
+                    'question_key' => '__new__',
                     'question' => 'Скільки людей буде на пікніку?',
                     'impact' => 'Від цього залежать усі кількості.',
                     'blocking' => true,
@@ -337,6 +339,7 @@ class EventContextSummaryJobTest extends TestCase
                     ]],
                     'source_ids' => [],
                 ], [
+                    'question_key' => '__new__',
                     'question' => 'Чи потрібно додавати алкоголь до плану?',
                     'impact' => 'Це змінить список напоїв.',
                     'blocking' => false,
@@ -360,7 +363,7 @@ class EventContextSummaryJobTest extends TestCase
         ]);
 
         (new SummarizeEventContextJob($event->id, $taskId))
-            ->handle($this->app->make(ContextAnalysisService::class));
+            ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         $event->refresh();
         $this->assertSame(EventStatus::Ready, $event->status);
@@ -381,6 +384,103 @@ class EventContextSummaryJobTest extends TestCase
                 && str_contains($prompt, 'ПАЧКИ ДЖЕРЕЛ:'."\n".'[]')
                 && str_contains($prompt, 'source_ids має бути порожнім масивом')
                 && str_contains($prompt, 'Не вигадуй учасників, кількості, алергії');
+        });
+    }
+
+    public function test_answered_question_key_cannot_be_reopened_by_a_paraphrased_summary(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $event->update([
+            'state_version' => 1,
+            'state' => [
+                'summary' => 'Пікнік без списку імен.',
+                'participants' => [],
+                'restrictions' => [],
+                'agreements' => [],
+                'warnings' => [],
+                'unresolved_questions' => [[
+                    'key' => 'q_names_current',
+                    'question' => 'Потрібні імена решти гостей?',
+                    'impact' => 'Імена допоможуть персоналізувати список.',
+                    'blocking' => false,
+                    'options' => [],
+                    'source_ids' => [],
+                ]],
+                'source_ids' => [],
+            ],
+        ]);
+        $answerSource = EventSource::factory()->for($event)->create([
+            'type' => EventSourceType::Text,
+            'origin' => 'question_answer',
+            'metadata' => [
+                'question_key' => 'q_names',
+                'question' => 'Потрібні імена решти гостей?',
+                'answer' => 'Залишити без імен',
+                'state_version' => 1,
+            ],
+            'text' => 'Відповідь організатора: залишити без імен.',
+            'status' => EventSourceStatus::Processed,
+            'inclusion' => EventSourceInclusion::Included,
+        ]);
+        $currentState = $event->state;
+        $currentState['unresolved_questions'][0]['options'] = [[
+            'label' => 'Залишити без імен',
+            'description' => 'Не персоналізувати список.',
+            'recommended' => true,
+        ]];
+        $currentState['unresolved_questions'][0]['source_ids'] = [$answerSource->id];
+        $event->update(['state' => $currentState]);
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse([
+                'summary' => 'Пікнік без персоналізації за іменами.',
+                'participants' => [],
+                'restrictions' => [],
+                'agreements' => [],
+                'warnings' => [],
+                'unresolved_questions' => [[
+                    'question_key' => 'q_names_current',
+                    'question' => 'Чи треба все ж уточнити імена гостей?',
+                    'impact' => 'Це вплине на персоналізацію.',
+                    'blocking' => false,
+                    'options' => [[
+                        'label' => 'Залишити без імен',
+                        'description' => 'Організатор уже так вирішив.',
+                        'recommended' => true,
+                    ], [
+                        'label' => 'Уточнити імена',
+                        'description' => 'Зібрати додаткові дані.',
+                        'recommended' => false,
+                    ], [
+                        'label' => 'Повернутися пізніше',
+                        'description' => 'Не затримувати поточний план.',
+                        'recommended' => false,
+                    ]],
+                    'source_ids' => [$answerSource->id],
+                ]],
+                'source_ids' => [$answerSource->id],
+            ])),
+        ]);
+
+        (new SummarizeEventContextJob($event->id, $taskId))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $this->assertSame([], $event->refresh()->state['unresolved_questions']);
+        $harnessRun = $event->harnessRuns()->with('entries')->sole();
+        $this->assertSame('completed', $harnessRun->status->value);
+        $this->assertTrue($harnessRun->entries->contains(
+            fn ($entry): bool => $entry->kind->value === 'llm'
+                && $entry->request_payload !== null
+                && $entry->response_payload !== null,
+        ));
+        Http::assertSent(function (Request $request): bool {
+            $prompt = $request['input'][0]['content'][0]['text'];
+
+            return str_contains($prompt, 'ЖУРНАЛ ПИТАНЬ:')
+                && str_contains($prompt, '"key": "q_names_current"')
+                && str_contains($prompt, 'Залишити без імен')
+                && str_contains($prompt, 'ніколи не повертай питання з answered');
         });
     }
 
