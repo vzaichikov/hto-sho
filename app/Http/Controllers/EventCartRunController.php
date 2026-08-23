@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Actions\StartEventCartRunAction;
 use App\CartRunMode;
+use App\CartRunStatus;
 use App\Exceptions\SilpoCartUnavailableException;
 use App\Http\Requests\StartEventCartRunRequest;
 use App\Models\Event;
@@ -67,7 +68,9 @@ class EventCartRunController extends Controller
         $finishedNeeds = $needs->whereIn('status', ['selected', 'skipped'])->count();
         $progress = $cartRun->status->isTerminal()
             ? 100
-            : min(92, 8 + (int) round(($finishedNeeds / max($needs->count(), 1)) * 80));
+            : ($cartRun->status === CartRunStatus::WaitingForConfirmation
+                ? 96
+                : min(92, 8 + (int) round(($finishedNeeds / max($needs->count(), 1)) * 80)));
 
         return response()->json([
             'status' => $cartRun->status->value,
@@ -86,6 +89,10 @@ class EventCartRunController extends Controller
             'actual_total' => $cartRun->actual_total,
             'validations' => data_get($cartRun->state, 'verified_cart.validations', data_get($cartRun->cart_context, 'validations', [])),
             'continue_url' => route('events.cart-runs.continue', [$event, $cartRun]),
+            'requires_confirmation' => $cartRun->status === CartRunStatus::WaitingForConfirmation,
+            'confirm_url' => $cartRun->status === CartRunStatus::WaitingForConfirmation
+                ? route('events.cart-runs.confirm', [$event, $cartRun])
+                : null,
         ]);
     }
 }

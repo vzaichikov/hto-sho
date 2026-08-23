@@ -19,6 +19,7 @@ final readonly class EventContextData
         array $knownQuestionKeys = [],
         array $answeredQuestionKeys = [],
     ): self {
+        $payload = self::withoutAggregateParticipants($payload);
         $validated = Validator::make($payload, [
             'summary' => ['required', 'string', 'max:10000'],
             'participants' => ['present', 'array'],
@@ -99,5 +100,43 @@ final readonly class EventContextData
         $validated['source_ids'] = array_values(array_unique($validated['source_ids']));
 
         return new self($validated);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private static function withoutAggregateParticipants(array $payload): array
+    {
+        $aggregateNames = collect($payload['participants'] ?? [])
+            ->filter(fn (mixed $participant): bool => is_array($participant)
+                && self::isAggregateParticipantName((string) ($participant['name'] ?? '')))
+            ->pluck('name')
+            ->map(fn (mixed $name): string => Str::lower(Str::squish((string) $name)));
+
+        if ($aggregateNames->isEmpty()) {
+            return $payload;
+        }
+
+        $payload['participants'] = collect($payload['participants'] ?? [])
+            ->reject(fn (mixed $participant): bool => is_array($participant)
+                && $aggregateNames->contains(Str::lower(Str::squish((string) ($participant['name'] ?? '')))))
+            ->values()
+            ->all();
+        $payload['restrictions'] = collect($payload['restrictions'] ?? [])
+            ->reject(fn (mixed $restriction): bool => is_array($restriction)
+                && $aggregateNames->contains(Str::lower(Str::squish((string) ($restriction['participant'] ?? '')))))
+            ->values()
+            ->all();
+
+        return $payload;
+    }
+
+    private static function isAggregateParticipantName(string $name): bool
+    {
+        $normalized = Str::lower(Str::squish($name));
+
+        return preg_match('/^\d+\s*(учасник|гост|люд)/u', $normalized) === 1
+            || preg_match('/\b(решт\w*\s+\d+|без\s+імен)\b/u', $normalized) === 1;
     }
 }

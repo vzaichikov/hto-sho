@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ConfirmEventCartRunController;
 use App\Http\Controllers\ContinueEventCartRunController;
 use App\Http\Controllers\EventAnalysisController;
 use App\Http\Controllers\EventAnswerController;
@@ -12,6 +13,7 @@ use App\Http\Controllers\EventSourceInclusionController;
 use App\Http\Controllers\EventStatusController;
 use App\Http\Controllers\LandingController;
 use App\Http\Controllers\LogoutController;
+use App\Http\Controllers\RefreshSilpoCartTimeslotController;
 use App\Http\Controllers\RetryEventSourceController;
 use App\Http\Controllers\SilpoCartPreflightController;
 use App\Http\Controllers\SilpoOAuthController;
@@ -63,6 +65,9 @@ Route::middleware('auth')->group(function (): void {
     Route::get('/events/{event}/silpo/cart-preflight', SilpoCartPreflightController::class)
         ->middleware('throttle:cart-runs')
         ->name('events.silpo.cart-preflight');
+    Route::post('/events/{event}/silpo/cart-refresh', RefreshSilpoCartTimeslotController::class)
+        ->middleware('throttle:cart-runs')
+        ->name('events.silpo.cart-refresh');
     Route::post('/events/{event}/cart-runs', [EventCartRunController::class, 'store'])
         ->middleware('throttle:cart-runs')
         ->name('events.cart-runs.store');
@@ -72,5 +77,8 @@ Route::middleware('auth')->group(function (): void {
         Route::post('/events/{event}/cart-runs/{cartRun}/continue', ContinueEventCartRunController::class)
             ->middleware('throttle:cart-runs')
             ->name('events.cart-runs.continue');
+        Route::post('/events/{event}/cart-runs/{cartRun}/confirm', ConfirmEventCartRunController::class)
+            ->middleware('throttle:cart-runs')
+            ->name('events.cart-runs.confirm');
     });
 });

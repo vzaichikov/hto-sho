@@ -28,6 +28,7 @@ class SilpoCartPreflightController extends Controller
             ->whereIn('status', [
                 CartRunStatus::Running->value,
                 CartRunStatus::WaitingForAnswer->value,
+                CartRunStatus::WaitingForConfirmation->value,
                 CartRunStatus::Committing->value,
             ])
             ->latest()
@@ -62,6 +63,9 @@ class SilpoCartPreflightController extends Controller
 
         try {
             $cart = $silpo->getReadyCart($connection->access_token, $harnessRun);
+            $refreshCandidate = $cart === null
+                ? $silpo->getCartRefreshCandidate($connection->access_token, $harnessRun)
+                : null;
             $harnessRecorder->finish($harnessRun);
         } catch (Throwable $throwable) {
             $harnessRecorder->fail($harnessRun, $throwable);
@@ -75,6 +79,30 @@ class SilpoCartPreflightController extends Controller
         }
 
         if ($cart === null) {
+            if ($refreshCandidate !== null) {
+                return response()->json([
+                    'ready' => false,
+                    'code' => 'timeslot_expired',
+                    'message' => 'Маршрут на місці, але час уже протух. Гусь може переставити його на найближчий доступний — після вашого підтвердження.',
+                    'refresh_url' => route('events.silpo.cart-refresh', $event),
+                    'candidate' => [
+                        'delivery_label' => $refreshCandidate->deliveryLabel(),
+                        'current_timeslot' => $this->timeslotLabel(
+                            $refreshCandidate->currentSlotStart,
+                            $refreshCandidate->currentSlotEnd,
+                        ),
+                        'timeslot' => $this->timeslotLabel(
+                            $refreshCandidate->candidateSlotStart,
+                            $refreshCandidate->candidateSlotEnd,
+                        ),
+                        'slot_start' => $refreshCandidate->candidateSlotStart,
+                        'slot_end' => $refreshCandidate->candidateSlotEnd,
+                        'route_fingerprint' => $refreshCandidate->routeFingerprint,
+                        'current_slot_fingerprint' => $refreshCandidate->currentSlotFingerprint,
+                    ],
+                ], 409);
+            }
+
             return response()->json([
                 'ready' => false,
                 'code' => 'cart_missing',

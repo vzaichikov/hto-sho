@@ -1,0 +1,77 @@
+{
+  "id": "06-brings-reversal",
+  "title": "Обіцянку принести вугілля скасовано",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Шашлик біля озера",
+    "description": "Зводимо хто що бере і що треба докупити.",
+    "alcohol_planned": false,
+    "people_count": 6,
+    "budget_amount": "2800.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "telegram-coal-old",
+      "batch_uploaded_at": "2026-08-20T10:05:00+03:00",
+      "sources": [
+        {
+          "source_id": 601,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-20T10:05:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "20 серпня\n10:04 Саша: Беру вугілля і розпал, не купуйте",
+          "message_timeline": [
+            {"sequence": 0, "author": "Саша", "text": "Беру вугілля і розпал, не купуйте", "visible_date": "20.08.2026", "visible_time": "10:04", "is_quoted": false}
+          ],
+          "source_summary": "Саша спочатку обіцяв вугілля й розпал."
+        }
+      ]
+    },
+    {
+      "upload_batch": "telegram-coal-new",
+      "batch_uploaded_at": "2026-08-22T19:48:00+03:00",
+      "sources": [
+        {
+          "source_id": 602,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-22T19:48:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "22 серпня\n19:46 Саша: Апдейт: вугілля не беру, купіть дві пачки. Розпал теж не встиг\n19:47 Оля: ок, занесла в список",
+          "message_timeline": [
+            {"sequence": 0, "author": "Саша", "text": "Апдейт: вугілля не беру, купіть дві пачки. Розпал теж не встиг", "visible_date": "22.08.2026", "visible_time": "19:46", "is_quoted": false},
+            {"sequence": 1, "author": "Оля", "text": "ок, занесла в список", "visible_date": "22.08.2026", "visible_time": "19:47", "is_quoted": false}
+          ],
+          "source_summary": "Саша скасував обіцянку; дві пачки вугілля і розпал треба купити."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Вугілля й розпал потрібно купити.",
+    "participants": [
+      {"name": "Саша", "status": "unknown", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [602]}
+    ],
+    "restrictions": [],
+    "agreements": [
+      {"summary": "Купити дві пачки вугілля та розпал.", "source_ids": [602]}
+    ],
+    "warnings": [],
+    "unresolved_questions": [],
+    "source_ids": [601, 602]
+  },
+  "expect": {
+    "event": {"people_count": 6},
+    "state": {
+      "participants": [{"name": "Саша", "not_brings": ["вугіл", "розпал"], "source_ids": [602]}],
+      "agreements": [{"all": ["куп", "вугіл", "(дві|2)"], "source_ids": [602]}],
+      "not_agreements": [{"all": ["Саш", "бере", "вугіл"]}],
+      "warnings_max": 0,
+      "source_ids": [601, 602]
+    }
+  }
+}

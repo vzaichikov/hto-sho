@@ -60,6 +60,9 @@ final class StartEventCartRunAction
 
         try {
             $cart = $this->silpo->getReadyCart($connection->access_token, $harnessRun);
+            $catalogScopes = $cart === null
+                ? ['categories' => [], 'sets' => []]
+                : $this->silpo->getCatalogScopes($connection->access_token, $cart, $harnessRun);
         } catch (Throwable $throwable) {
             $this->harnessRecorder->fail($harnessRun, $throwable);
 
@@ -79,7 +82,7 @@ final class StartEventCartRunAction
             );
         }
 
-        return DB::transaction(function () use ($event, $mode, $cart, $harnessRun): EventCartRun {
+        return DB::transaction(function () use ($event, $mode, $cart, $catalogScopes, $harnessRun): EventCartRun {
             $lockedEvent = Event::query()->lockForUpdate()->findOrFail($event->id);
             $this->guardPlan($lockedEvent);
 
@@ -106,6 +109,7 @@ final class StartEventCartRunAction
                     'event_context' => $lockedEvent->state,
                     'plan_snapshot' => $lockedEvent->shopping_plan,
                     'needs' => [],
+                    'catalog_scopes' => $catalogScopes,
                     'current_need_index' => 0,
                     'last_candidates' => [],
                     'last_details' => null,
@@ -137,6 +141,7 @@ final class StartEventCartRunAction
         return [
             CartRunStatus::Running->value,
             CartRunStatus::WaitingForAnswer->value,
+            CartRunStatus::WaitingForConfirmation->value,
             CartRunStatus::Committing->value,
         ];
     }

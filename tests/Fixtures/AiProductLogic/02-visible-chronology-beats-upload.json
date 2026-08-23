@@ -1,0 +1,74 @@
+{
+  "id": "02-visible-chronology-beats-upload",
+  "title": "Видимий час перемагає порядок upload",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Пікнік у Гідропарку",
+    "description": "Час кілька разів уточнювали у Telegram.",
+    "alcohol_planned": false,
+    "people_count": 5,
+    "budget_amount": null,
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "upload-first-new-chat",
+      "batch_uploaded_at": "2026-08-23T12:05:00+03:00",
+      "sources": [
+        {
+          "source_id": 201,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-23T12:05:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "22 серпня\nІра: Переносимо збір на 15:00\n12:40",
+          "message_timeline": [
+            {"sequence": 0, "author": "Іра", "text": "Переносимо збір на 15:00", "visible_date": "22.08.2026", "visible_time": "12:40", "is_quoted": false}
+          ],
+          "source_summary": "Іра переносить збір на 15:00."
+        }
+      ]
+    },
+    {
+      "upload_batch": "upload-last-old-chat",
+      "batch_uploaded_at": "2026-08-23T12:09:00+03:00",
+      "sources": [
+        {
+          "source_id": 202,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-23T12:09:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "19 серпня\nІра: Давайте о 14:00 біля метро\n09:11",
+          "message_timeline": [
+            {"sequence": 0, "author": "Іра", "text": "Давайте о 14:00 біля метро", "visible_date": "19.08.2026", "visible_time": "09:11", "is_quoted": false}
+          ],
+          "source_summary": "Попередньо домовлялись на 14:00."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Зустріч актуально запланована на 15:00.",
+    "participants": [],
+    "restrictions": [],
+    "agreements": [
+      {"summary": "Зустрітися о 15:00.", "source_ids": [201]}
+    ],
+    "warnings": [],
+    "unresolved_questions": [],
+    "source_ids": [201, 202]
+  },
+  "expect": {
+    "event": {"people_count": 5},
+    "state": {
+      "participant_count": 0,
+      "agreements": [{"all": ["15:00"], "source_ids": [201]}],
+      "not_agreements": [{"all": ["14:00"]}],
+      "warnings_max": 0,
+      "source_ids": [201, 202]
+    }
+  }
+}

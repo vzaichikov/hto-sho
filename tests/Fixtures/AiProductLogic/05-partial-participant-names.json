@@ -1,0 +1,83 @@
+{
+  "id": "05-partial-participant-names",
+  "title": "Известно 8 участников, но только 5 имён",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Мангал на дачі",
+    "description": "У групі вже підтвердили загальну кількість, імена є не всі.",
+    "alcohol_planned": false,
+    "people_count": 8,
+    "budget_amount": "4000.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "telegram-poll-eight",
+      "batch_uploaded_at": "2026-08-22T11:22:00+03:00",
+      "sources": [
+        {
+          "source_id": 501,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-22T11:22:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "Опитування «Хто буде?» — 8 голосів\n11:17 Аня: я +\n11:18 Богдан: буду\n11:18 Марта: теж\n11:20 Сашко: плюс\n11:21 Іра: я з вами\n11:22 Роман: ще троє підтвердили в особистих, імена потім",
+          "message_timeline": [
+            {"sequence": 0, "author": "Аня", "text": "я +", "visible_date": "22.08.2026", "visible_time": "11:17", "is_quoted": false},
+            {"sequence": 1, "author": "Богдан", "text": "буду", "visible_date": "22.08.2026", "visible_time": "11:18", "is_quoted": false},
+            {"sequence": 2, "author": "Марта", "text": "теж", "visible_date": "22.08.2026", "visible_time": "11:18", "is_quoted": false},
+            {"sequence": 3, "author": "Сашко", "text": "плюс", "visible_date": "22.08.2026", "visible_time": "11:20", "is_quoted": false},
+            {"sequence": 4, "author": "Іра", "text": "я з вами", "visible_date": "22.08.2026", "visible_time": "11:21", "is_quoted": false},
+            {"sequence": 5, "author": "Роман", "text": "ще троє підтвердили в особистих, імена потім", "visible_date": "22.08.2026", "visible_time": "11:22", "is_quoted": false}
+          ],
+          "source_summary": "Підтверджено 8 людей, але названо лише пʼять учасників."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Підтверджено 8 учасників, з них відомі пʼять імен.",
+    "participants": [
+      {"name": "Аня", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [501]},
+      {"name": "Богдан", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [501]},
+      {"name": "Марта", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [501]},
+      {"name": "Сашко", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [501]},
+      {"name": "Іра", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [501]}
+    ],
+    "restrictions": [],
+    "agreements": [],
+    "warnings": [],
+    "unresolved_questions": [
+      {
+        "question_key": "__new__",
+        "question": "Хто саме решта троє підтверджених учасників?",
+        "impact": "Імена потрібні, щоб не приписати чужі обмеження або домовленості невідомим людям.",
+        "blocking": false,
+        "options": [
+          {"label": "Уточнити три імені", "description": "Зберегти персональні дані без здогадок.", "recommended": true},
+          {"label": "Лишити без імен", "description": "Рахувати загальну кількість без персоналізації.", "recommended": false},
+          {"label": "Повернутися пізніше", "description": "Не затримувати чернетку списку.", "recommended": false}
+        ],
+        "source_ids": [501]
+      }
+    ],
+    "source_ids": [501]
+  },
+  "expect": {
+    "event": {"people_count": 8},
+    "state": {
+      "participant_count": 5,
+      "participants": [
+        {"name": "Аня", "status": "confirmed"},
+        {"name": "Богдан", "status": "confirmed"},
+        {"name": "Марта", "status": "confirmed"},
+        {"name": "Сашко", "status": "confirmed"},
+        {"name": "Іра", "status": "confirmed"}
+      ],
+      "unresolved": [{"all": ["(троє|3|трьох)", "імен|хто"]}],
+      "warnings_max": 0,
+      "source_ids": [501]
+    }
+  }
+}

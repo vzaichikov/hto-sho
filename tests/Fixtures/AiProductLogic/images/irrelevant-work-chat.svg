@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="1280" viewBox="0 0 760 1280">
+  <rect width="760" height="1280" fill="#dfe7ec"/>
+  <rect width="760" height="116" fill="#517da2"/>
+  <circle cx="62" cy="58" r="30" fill="#f6d365"/>
+  <text x="108" y="52" font-family="DejaVu Sans" font-size="25" font-weight="700" fill="#fff">DevOps / нічний реліз</text>
+  <text x="108" y="82" font-family="DejaVu Sans" font-size="17" fill="#d8e5ef">12 учасників</text>
+  <rect x="256" y="136" width="248" height="40" rx="20" fill="#b8c7d1"/>
+  <text x="319" y="163" font-family="DejaVu Sans" font-size="17" fill="#385063">22 серпня</text>
+  <g font-family="DejaVu Sans" font-size="21" fill="#17212b">
+    <rect x="28" y="210" width="522" height="142" rx="22" fill="#fff"/>
+    <text x="52" y="246" font-size="18" font-weight="700" fill="#517da2">Макс</text>
+    <text x="52" y="284">Хто перезапускав nginx на stage?</text>
+    <text x="52" y="319">У логах знову 502 після деплою.</text>
+    <text x="478" y="334" font-size="15" fill="#8496a3">09:41</text>
+    <rect x="178" y="380" width="554" height="116" rx="22" fill="#e2ffc7"/>
+    <text x="204" y="422">Я. Конфіг уже повернув,</text>
+    <text x="204" y="458">перевірте healthcheck.</text>
+    <text x="658" y="478" font-size="15" fill="#6e8b61">09:43 ✓✓</text>
+    <rect x="28" y="524" width="486" height="146" rx="22" fill="#fff"/>
+    <text x="52" y="560" font-size="18" font-weight="700" fill="#517da2">Олена</text>
+    <text x="52" y="598">В Jira ще старий статус.</text>
+    <text x="52" y="634">Закрийте таску після smoke.</text>
+    <text x="444" y="652" font-size="15" fill="#8496a3">09:45</text>
+    <rect x="188" y="700" width="544" height="120" rx="22" fill="#e2ffc7"/>
+    <text x="214" y="746">Ок, після стендапу дороблю.</text>
+    <text x="658" y="800" font-size="15" fill="#6e8b61">09:47 ✓✓</text>
+  </g>
+  <rect x="24" y="1188" width="712" height="64" rx="32" fill="#fff"/>
+  <text x="72" y="1229" font-family="DejaVu Sans" font-size="20" fill="#8b9aa5">Повідомлення</text>
+</svg>

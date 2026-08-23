@@ -312,6 +312,9 @@ if (silpoDialog instanceof HTMLDialogElement) {
     const runPanel = silpoDialog.querySelector('[data-silpo-run]');
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ?? '';
     let runUrl = null;
+    let confirmUrl = null;
+    let refreshUrl = null;
+    let refreshPayload = null;
     let lastSequence = 0;
     let pollTimer = null;
     let pollPending = false;
@@ -356,8 +359,30 @@ if (silpoDialog instanceof HTMLDialogElement) {
 
     const showGuard = (payload) => {
         showPanel(guardPanel);
+        guardPanel.querySelector('[data-silpo-guard-title]').textContent = payload.code === 'timeslot_expired'
+            ? 'Час проситься на заміну'
+            : 'Без маршруту — ніяк';
         guardPanel.querySelector('[data-silpo-guard-message]').textContent = payload.message;
         const action = guardPanel.querySelector('[data-silpo-guard-action]');
+        const refresh = guardPanel.querySelector('[data-silpo-refresh]');
+
+        if (payload.refresh_url && payload.candidate) {
+            refreshUrl = payload.refresh_url;
+            refreshPayload = {
+                route_fingerprint: payload.candidate.route_fingerprint,
+                current_slot_fingerprint: payload.candidate.current_slot_fingerprint,
+                slot_start: payload.candidate.slot_start,
+                slot_end: payload.candidate.slot_end,
+            };
+            refresh.querySelector('[data-silpo-refresh-delivery]').textContent = payload.candidate.delivery_label;
+            refresh.querySelector('[data-silpo-refresh-current]').textContent = payload.candidate.current_timeslot;
+            refresh.querySelector('[data-silpo-refresh-next]').textContent = payload.candidate.timeslot;
+            refresh.classList.remove('hidden');
+        } else {
+            refreshUrl = null;
+            refreshPayload = null;
+            refresh.classList.add('hidden');
+        }
 
         if (payload.action_url) {
             action.href = payload.action_url;
@@ -411,6 +436,28 @@ if (silpoDialog instanceof HTMLDialogElement) {
         meta.className = 'mt-0.5 text-xs text-muted';
         meta.textContent = `${quantity(product.quantity)} × ${money(product.price)}`;
         copy.append(name, meta);
+
+        if (! compact && product.need_name) {
+            const need = document.createElement('p');
+            need.className = 'mt-1 text-xs font-bold text-green-dark';
+            need.textContent = `Для: ${product.need_name}`;
+            copy.append(need);
+        }
+
+        if (! compact && product.review_note) {
+            const review = document.createElement('p');
+            review.className = 'mt-2 text-xs leading-5 text-orange-dark';
+            review.textContent = product.review_note;
+            copy.append(review);
+        }
+
+        if (! compact && product.selection_explanation
+            && (product.match_evidence === 'same_role' || product.safety_evidence === 'unverified')) {
+            const explanation = document.createElement('p');
+            explanation.className = 'mt-1 text-xs leading-5 text-muted';
+            explanation.textContent = product.selection_explanation;
+            copy.append(explanation);
+        }
 
         const total = document.createElement('p');
         total.className = 'shrink-0 text-sm font-extrabold';
@@ -466,6 +513,9 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const blocker = runPanel.querySelector('[data-silpo-blocker]');
         blocker.classList.toggle('hidden', payload.status !== 'waiting_for_answer');
         blocker.querySelector('[data-silpo-blocker-message]').textContent = payload.blocker || '';
+        const confirmation = runPanel.querySelector('[data-silpo-confirmation]');
+        confirmation.classList.toggle('hidden', ! payload.requires_confirmation);
+        confirmUrl = payload.requires_confirmation ? payload.confirm_url : null;
 
         const warnings = [...(payload.warnings ?? [])];
 
@@ -507,7 +557,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
             const payload = await fetchJson(`${runUrl}${separator}after=${lastSequence}`);
             renderRun(payload);
 
-            if (! payload.terminal && payload.status !== 'waiting_for_answer') {
+            if (! payload.terminal && ! ['waiting_for_answer', 'waiting_for_confirmation'].includes(payload.status)) {
                 pollTimer = window.setTimeout(pollRun, 1800);
             }
         } catch (error) {
@@ -596,6 +646,53 @@ if (silpoDialog instanceof HTMLDialogElement) {
             showGuard(error.payload ?? { message: error.message });
         } finally {
             button.disabled = false;
+        }
+    });
+
+    silpoDialog.querySelector('[data-silpo-confirm]').addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+
+        if (! confirmUrl || ! runUrl) {
+            return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'Гусь ще раз звіряє кошик…';
+
+        try {
+            await fetchJson(confirmUrl, { method: 'POST' });
+            openRun(runUrl);
+        } catch (error) {
+            showGuard(error.payload ?? { message: error.message });
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Підтверджую товари — додати в кошик';
+        }
+    });
+
+    silpoDialog.querySelector('[data-silpo-refresh-submit]').addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+
+        if (! refreshUrl || ! refreshPayload) {
+            return;
+        }
+
+        button.disabled = true;
+        button.textContent = 'Гусь переставляє час…';
+
+        try {
+            const payload = await fetchJson(refreshUrl, {
+                method: 'POST',
+                body: JSON.stringify(refreshPayload),
+            });
+            refreshUrl = null;
+            refreshPayload = null;
+            renderReadyCart(payload.cart);
+        } catch (error) {
+            showGuard(error.payload ?? { message: error.message });
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Так, змінити лише час';
         }
     });
 

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Str;
+use JsonException;
 
 class HarnessPayloadSanitizer
 {
@@ -17,6 +18,14 @@ class HarnessPayloadSanitizer
         'cookie',
         'csrf',
         'certificate',
+        'address',
+        'latitude',
+        'longitude',
+        'phone',
+        'email',
+        'birthday',
+        'checkout',
+        'loyalty',
     ];
 
     public function sanitize(mixed $value): mixed
@@ -50,6 +59,21 @@ class HarnessPayloadSanitizer
 
         if (preg_match('/^Bearer\s+\S+$/i', $value) === 1) {
             return '[REDACTED]';
+        }
+
+        if (Str::startsWith(ltrim($value), ['{', '['])) {
+            try {
+                $decoded = json_decode($value, true, flags: JSON_THROW_ON_ERROR);
+
+                if (is_array($decoded)) {
+                    return json_encode(
+                        $this->sanitize($decoded),
+                        JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+                    );
+                }
+            } catch (JsonException) {
+                return $value;
+            }
         }
 
         return $value;

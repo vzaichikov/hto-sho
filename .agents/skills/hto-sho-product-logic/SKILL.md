@@ -33,13 +33,13 @@ When implementing or reviewing concrete Silpo tool calls, also read the dated li
 
 ## Invariants
 
-- Treat allergies and explicit dietary restrictions as hard constraints. Ambiguity becomes a warning or question, never a risky substitution.
+- Treat a catalog product that explicitly contains a forbidden allergen or contradicts a dietary restriction as a hard rejection. After bounded detail checks, missing catalog disclosure may be staged for MVP review only with an `unverified` evidence grade and an unmistakable package-check warning; never describe it as proven safe.
 - Prefer the newest explicit correction when sources conflict, but preserve the conflict when chronology or intent is uncertain.
 - Do not silently invent attendance, preferences, quantities, products, prices, availability, or participant commitments.
 - Adding or changing source evidence invalidates derived results. A plan is current only for the event-state revision that produced it; a cart is current only for that plan revision.
 - Make retries idempotent. Reprocessing a source or retrying cart synchronization must not duplicate evidence or cart lines.
 - Keep event ownership, OAuth identity, tokens, source images, and derived personal food information scoped to the authenticated user.
-- Keep uncertainty visible. A useful partial plan with clear warnings is better than false certainty.
+- Keep uncertainty visible. Prefer a full reviewable cart with explained same-role substitutions and evidence warnings; never convert missing evidence into false certainty.
 
 ## Working with Existing Code
 

@@ -1,0 +1,91 @@
+{
+  "id": "13-complete-roster-tentative-contributions",
+  "title": "Повний список імен і умовні внески не стають brings",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Мангал на Дніпрі",
+    "description": "Восьмеро друзів збираються на мангал.",
+    "alcohol_planned": false,
+    "people_count": 8,
+    "budget_amount": "6000.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "complete-roster",
+      "batch_uploaded_at": "2026-08-23T09:20:00+03:00",
+      "sources": [
+        {
+          "source_id": 1301,
+          "kind": "text",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-23T09:20:00+03:00",
+          "position": 0,
+          "text": "Нас рівно 8: Роман, Іра, Оля, Маша, Леся, Тарас, Богдан і Катя. Усі підтвердилися."
+        },
+        {
+          "source_id": 1302,
+          "kind": "text",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-23T09:21:00+03:00",
+          "position": 1,
+          "text": "Тарас ніби бере вугілля, Оля, може, хумус, Катя, якщо встигне, лід. Це не фінальні обіцянки, не викреслюйте з закупів."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Названо й підтверджено всіх вісьмох; внески вугілля, хумусу та льоду залишаються умовними.",
+    "participants": [
+      {"name": "Роман", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1301]},
+      {"name": "Іра", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1301]},
+      {"name": "Оля", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1301, 1302]},
+      {"name": "Маша", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1301]},
+      {"name": "Леся", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1301]},
+      {"name": "Тарас", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1301, 1302]},
+      {"name": "Богдан", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1301]},
+      {"name": "Катя", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1301, 1302]}
+    ],
+    "restrictions": [],
+    "agreements": [],
+    "warnings": [
+      {"message": "Вугілля, хумус і лід ще ніхто остаточно не підтвердив, тому їх не можна виключати із закупів.", "source_ids": [1302]}
+    ],
+    "unresolved_questions": [
+      {
+        "question_key": "__new__",
+        "question": "Чи буде на події алкоголь?",
+        "impact": "Без явного підтвердження алкоголь не потрапить до списку.",
+        "blocking": false,
+        "options": [
+          {"label": "Не додавати алкоголь", "description": "Безпечний варіант до уточнення.", "recommended": true},
+          {"label": "Уточнити в організатора", "description": "Отримати явну відповідь.", "recommended": false},
+          {"label": "Повернутися пізніше", "description": "Не затримувати решту списку.", "recommended": false}
+        ],
+        "source_ids": []
+      }
+    ],
+    "source_ids": [1301, 1302]
+  },
+  "expect": {
+    "event": {"people_count": 8},
+    "state": {
+      "participant_count": 8,
+      "participants": [
+        {"name": "Роман", "status": "confirmed"},
+        {"name": "Іра", "status": "confirmed"},
+        {"name": "Оля", "status": "confirmed", "not_brings": ["хумус"]},
+        {"name": "Маша", "status": "confirmed"},
+        {"name": "Леся", "status": "confirmed"},
+        {"name": "Тарас", "status": "confirmed", "not_brings": ["вугіл"]},
+        {"name": "Богдан", "status": "confirmed"},
+        {"name": "Катя", "status": "confirmed", "not_brings": ["лід"]}
+      ],
+      "absent_participants": ["8 учасників; решта без імен"],
+      "warnings": [{"all": ["(умов|не підтверд|не остаточ)", "(вугіл|хумус|лід)"]}],
+      "unresolved": [{"all": ["алкогол"]}],
+      "not_unresolved": [{"all": ["(хто|імен|склад)", "(учасник|гост|люд)"]}],
+      "source_ids": [1301, 1302]
+    }
+  }
+}

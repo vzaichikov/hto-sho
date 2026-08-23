@@ -1,0 +1,75 @@
+{
+  "id": "11-participant-attribution",
+  "title": "Данные одного автора не наследуются другим",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Барбекю у дворі",
+    "description": "Один довгий скриншот із короткими репліками різних людей.",
+    "alcohol_planned": false,
+    "people_count": 5,
+    "budget_amount": "2600.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "multi-author-chat",
+      "batch_uploaded_at": "2026-08-22T17:18:00+03:00",
+      "sources": [
+        {
+          "source_id": 1101,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-22T17:18:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "17:11 Оля: Я буду. Мʼясо не їм, беру хумус і два лимонади\n17:13 Сашко: Я теж буду. В мене алергія на ківі, зате беру вугілля\n17:15 Марта: Я пас, їдьте без мене\n17:17 Оля: і не забудьте воду",
+          "message_timeline": [
+            {"sequence": 0, "author": "Оля", "text": "Я буду. Мʼясо не їм, беру хумус і два лимонади", "visible_date": "22.08.2026", "visible_time": "17:11", "is_quoted": false},
+            {"sequence": 1, "author": "Сашко", "text": "Я теж буду. В мене алергія на ківі, зате беру вугілля", "visible_date": "22.08.2026", "visible_time": "17:13", "is_quoted": false},
+            {"sequence": 2, "author": "Марта", "text": "Я пас, їдьте без мене", "visible_date": "22.08.2026", "visible_time": "17:15", "is_quoted": false},
+            {"sequence": 3, "author": "Оля", "text": "і не забудьте воду", "visible_date": "22.08.2026", "visible_time": "17:17", "is_quoted": false}
+          ],
+          "source_summary": "Оля й Сашко будуть із різними обмеженнями та внесками; Марта відмовилась."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Оля й Сашко підтвердились зі своїми окремими обмеженнями та внесками; Марта не прийде.",
+    "participants": [
+      {"name": "Оля", "status": "confirmed", "preferences": [], "restrictions": ["не їсть мʼясо"], "allergies": [], "brings": ["хумус", "два лимонади"], "source_ids": [1101]},
+      {"name": "Сашко", "status": "confirmed", "preferences": [], "restrictions": ["без ківі"], "allergies": ["ківі"], "brings": ["вугілля"], "source_ids": [1101]},
+      {"name": "Марта", "status": "declined", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1101]}
+    ],
+    "restrictions": [
+      {"participant": "Оля", "restriction": "не їсть мʼясо", "severity": "hard", "source_ids": [1101]},
+      {"participant": "Сашко", "restriction": "алергія на ківі", "severity": "allergy", "source_ids": [1101]}
+    ],
+    "agreements": [
+      {"summary": "Не забути купити воду.", "source_ids": [1101]}
+    ],
+    "warnings": [],
+    "unresolved_questions": [],
+    "source_ids": [1101]
+  },
+  "expect": {
+    "event": {"people_count": 5},
+    "state": {
+      "participant_count": 3,
+      "participants": [
+        {"name": "Оля", "status": "confirmed", "restrictions": ["мʼяс"], "brings": ["хумус", "лимонад"], "not_allergies": ["ківі"], "not_brings": ["вугіл"]},
+        {"name": "Сашко", "status": "confirmed", "allergies": ["ківі"], "brings": ["вугіл"], "not_restrictions": ["мʼяс"], "not_brings": ["хумус", "лимонад"]},
+        {"name": "Марта", "status": "declined", "not_allergies": ["ківі"], "not_brings": ["вугіл", "хумус"]}
+      ],
+      "restrictions": [
+        {"participant": "Оля", "severity": "hard", "all": ["мʼяс"]},
+        {"participant": "Сашко", "severity": "allergy", "all": ["ківі"]}
+      ],
+      "not_restrictions": [
+        {"participant": "Оля", "all": ["ківі"]},
+        {"participant": "Сашко", "all": ["мʼяс"]}
+      ],
+      "source_ids": [1101]
+    }
+  }
+}

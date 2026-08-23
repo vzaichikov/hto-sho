@@ -1,0 +1,47 @@
+{
+  "id": "12-new-evidence-stales-derived-state",
+  "title": "Новое evidence делает state и plan устаревшими",
+  "pipeline": "staleness",
+  "initial_event": {
+    "title": "Недільний пікнік",
+    "description": "План уже зібрано, але чат продовжує змінюватися.",
+    "people_count": 5,
+    "state_version": 3,
+    "evidence_version": 3,
+    "state_evidence_version": 3,
+    "state": {
+      "summary": "Поточний склад із пʼяти людей.",
+      "participants": [
+        {"name": "Юля", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": []}
+      ],
+      "restrictions": [],
+      "agreements": [],
+      "warnings": [],
+      "unresolved_questions": [],
+      "source_ids": []
+    },
+    "shopping_plan": {
+      "summary": "Список для пʼяти людей.",
+      "serves": 5,
+      "items": [{"name": "Вода", "category": "water", "quantity": 5, "unit": "л", "note": "По літру на людину."}],
+      "warnings": [],
+      "unanswered_question_keys": []
+    },
+    "plan_state_version": 3,
+    "cart_synced_state_version": 3
+  },
+  "new_source": {
+    "text": "Telegram, 23 серпня\n19:42 Юля: Я все ж не прийду. І ще: у Макса алергія на арахіс, перевірте соуси.",
+    "expected_evidence_version": 4
+  },
+  "expect": {
+    "state_version": 3,
+    "state_evidence_version": 3,
+    "plan_state_version": 3,
+    "cart_synced_state_version": 3,
+    "cart_sync_status": "stale",
+    "has_unanalyzed_changes": true,
+    "plan_current": false,
+    "cart_current": false
+  }
+}

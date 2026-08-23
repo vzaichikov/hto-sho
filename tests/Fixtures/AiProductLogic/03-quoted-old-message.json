@@ -1,0 +1,55 @@
+{
+  "id": "03-quoted-old-message",
+  "title": "Цитата старої відмови не змінює актуальну участь",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Вечеря на терасі",
+    "description": "Потрібно звести актуальні відповіді з Telegram.",
+    "alcohol_planned": false,
+    "people_count": 4,
+    "budget_amount": "1600.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "telegram-reply",
+      "batch_uploaded_at": "2026-08-22T20:32:00+03:00",
+      "sources": [
+        {
+          "source_id": 301,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-22T20:32:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "Леся відповіла на своє повідомлення\n«Я не прийду, в мене дедлайн»\nТа вже розгребла 🙂 Я точно буду\n20:31",
+          "message_timeline": [
+            {"sequence": 0, "author": "Леся", "text": "Я не прийду, в мене дедлайн", "visible_date": "Пʼятниця", "visible_time": "18:06", "is_quoted": true},
+            {"sequence": 1, "author": "Леся", "text": "Та вже розгребла 🙂 Я точно буду", "visible_date": "Сьогодні", "visible_time": "20:31", "is_quoted": false}
+          ],
+          "source_summary": "Леся цитує стару відмову і зараз підтверджує участь."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Леся актуально підтвердила участь.",
+    "participants": [
+      {"name": "Леся", "status": "confirmed", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [301]}
+    ],
+    "restrictions": [],
+    "agreements": [],
+    "warnings": [],
+    "unresolved_questions": [],
+    "source_ids": [301]
+  },
+  "expect": {
+    "event": {"people_count": 4},
+    "state": {
+      "participant_count": 1,
+      "participants": [{"name": "Леся", "status": "confirmed", "source_ids": [301]}],
+      "warnings_max": 0,
+      "source_ids": [301]
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "id": "09-product-image",
+  "title": "Фото еды полезно, но не создаёт людей и сообщения",
+  "pipeline": "image_context",
+  "organizer_context": {
+    "title": "Гриль-вечір",
+    "description": "Збираємо ідеї продуктів для гриля.",
+    "alcohol_planned": false,
+    "people_count": 4,
+    "budget_amount": "1800.00",
+    "currency": "UAH"
+  },
+  "image": {
+    "path": "images/product-tomato-sauce.png",
+    "mime_type": "image/png",
+    "source_id": 901,
+    "upload_batch": "product-photo",
+    "position": 0,
+    "uploaded_at": "2026-08-23T10:14:00+03:00"
+  },
+  "model_response": {
+    "image": {
+      "classification": "product_image",
+      "ocr_text": "СОУС ТОМАТНИЙ для гриля, лагідний, 500 г, без арахісу, без глютену",
+      "message_timeline": [],
+      "summary": "Томатний соус для гриля, банка 500 г; на етикетці зазначено відсутність арахісу й глютену.",
+      "dismissal_reason": null
+    },
+    "context": {
+      "summary": "Як продукт-кандидат додано томатний соус; людей із фото не виведено.",
+      "participants": [],
+      "restrictions": [],
+      "agreements": [
+        {"summary": "Розглянути томатний соус для гриля 500 г як варіант для події.", "source_ids": [901]}
+      ],
+      "warnings": [],
+      "unresolved_questions": [],
+      "source_ids": [901]
+    }
+  },
+  "expect": {
+    "image": {
+      "classification": "product_image",
+      "message_count": 0,
+      "dismissal_reason_required": false,
+      "inclusion": "included"
+    },
+    "event": {"people_count": 4},
+    "state": {
+      "participant_count": 0,
+      "source_ids": [901]
+    }
+  }
+}

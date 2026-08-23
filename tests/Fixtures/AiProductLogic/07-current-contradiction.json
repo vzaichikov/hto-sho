@@ -1,0 +1,86 @@
+{
+  "id": "07-current-contradiction",
+  "title": "Надёжно разрешить актуальное противоречие нельзя",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Посиденьки у Романа",
+    "description": "Два переслані шматки чату, порядок між ними невідомий.",
+    "alcohol_planned": false,
+    "people_count": null,
+    "budget_amount": null,
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "cropped-forward-a",
+      "batch_uploaded_at": "2026-08-22T21:10:00+03:00",
+      "sources": [
+        {
+          "source_id": 701,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-22T21:10:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "Ірина\nЯ буду, рахуйте мене\n18:32",
+          "message_timeline": [
+            {"sequence": 0, "author": "Ірина", "text": "Я буду, рахуйте мене", "visible_date": null, "visible_time": "18:32", "is_quoted": false}
+          ],
+          "source_summary": "Ірина підтверджує участь."
+        }
+      ]
+    },
+    {
+      "upload_batch": "cropped-forward-b",
+      "batch_uploaded_at": "2026-08-22T21:11:00+03:00",
+      "sources": [
+        {
+          "source_id": 702,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-22T21:11:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "Ірина\nНе прийду, не рахуйте\n18:32",
+          "message_timeline": [
+            {"sequence": 0, "author": "Ірина", "text": "Не прийду, не рахуйте", "visible_date": null, "visible_time": "18:32", "is_quoted": false}
+          ],
+          "source_summary": "Ірина відмовляється від участі."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Участь Ірини потребує уточнення через суперечливі одночасні фрагменти.",
+    "participants": [
+      {"name": "Ірина", "status": "uncertain", "preferences": [], "restrictions": [], "allergies": [], "brings": [], "source_ids": [701, 702]}
+    ],
+    "restrictions": [],
+    "agreements": [],
+    "warnings": [
+      {"message": "Два фрагменти з однаковим видимим часом суперечливо описують участь Ірини; надійного порядку немає.", "source_ids": [701, 702]}
+    ],
+    "unresolved_questions": [
+      {
+        "question_key": "__new__",
+        "question": "Чи буде Ірина?",
+        "impact": "Від відповіді залежить кількість порцій.",
+        "blocking": false,
+        "options": [
+          {"label": "Уточнити в Ірини", "description": "Отримати актуальну відповідь напряму.", "recommended": true},
+          {"label": "Поки не рахувати Ірину", "description": "Не завищувати закупівлю до уточнення.", "recommended": false},
+          {"label": "Закласти запас", "description": "Додати одну резервну порцію.", "recommended": false}
+        ],
+        "source_ids": [701, 702]
+      }
+    ],
+    "source_ids": [701, 702]
+  },
+  "expect": {
+    "state": {
+      "participants": [{"name": "Ірина", "status": "uncertain", "source_ids": [701, 702]}],
+      "warnings_or_unresolved_min": 1,
+      "source_ids": [701, 702]
+    }
+  }
+}

@@ -27,7 +27,7 @@ The model must not treat its own product names, prices, or availability as catal
 
 1. **Authenticate and identify:** establish the OAuth context and, when needed, read the guest profile.
 2. **Plan without cart mutation:** validate that the shopping plan is current and sufficiently resolved for product matching.
-3. **Find candidates:** use available catalog/search tools, current price/availability data, and event constraints to propose specific products.
+3. **Find candidates:** use text search first, then live category and relevant thematic-set browsing, current price/availability data, and event constraints to propose specific products.
 4. **Validate mapping:** ensure every selected item maps back to a generic plan need and violates no allergy or restriction. Keep missing or ambiguous matches visible.
 5. **Mutate only on explicit cart action:** create or update the reviewable cart for the current plan revision.
 6. **Verify:** read the resulting cart or use the MCP response to confirm identifiers, quantities, failures, and checkout URL when the server exposes them.
@@ -37,16 +37,19 @@ Catalog searches and profile reads are non-cart discovery. Adding, removing, or 
 ## Selection Rules
 
 - Match by suitability first, then availability, quantity/pack fit, budget, and preference. Do not optimize price by violating a safety constraint.
-- Do not infer that a product is safe from its title alone when allergy or dietary suitability depends on ingredients or metadata that MCP did not provide.
+- Do not infer that a product is safe from its title alone when allergy or dietary suitability depends on ingredients or metadata that MCP did not provide. After bounded product-detail checks, a product with no disclosed conflict may be staged as `unverified` with a visible package-check warning; an explicitly disclosed forbidden allergen remains rejected.
 - Keep generic plan items separate from chosen Silpo SKUs so the plan remains understandable and can be rematched later.
-- Do not add a substitute that materially changes the menu or violates an explicit preference without surfacing it for review.
-- If no safe or suitable candidate is available, leave the need unresolved instead of forcing a product into the cart.
+- Prefer an exact match, then an explained same-role substitute that preserves category, intended use, and hard known exclusions. Surface the substitution for review instead of encoding fixed product or brand pairs.
+- Category and thematic-set browsing are fallback discovery channels. A matched category may widen to the same role; a thematic collection still needs a product-level identity match. Neither can weaken hard exclusions.
+- Deterministic product evidence, aggregate stock checks, and plan-authoritative quantity math own final coverage. A free-form audit may reopen a need only when a real deterministic gap remains; prose alone must not invalidate an allowed, visibly explained same-role or `unverified` staged item.
+- Leave a need unresolved only when the catalog returns no candidate for either the exact need or reasonable same-role alternatives, or every candidate has a known hard conflict.
 
 ## Mutation and Retry Rules
 
 - Bind every sync attempt to the authenticated user, event, and current plan revision.
 - The discovered server exposes the authenticated user's current cart, not a separate create-cart operation. Inspect the cart before mutation and preserve unrelated products the user added outside Хто Шо?.
 - Prefer an MCP-supported absolute quantity update that converges on the intended cart. The discovered add/update tool is annotated non-idempotent, so re-read the cart before any retry and never blindly repeat a timed-out call.
+- Group repeated staged uses of the same SKU into one aggregate absolute quantity, verify aggregate stock first, and keep `addQuantity=false` semantics.
 - Never clear the whole cart during normal event synchronization. Remove only a line that Хто Шо? previously added for this event and can identify reliably.
 - Stop if the event or plan revision changes during synchronization. The new state needs a new review and sync.
 - Persist cart identifiers and the synchronized plan revision only after the MCP response confirms success.

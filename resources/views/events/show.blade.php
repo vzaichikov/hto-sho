@@ -610,8 +610,18 @@
                         <section class="hidden min-h-72 place-items-center" data-silpo-guard>
                             <div class="max-w-2xl rounded-[26px] border-2 border-orange/40 bg-orange/8 p-6 text-center sm:p-8">
                                 <img class="mx-auto size-24 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="">
-                                <h4 class="mt-3 font-display text-3xl">Без маршруту — ніяк</h4>
+                                <h4 class="mt-3 font-display text-3xl" data-silpo-guard-title>Без маршруту — ніяк</h4>
                                 <p class="mt-3 text-base leading-7 text-muted" data-silpo-guard-message></p>
+                                <div class="mt-5 hidden rounded-[22px] border-2 border-green/35 bg-green-soft/25 p-4 text-left" data-silpo-refresh>
+                                    <p class="text-xs font-extrabold uppercase tracking-[0.14em] text-green-dark">Зміниться тільки час</p>
+                                    <p class="mt-2 font-extrabold" data-silpo-refresh-delivery></p>
+                                    <dl class="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                                        <div class="rounded-2xl bg-paper p-3"><dt class="font-bold text-muted">Було</dt><dd class="mt-1 font-extrabold" data-silpo-refresh-current></dd></div>
+                                        <div class="rounded-2xl bg-paper p-3"><dt class="font-bold text-muted">Стане</dt><dd class="mt-1 font-extrabold text-green-dark" data-silpo-refresh-next></dd></div>
+                                    </dl>
+                                    <p class="mt-3 text-xs leading-5 text-muted">Магазин, адреса, спосіб отримання, товари й налаштування лишаться як є.</p>
+                                    <button class="mt-4 w-full rounded-2xl bg-green px-5 py-3.5 font-extrabold text-white shadow-[3px_3px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:opacity-50" type="button" data-silpo-refresh-submit>Так, змінити лише час</button>
+                                </div>
                                 <div class="mt-5 flex flex-col justify-center gap-3 sm:flex-row">
                                     <a class="hidden rounded-2xl bg-green px-5 py-3.5 font-extrabold text-white shadow-[3px_3px_0_#20201D]" href="#" target="_blank" rel="noopener" data-silpo-guard-action></a>
                                     <button class="rounded-2xl border-2 border-ink bg-paper px-5 py-3.5 font-extrabold transition hover:bg-yellow/35" type="button" data-silpo-recheck>Я вже зробив — перевірити</button>
@@ -642,7 +652,7 @@
                                     </label>
                                     <label class="mt-3 block cursor-pointer rounded-2xl border-2 border-ink/15 p-4 has-checked:border-green has-checked:bg-green-soft/25">
                                         <span class="flex items-center gap-3 font-extrabold"><input class="size-4 accent-green" type="radio" name="silpo-mode" value="auto"> Повний автопілот</span>
-                                        <span class="mt-1 block pl-7 text-sm leading-5 text-muted">Не питає, пропускає безвихідні позиції та чесно позначає неповний кошик.</span>
+                                        <span class="mt-1 block pl-7 text-sm leading-5 text-muted">Не питає, бере найближчі рольові заміни й позначає все, що треба перевірити.</span>
                                     </label>
                                     <button class="mt-4 w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:opacity-50" type="button" data-silpo-start>Нехай іде</button>
                                 </fieldset>
@@ -690,6 +700,12 @@
                                     <input class="min-w-0 flex-1 rounded-2xl border border-ink/20 bg-paper px-4 py-3 outline-none focus:border-green focus:ring-3 focus:ring-green/15" type="text" maxlength="1000" placeholder="Напишіть коротко, що робити" data-silpo-answer>
                                     <button class="rounded-2xl bg-orange px-5 py-3 font-extrabold text-white" type="button" data-silpo-continue>Підказати Гусю</button>
                                 </div>
+                            </div>
+
+                            <div class="mt-5 hidden rounded-[22px] border-2 border-green bg-green-soft/20 p-5" data-silpo-confirmation>
+                                <p class="font-display text-3xl">Останній людський погляд</p>
+                                <p class="mt-2 text-sm leading-6 text-muted">Перевірте реальні товари Сільпо, рольові заміни, знаки питання щодо паковання, кількості й суму. До цього підтвердження Гусь нічого в кошик не записує.</p>
+                                <button class="mt-4 w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="button" data-silpo-confirm>Підтверджую товари — додати в кошик</button>
                             </div>
 
                             <div class="mt-5 hidden rounded-[22px] border border-orange/30 bg-yellow/30 p-4" data-silpo-warnings>

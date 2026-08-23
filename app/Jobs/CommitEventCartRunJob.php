@@ -311,7 +311,7 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
     private function canCommit(?EventCartRun $run): bool
     {
         return $run !== null
-            && $run->status === CartRunStatus::Running
+            && $run->status === CartRunStatus::Committing
             && $run->phase === CartRunPhase::ReadyToCommit
             && $run->cursor === $this->expectedCursor;
     }

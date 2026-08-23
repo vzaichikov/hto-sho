@@ -1,0 +1,52 @@
+{
+  "id": "08-irrelevant-image",
+  "title": "Рабочий чат классифицируется как irrelevant",
+  "pipeline": "image_context",
+  "organizer_context": {
+    "title": "Пікнік після роботи",
+    "description": "Плануємо їжу на суботній пікнік.",
+    "alcohol_planned": false,
+    "people_count": 5,
+    "budget_amount": "2500.00",
+    "currency": "UAH"
+  },
+  "image": {
+    "path": "images/irrelevant-work-chat.png",
+    "mime_type": "image/png",
+    "source_id": 801,
+    "upload_batch": "wrong-work-chat",
+    "position": 0,
+    "uploaded_at": "2026-08-23T10:00:00+03:00"
+  },
+  "model_response": {
+    "image": {
+      "classification": "irrelevant",
+      "ocr_text": "DevOps / нічний реліз. Хто перезапускав nginx на stage?",
+      "message_timeline": [],
+      "summary": "",
+      "dismissal_reason": "Це робочий чат про сервер і реліз, а не про гостей, їжу чи закупи для події. Гусь відклав скриншот убік."
+    },
+    "context": {
+      "summary": "Є лише задум пікніка без придатних повідомлень.",
+      "participants": [],
+      "restrictions": [],
+      "agreements": [],
+      "warnings": [],
+      "unresolved_questions": [],
+      "source_ids": []
+    }
+  },
+  "expect": {
+    "image": {
+      "classification": "irrelevant",
+      "message_count": 0,
+      "dismissal_reason_required": true,
+      "inclusion": "dismissed"
+    },
+    "event": {"people_count": 5},
+    "state": {
+      "participant_count": 0,
+      "source_ids": []
+    }
+  }
+}

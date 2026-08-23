@@ -30,30 +30,34 @@ final readonly class CartAgentDecisionData
             'audit' => ['required', 'array'],
         ])->validate();
 
-        if (in_array($validated['action'], ['select', 'inspect'], true)
+        $action = $validated['action'];
+        $question = $validated['question'] ?? null;
+
+        if (in_array($action, ['select', 'inspect'], true)
             && blank($validated['selected_product_id'] ?? null)) {
-            throw new UnexpectedValueException('Agent selected no catalog product.');
+            $action = 'ask';
+            $question = $question ?: $validated['reason'];
         }
 
-        if ($validated['action'] === 'select' && ! is_numeric($validated['quantity'] ?? null)) {
+        if ($action === 'select' && ! is_numeric($validated['quantity'] ?? null)) {
             throw new UnexpectedValueException('Agent selected no product quantity.');
         }
 
-        if ($validated['action'] === 'retry' && blank($validated['query'] ?? null)) {
+        if ($action === 'retry' && blank($validated['query'] ?? null)) {
             throw new UnexpectedValueException('Agent requested an empty search query.');
         }
 
-        if ($validated['action'] === 'ask' && blank($validated['question'] ?? null)) {
+        if ($action === 'ask' && blank($question)) {
             throw new UnexpectedValueException('Agent requested an empty human question.');
         }
 
         return new self(
-            action: $validated['action'],
+            action: $action,
             selectedProductId: $validated['selected_product_id'] ?? null,
             query: $validated['query'] ?? null,
             quantity: isset($validated['quantity']) ? (float) $validated['quantity'] : null,
             reason: $validated['reason'],
-            question: $validated['question'] ?? null,
+            question: $question,
             audit: CartAgentAuditData::from($validated['audit']),
         );
     }

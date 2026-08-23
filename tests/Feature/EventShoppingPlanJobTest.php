@@ -60,6 +60,13 @@ class EventShoppingPlanJobTest extends TestCase
                 && str_contains($prompt, '"alcohol_planned": false')
                 && str_contains($prompt, 'не вказуй SKU, бренди Сільпо, ціни')
                 && str_contains($prompt, 'не дублюй це в покупках')
+                && str_contains($prompt, 'включи саме цей товар як резерв')
+                && str_contains($prompt, 'не замінюй названий товар')
+                && str_contains($prompt, 'свинина лишається свининою для шашлику')
+                && str_contains($prompt, 'телятина — телятиною для стейків')
+                && str_contains($prompt, '350–500 г сирого мʼяса')
+                && str_contains($prompt, 'сертифікований безглютеновий хліб або хлібці')
+                && str_contains($prompt, 'ніколи не на абстрактне «щось безглютенове»')
                 && str_contains($prompt, 'алергії та жорсткі обмеження — критичні факти');
         });
     }
@@ -109,6 +116,58 @@ class EventShoppingPlanJobTest extends TestCase
 
         (new BuildEventShoppingPlanJob($event->id, 1))
             ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
+    }
+
+    public function test_items_already_confirmed_as_contributions_are_removed_from_the_plan(): void
+    {
+        $state = $this->currentEvent()->state;
+        $state['participants'] = [[
+            'name' => 'Оля',
+            'status' => 'confirmed',
+            'preferences' => [],
+            'restrictions' => [],
+            'allergies' => [],
+            'brings' => ['800 г хумусу'],
+            'source_ids' => [],
+        ], [
+            'name' => 'Богдан',
+            'status' => 'confirmed',
+            'preferences' => [],
+            'restrictions' => [],
+            'allergies' => [],
+            'brings' => ['2 пачки вугілля по 2,5 кг', 'розпал'],
+            'source_ids' => [],
+        ]];
+        $event = $this->currentEvent(['state' => $state]);
+        $plan = $this->planPayload();
+        $plan['items'][2]['name'] = 'Овочі для гриля';
+        $plan['items'][2]['quantity'] = 4;
+        $plan['items'][] = [
+            'name' => 'Хумус',
+            'category' => 'food',
+            'quantity' => 0.8,
+            'unit' => 'кг',
+            'note' => 'Не дублювати.',
+        ];
+        $plan['items'][] = [
+            'name' => 'Вугілля для мангалу',
+            'category' => 'supplies',
+            'quantity' => 2,
+            'unit' => 'пачки',
+            'note' => 'Не дублювати.',
+        ];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse($plan)),
+        ]);
+
+        (new BuildEventShoppingPlanJob($event->id, 1))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $event->refresh();
+        $this->assertSame(['Вода питна', 'Сік', 'Овочі для гриля'], collect($event->shopping_plan['items'])->pluck('name')->all());
+        $this->assertSame(3, $event->shopping_plan['items'][2]['quantity']);
     }
 
     public function test_creation_confirmation_allows_alcohol_without_a_redundant_confirmation_answer(): void

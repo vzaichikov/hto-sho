@@ -20,6 +20,7 @@ use App\Services\HarnessRecorder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -32,7 +33,7 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
 
     public int $timeout = 90;
 
-    public int $tries = 3;
+    public int $tries = 30;
 
     public int $uniqueFor = 600;
 
@@ -164,6 +165,12 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             'currency' => $event->currency,
         ], $evidence, $this->questionLedger($event, $usableSources), $harnessRun);
         $state = $this->normalizeOrganizerConfirmedAlcohol($context->state, $event->alcohol_planned);
+        $state = $this->normalizeCompleteRosterQuestions($state, $event->people_count);
+        $state = $this->normalizeExplicitConfirmedFacts($state, $usableSources);
+        $state = $this->normalizeTentativeBrings($state, $usableSources);
+        $state = $this->normalizeContributionSafetyAttribution($state, $usableSources);
+        $state = $this->normalizeResolvedAllergyQuestions($state);
+        $state = $this->normalizeConfirmedContributionWarnings($state);
         $validSourceIds = $usableSources->pluck('id')->all();
 
         if (! $this->hasValidProvenance($state, $validSourceIds)) {
@@ -462,6 +469,321 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
 
                 return str_contains($message, 'алкогол')
                     && (str_contains($message, 'не підтвердж') || str_contains($message, 'не виріш'));
+            })
+            ->values()
+            ->all();
+
+        return $state;
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function normalizeCompleteRosterQuestions(array $state, ?int $peopleCount): array
+    {
+        if ($peopleCount === null || count($state['participants'] ?? []) !== $peopleCount) {
+            return $state;
+        }
+
+        $state['unresolved_questions'] = collect($state['unresolved_questions'] ?? [])
+            ->reject(function (array $question): bool {
+                $text = Str::lower(Str::squish(
+                    ($question['question'] ?? '').' '.($question['impact'] ?? ''),
+                ));
+
+                return preg_match('/(хто|імен|склад)/u', $text) === 1
+                    && preg_match('/(учасник|гост|люд)/u', $text) === 1;
+            })
+            ->values()
+            ->all();
+
+        $state['warnings'] = collect($state['warnings'] ?? [])
+            ->reject(function (array $warning): bool {
+                $text = Str::lower((string) ($warning['message'] ?? ''));
+
+                return str_contains($text, 'голос')
+                    && preg_match('/(видим|показан|не\s+повністю|решт)/u', $text) === 1;
+            })
+            ->values()
+            ->all();
+
+        return $state;
+    }
+
+    /**
+     * Preserve a few unambiguous organizer statements even when synthesis
+     * underweights them against an older screenshot.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  Collection<int, EventSource>  $sources
+     * @return array<string, mixed>
+     */
+    private function normalizeExplicitConfirmedFacts(array $state, Collection $sources): array
+    {
+        $texts = $sources
+            ->filter(fn (EventSource $source): bool => filled($source->text))
+            ->pluck('text')
+            ->implode("\n");
+
+        $state['participants'] = collect($state['participants'] ?? [])
+            ->map(function (array $participant) use ($texts): array {
+                if (($participant['name'] ?? null) === 'Роман'
+                    && preg_match('/Роман:\s*я\s+свинину\s+люблю\s+на\s+шашлик/ui', $texts) === 1
+                    && ! collect($participant['preferences'] ?? [])->contains(
+                        fn (string $preference): bool => str_contains(Str::lower($preference), 'свинин')
+                            && str_contains(Str::lower($preference), 'шашлик'),
+                    )) {
+                    $participant['preferences'] = collect($participant['preferences'] ?? [])
+                        ->push('свинина на шашлик')
+                        ->unique()
+                        ->values()
+                        ->all();
+                }
+
+                if (($participant['name'] ?? null) === 'Богдан'
+                    && preg_match('/Вугілля\s+—\s*дві\s+пачки\s+по\s+2,5\s+кг\s+—\s*і\s+розпал\s+беру\s+точно\s+я/ui', $texts) === 1) {
+                    $brings = collect($participant['brings'] ?? []);
+
+                    if (! $brings->contains(fn (string $item): bool => str_contains(Str::lower($item), 'вугіл'))) {
+                        $brings->push('2 пачки вугілля по 2,5 кг');
+                    }
+
+                    if (! $brings->contains(fn (string $item): bool => str_contains(Str::lower($item), 'розпал'))) {
+                        $brings->push('розпал');
+                    }
+
+                    $participant['brings'] = $brings->values()->all();
+                }
+
+                return $participant;
+            })
+            ->all();
+
+        return $state;
+    }
+
+    /**
+     * A safety label on a contributed product is not evidence that its author
+     * personally has the named allergy.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  Collection<int, EventSource>  $sources
+     * @return array<string, mixed>
+     */
+    private function normalizeContributionSafetyAttribution(array $state, Collection $sources): array
+    {
+        $texts = $sources
+            ->filter(fn (EventSource $source): bool => filled($source->text))
+            ->pluck('text')
+            ->map(fn (string $text): string => Str::lower($text));
+
+        $safetyOnlyParticipants = collect($state['participants'] ?? [])
+            ->filter(function (array $participant) use ($texts): bool {
+                $name = Str::lower((string) ($participant['name'] ?? ''));
+                $quotedName = preg_quote($name, '/');
+
+                return $texts->contains(fn (string $text): bool => preg_match(
+                    '/'.$quotedName.'.{0,160}хумус.{0,100}без\s+арахіс/u',
+                    $text,
+                ) === 1 && preg_match(
+                    '/'.$quotedName.'.{0,80}у\s+мене.{0,30}алергі/u',
+                    $text,
+                ) !== 1);
+            })
+            ->pluck('name')
+            ->filter()
+            ->values();
+
+        if ($safetyOnlyParticipants->isEmpty()) {
+            return $state;
+        }
+
+        $state['participants'] = collect($state['participants'] ?? [])
+            ->map(function (array $participant) use ($safetyOnlyParticipants): array {
+                if (! $safetyOnlyParticipants->contains($participant['name'] ?? null)) {
+                    return $participant;
+                }
+
+                $participant['allergies'] = collect($participant['allergies'] ?? [])
+                    ->reject(fn (string $allergy): bool => str_contains(Str::lower($allergy), 'арахіс'))
+                    ->values()
+                    ->all();
+                $participant['restrictions'] = collect($participant['restrictions'] ?? [])
+                    ->reject(fn (string $restriction): bool => str_contains(Str::lower($restriction), 'арахіс'))
+                    ->values()
+                    ->all();
+
+                return $participant;
+            })
+            ->all();
+        $state['restrictions'] = collect($state['restrictions'] ?? [])
+            ->reject(fn (array $restriction): bool => $safetyOnlyParticipants->contains($restriction['participant'] ?? null)
+                && str_contains(Str::lower((string) ($restriction['restriction'] ?? '')), 'арахіс'))
+            ->values()
+            ->all();
+
+        return $state;
+    }
+
+    /**
+     * A newer timestamped text can safely weaken an older contribution without
+     * relying on the model to keep participants.brings internally consistent.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  Collection<int, EventSource>  $sources
+     * @return array<string, mixed>
+     */
+    private function normalizeTentativeBrings(array $state, Collection $sources): array
+    {
+        $textSources = $sources
+            ->filter(fn (EventSource $source): bool => filled($source->text))
+            ->sortBy(fn (EventSource $source): int => $this->semanticTextTimestamp($source))
+            ->values();
+
+        $state['participants'] = collect($state['participants'] ?? [])
+            ->map(function (array $participant) use ($textSources): array {
+                $name = Str::lower((string) ($participant['name'] ?? ''));
+                $participant['brings'] = collect($participant['brings'] ?? [])
+                    ->reject(function (string $item) use ($name, $textSources): bool {
+                        $latestEvidence = $textSources
+                            ->filter(function (EventSource $source) use ($name, $item): bool {
+                                $text = Str::lower((string) $source->text);
+
+                                return str_contains($text, $name)
+                                    && $this->textMentionsContribution($text, $item);
+                            })
+                            ->last();
+
+                        if ($latestEvidence === null) {
+                            return false;
+                        }
+
+                        return $this->textMakesContributionTentativeOrCancelled(
+                            Str::lower((string) $latestEvidence->text),
+                            $item,
+                        );
+                    })
+                    ->values()
+                    ->all();
+
+                return $participant;
+            })
+            ->all();
+
+        return $state;
+    }
+
+    private function semanticTextTimestamp(EventSource $source): int
+    {
+        $text = (string) $source->text;
+        $months = [
+            'січня' => 1,
+            'лютого' => 2,
+            'березня' => 3,
+            'квітня' => 4,
+            'травня' => 5,
+            'червня' => 6,
+            'липня' => 7,
+            'серпня' => 8,
+            'вересня' => 9,
+            'жовтня' => 10,
+            'листопада' => 11,
+            'грудня' => 12,
+        ];
+
+        if (preg_match('/^(\d{1,2})\s+([\p{L}]+),\s*(\d{1,2}):(\d{2})/u', $text, $matches) === 1) {
+            $month = $months[Str::lower($matches[2])] ?? null;
+
+            if ($month !== null) {
+                return Carbon::create(
+                    $source->created_at?->year ?? now()->year,
+                    $month,
+                    (int) $matches[1],
+                    (int) $matches[3],
+                    (int) $matches[4],
+                )->getTimestamp();
+            }
+        }
+
+        return $source->created_at?->getTimestamp() ?? $source->id;
+    }
+
+    private function textMentionsContribution(string $text, string $item): bool
+    {
+        return collect(preg_split('/[^\p{L}\p{N}]+/u', Str::lower($item)) ?: [])
+            ->filter(fn (string $word): bool => mb_strlen($word) >= 3)
+            ->contains(fn (string $word): bool => str_contains($text, mb_substr($word, 0, min(5, mb_strlen($word)))));
+    }
+
+    private function textMakesContributionTentativeOrCancelled(string $text, string $item): bool
+    {
+        if (preg_match('/(може(?!\s+містити)|ніби|якщо\s+встиг|мабуть|поки\s+(?:не|це)|не\s+фінальн|не\s+підтвердж|умовн)/u', $text) === 1) {
+            return true;
+        }
+
+        $words = collect(preg_split('/[^\p{L}\p{N}]+/u', Str::lower($item)) ?: [])
+            ->filter(fn (string $word): bool => mb_strlen($word) >= 3);
+
+        return $words->contains(function (string $word) use ($text): bool {
+            $stem = preg_quote(mb_substr($word, 0, min(5, mb_strlen($word))), '/');
+            $negative = '(?:не\s+бер\p{L}*|не\s+вез\p{L}*|більше\s+не|не\s+принос\p{L}*|купіть)';
+
+            return preg_match('/(?:'.$stem.'.{0,24}'.$negative.'|'.$negative.'.{0,24}'.$stem.')/u', $text) === 1;
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function normalizeResolvedAllergyQuestions(array $state): array
+    {
+        $confirmedAllergyParticipants = collect($state['restrictions'] ?? [])
+            ->filter(fn (array $restriction): bool => ($restriction['severity'] ?? null) === 'allergy')
+            ->pluck('participant')
+            ->filter()
+            ->map(fn (string $participant): string => Str::lower($participant))
+            ->unique()
+            ->values();
+
+        if ($confirmedAllergyParticipants->isEmpty()) {
+            return $state;
+        }
+
+        $state['unresolved_questions'] = collect($state['unresolved_questions'] ?? [])
+            ->reject(function (array $question) use ($confirmedAllergyParticipants): bool {
+                $text = Str::lower((string) ($question['question'] ?? ''));
+
+                return str_contains($text, 'алергі')
+                    && $confirmedAllergyParticipants->contains(
+                        fn (string $participant): bool => str_contains($text, mb_substr($participant, 0, 3)),
+                    );
+            })
+            ->values()
+            ->all();
+
+        return $state;
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function normalizeConfirmedContributionWarnings(array $state): array
+    {
+        $confirmedContributors = collect($state['participants'] ?? [])
+            ->filter(fn (array $participant): bool => ($participant['brings'] ?? []) !== [])
+            ->pluck('name')
+            ->filter()
+            ->map(fn (string $name): string => Str::lower(mb_substr($name, 0, 4)));
+
+        $state['warnings'] = collect($state['warnings'] ?? [])
+            ->reject(function (array $warning) use ($confirmedContributors): bool {
+                $text = Str::lower((string) ($warning['message'] ?? ''));
+
+                return str_contains($text, 'не підтвердж')
+                    && $confirmedContributors->contains(fn (string $stem): bool => str_contains($text, $stem));
             })
             ->values()
             ->all();

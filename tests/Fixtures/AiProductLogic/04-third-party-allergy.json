@@ -1,0 +1,57 @@
+{
+  "id": "04-third-party-allergy",
+  "title": "Алергія іншої людини не прилипає до автора",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "День народження Маші",
+    "description": "Замовляємо снеки й торт, перевіряємо обмеження.",
+    "alcohol_planned": false,
+    "people_count": 7,
+    "budget_amount": "3200.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "telegram-allergy-reminder",
+      "batch_uploaded_at": "2026-08-21T16:28:00+03:00",
+      "sources": [
+        {
+          "source_id": 401,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-21T16:28:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "Олег\nНе забудьте, у Маші сильна алергія на арахіс. Соус теж гляньте по складу\n16:27\nКатя\nага, без експериментів цього разу\n16:28",
+          "message_timeline": [
+            {"sequence": 0, "author": "Олег", "text": "Не забудьте, у Маші сильна алергія на арахіс. Соус теж гляньте по складу", "visible_date": "21.08.2026", "visible_time": "16:27", "is_quoted": false},
+            {"sequence": 1, "author": "Катя", "text": "ага, без експериментів цього разу", "visible_date": "21.08.2026", "visible_time": "16:28", "is_quoted": false}
+          ],
+          "source_summary": "Олег нагадує про сильну алергію Маші на арахіс."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Для Маші потрібне меню без арахісу.",
+    "participants": [
+      {"name": "Маша", "status": "unknown", "preferences": [], "restrictions": ["без арахісу"], "allergies": ["арахіс"], "brings": [], "source_ids": [401]}
+    ],
+    "restrictions": [
+      {"participant": "Маша", "restriction": "сильна алергія на арахіс", "severity": "allergy", "source_ids": [401]}
+    ],
+    "agreements": [],
+    "warnings": [],
+    "unresolved_questions": [],
+    "source_ids": [401]
+  },
+  "expect": {
+    "event": {"people_count": 7},
+    "state": {
+      "participants": [{"name": "Маша", "allergies": ["арахіс"], "source_ids": [401]}],
+      "restrictions": [{"participant": "Маша", "severity": "allergy", "all": ["арахіс"], "source_ids": [401]}],
+      "not_restrictions": [{"participant": "Олег", "all": ["арахіс"]}],
+      "source_ids": [401]
+    }
+  }
+}

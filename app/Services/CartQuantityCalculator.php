@@ -37,9 +37,8 @@ final class CartQuantityCalculator
 
         $quantity = $this->quantityFromPack($need, $product) ?? $modelQuantity;
         $quantity = ceil(($quantity - 0.0000001) / $step) * $step;
-        $quantity = min($quantity, $stock);
 
-        if ($quantity <= 0) {
+        if ($quantity <= 0 || $quantity > $stock + 0.0001) {
             throw new UnexpectedValueException('Selected product quantity is not available.');
         }
 
@@ -50,6 +49,65 @@ final class CartQuantityCalculator
     public function estimatedTotal(array $product, float $quantity): float
     {
         return round((float) data_get($product, 'price', 0) * $quantity, 2);
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $product
+     */
+    public function packageRoundingNote(array $need, array $product, float $quantity): ?string
+    {
+        $needAmount = $this->amountInBaseUnit((float) data_get($need, 'quantity'), (string) data_get($need, 'unit'));
+
+        if ($needAmount === null
+            || ! in_array($needAmount['group'], ['volume', 'weight'], true)
+            || (bool) data_get($product, 'weighted', false)) {
+            return null;
+        }
+
+        $displayRatio = (string) data_get($product, 'displayRatio', data_get($product, 'display_ratio', ''));
+        $pack = $this->packAmount($displayRatio);
+
+        if ($pack === null || $pack['group'] !== $needAmount['group']) {
+            return null;
+        }
+
+        $actualAmount = $pack['amount'] * $quantity;
+
+        if (abs($actualAmount - $needAmount['amount']) < 0.01) {
+            return null;
+        }
+
+        $divisor = 1000;
+        $unit = $needAmount['group'] === 'volume' ? 'л' : 'кг';
+        $actual = $this->formatAmount($actualAmount / $divisor);
+        $requested = $this->formatAmount($needAmount['amount'] / $divisor);
+        $packages = $this->formatAmount($quantity);
+
+        return "⚠️ Пакування {$displayRatio}: {$packages} шт. дають {$actual} {$unit} замість {$requested} {$unit}.";
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $product
+     */
+    public function packageOverageInBaseUnits(array $need, array $product): ?float
+    {
+        $needAmount = $this->amountInBaseUnit((float) data_get($need, 'quantity'), (string) data_get($need, 'unit'));
+
+        if ($needAmount === null || (bool) data_get($product, 'weighted', false)) {
+            return $needAmount !== null && $needAmount['group'] === 'weight' ? 0.0 : null;
+        }
+
+        $pack = $this->packAmount((string) data_get($product, 'displayRatio', data_get($product, 'display_ratio', '')));
+
+        if ($pack === null || $pack['group'] !== $needAmount['group'] || $pack['amount'] <= 0) {
+            return null;
+        }
+
+        $packages = ceil($needAmount['amount'] / $pack['amount']);
+
+        return max(0.0, ($packages * $pack['amount']) - $needAmount['amount']);
     }
 
     /**
@@ -71,6 +129,11 @@ final class CartQuantityCalculator
         }
 
         $pack = $this->packAmount((string) data_get($product, 'displayRatio', data_get($product, 'display_ratio', '')));
+
+        if (($pack === null || $pack['group'] !== $needAmount['group'])
+            && $needAmount['group'] === 'count') {
+            return ceil($needAmount['amount']);
+        }
 
         if ($pack === null || $pack['group'] !== $needAmount['group'] || $pack['amount'] <= 0) {
             return null;
@@ -102,8 +165,18 @@ final class CartQuantityCalculator
             'г', 'грам', 'грами', 'грамів' => ['amount' => $quantity, 'group' => 'weight'],
             'л', 'літр', 'літри', 'літрів' => ['amount' => $quantity * 1000, 'group' => 'volume'],
             'мл', 'мілілітр', 'мілілітри', 'мілілітрів' => ['amount' => $quantity, 'group' => 'volume'],
-            'шт', 'штука', 'штуки', 'штук', 'пачка', 'пачки', 'пачок', 'упаковка', 'упаковки', 'упаковок' => ['amount' => $quantity, 'group' => 'count'],
+            'шт', 'штука', 'штуки', 'штук',
+            'пачка', 'пачки', 'пачок',
+            'упаковка', 'упаковки', 'упаковок',
+            'банка', 'банки', 'банок',
+            'пляшка', 'пляшки', 'пляшок',
+            'пучок', 'пучки', 'пучків' => ['amount' => $quantity, 'group' => 'count'],
             default => null,
         };
+    }
+
+    private function formatAmount(float $amount): string
+    {
+        return rtrim(rtrim(number_format($amount, 3, '.', ''), '0'), '.');
     }
 }

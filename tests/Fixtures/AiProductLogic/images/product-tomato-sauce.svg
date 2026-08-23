@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff5dc"/>
+      <stop offset="1" stop-color="#f1d6a8"/>
+    </linearGradient>
+    <linearGradient id="jar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f47745"/>
+      <stop offset="1" stop-color="#b52825"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <ellipse cx="512" cy="895" rx="264" ry="54" fill="#a77548" opacity=".24"/>
+  <rect x="338" y="174" width="348" height="116" rx="32" fill="#3e2a20"/>
+  <rect x="316" y="250" width="392" height="612" rx="84" fill="url(#jar)" stroke="#8c2422" stroke-width="12"/>
+  <rect x="348" y="410" width="328" height="302" rx="28" fill="#fff9e9"/>
+  <circle cx="512" cy="500" r="62" fill="#d73d32"/>
+  <path d="M512 438c18-30 47-40 74-32-10 30-35 48-74 50-34-6-54-24-61-51 27-5 47 5 61 33z" fill="#3c8a4e"/>
+  <g font-family="DejaVu Sans" text-anchor="middle" fill="#3e2a20">
+    <text x="512" y="608" font-size="39" font-weight="700">СОУС ТОМАТНИЙ</text>
+    <text x="512" y="660" font-size="30">для гриля • лагідний</text>
+    <text x="512" y="756" font-size="27">500 г</text>
+  </g>
+  <rect x="350" y="796" width="324" height="42" rx="21" fill="#fff" opacity=".78"/>
+  <text x="512" y="825" font-family="DejaVu Sans" font-size="20" text-anchor="middle" fill="#4d3b30">без арахісу • без глютену</text>
+</svg>

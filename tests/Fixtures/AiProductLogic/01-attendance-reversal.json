@@ -1,0 +1,73 @@
+{
+  "id": "01-attendance-reversal",
+  "title": "Людина передумала і відмовилась",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Шашлики в неділю",
+    "description": "Збираємось у дворі, чат трохи хаотичний.",
+    "alcohol_planned": false,
+    "people_count": 6,
+    "budget_amount": "2400.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "telegram-attendance-1",
+      "batch_uploaded_at": "2026-08-20T18:14:00+03:00",
+      "sources": [
+        {
+          "source_id": 101,
+          "kind": "text",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-20T18:14:00+03:00",
+          "position": 0,
+          "text": "Telegram, 20 серпня\n18:12 Надя: Я буду, записуйте мене 🙂\n18:13 Роман: супер, тоді нас шість\n18:14 Надя: по їжі без різниці"
+        }
+      ]
+    },
+    {
+      "upload_batch": "telegram-attendance-2",
+      "batch_uploaded_at": "2026-08-22T09:42:00+03:00",
+      "sources": [
+        {
+          "source_id": 102,
+          "kind": "text",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-22T09:42:00+03:00",
+          "position": 0,
+          "text": "Telegram, 22 серпня\n09:41 Надя: Народ, я все ж не прийду, захворіла. Не рахуйте мене\n09:42 Роман: ок, одужуй"
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Актуальний склад компанії враховує відмову Наді.",
+    "participants": [
+      {
+        "name": "Надя",
+        "status": "declined",
+        "preferences": [],
+        "restrictions": [],
+        "allergies": [],
+        "brings": [],
+        "source_ids": [102]
+      }
+    ],
+    "restrictions": [],
+    "agreements": [],
+    "warnings": [],
+    "unresolved_questions": [],
+    "source_ids": [101, 102]
+  },
+  "expect": {
+    "event": {"people_count": 6},
+    "state": {
+      "participant_count": 1,
+      "participants": [
+        {"name": "Надя", "status": "declined", "source_ids": [102]}
+      ],
+      "warnings_max": 0,
+      "source_ids": [101, 102]
+    }
+  }
+}

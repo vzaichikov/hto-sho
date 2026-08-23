@@ -1,0 +1,92 @@
+{
+  "id": "10-peanut-allergy-survives-merge",
+  "title": "Критическая аллергия на арахис переживает большой merge",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Літній день народження",
+    "description": "Багато різних джерел про гостей, меню, місце й покупки.",
+    "alcohol_planned": true,
+    "people_count": 9,
+    "budget_amount": "5200.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "critical-allergy",
+      "batch_uploaded_at": "2026-08-18T13:07:00+03:00",
+      "sources": [
+        {
+          "source_id": 1001,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-18T13:07:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "Марта\nЯ буду. В мене сильна алергія на арахіс, навіть соуси перевіряйте, будь ласка\n13:06",
+          "message_timeline": [
+            {"sequence": 0, "author": "Марта", "text": "Я буду. В мене сильна алергія на арахіс, навіть соуси перевіряйте, будь ласка", "visible_date": "18.08.2026", "visible_time": "13:06", "is_quoted": false}
+          ],
+          "source_summary": "Марта підтверджує участь і сильну алергію на арахіс."
+        }
+      ]
+    },
+    {
+      "upload_batch": "menu-noise",
+      "batch_uploaded_at": "2026-08-20T19:26:00+03:00",
+      "sources": [
+        {"source_id": 1002, "kind": "text", "origin": "organizer_context", "uploaded_at": "2026-08-20T19:24:00+03:00", "position": 0, "text": "19:20 Оля: Я беру два лимонади і хумус\n19:21 Роман: мʼяса десь 3 кг вистачить?\n19:24 Іра: ще овочі на гриль"},
+        {"source_id": 1003, "kind": "text", "origin": "organizer_context", "uploaded_at": "2026-08-20T19:25:00+03:00", "position": 1, "text": "Локація: альтанка №4, мангал там є. Серветки й лід купити."},
+        {"source_id": 1004, "kind": "text", "origin": "organizer_context", "uploaded_at": "2026-08-20T19:26:00+03:00", "position": 2, "text": "Бюджет орієнтовно 5200 грн. Мем про голодного кота нижче можна ігнорувати 😅"}
+      ]
+    },
+    {
+      "upload_batch": "later-preference",
+      "batch_uploaded_at": "2026-08-22T18:53:00+03:00",
+      "sources": [
+        {
+          "source_id": 1005,
+          "kind": "image",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-22T18:53:00+03:00",
+          "position": 0,
+          "classification": "chat_screenshot",
+          "ocr_text": "Діма\nА я арахіс обожнюю, але Марті окремо все без нього, без геройства\n18:52",
+          "message_timeline": [
+            {"sequence": 0, "author": "Діма", "text": "А я арахіс обожнюю, але Марті окремо все без нього, без геройства", "visible_date": "22.08.2026", "visible_time": "18:52", "is_quoted": false}
+          ],
+          "source_summary": "Діма любить арахіс і підтверджує, що для Марти все має бути без нього."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Меню й покупки враховують сильну алергію Марти на арахіс.",
+    "participants": [
+      {"name": "Марта", "status": "confirmed", "preferences": [], "restrictions": ["усе без арахісу"], "allergies": ["сильна алергія на арахіс"], "brings": [], "source_ids": [1001, 1005]},
+      {"name": "Оля", "status": "unknown", "preferences": [], "restrictions": [], "allergies": [], "brings": ["два лимонади", "хумус"], "source_ids": [1002]},
+      {"name": "Діма", "status": "unknown", "preferences": ["любить арахіс"], "restrictions": [], "allergies": [], "brings": [], "source_ids": [1005]}
+    ],
+    "restrictions": [
+      {"participant": "Марта", "restriction": "сильна алергія на арахіс; перевіряти також склад соусів", "severity": "allergy", "source_ids": [1001, 1005]}
+    ],
+    "agreements": [
+      {"summary": "Купити серветки та лід.", "source_ids": [1003]},
+      {"summary": "Використовувати альтанку №4 з наявним мангалом.", "source_ids": [1003]}
+    ],
+    "warnings": [],
+    "unresolved_questions": [],
+    "source_ids": [1001, 1002, 1003, 1004, 1005]
+  },
+  "expect": {
+    "event": {"people_count": 9},
+    "state": {
+      "participants": [
+        {"name": "Марта", "status": "confirmed", "allergies": ["арахіс"], "restrictions": ["арахіс"]},
+        {"name": "Діма", "preferences": ["арахіс"], "not_allergies": ["арахіс"]}
+      ],
+      "restrictions": [{"participant": "Марта", "severity": "allergy", "all": ["арахіс"], "source_ids": [1001, 1005]}],
+      "not_restrictions": [{"participant": "Діма", "all": ["арахіс"]}],
+      "source_ids": [1001, 1002, 1003, 1004, 1005]
+    }
+  }
+}

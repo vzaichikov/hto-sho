@@ -17,6 +17,7 @@ use App\Services\HarnessRecorder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
@@ -81,6 +82,8 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
             'budget_amount' => $event->budget_amount,
             'currency' => $event->currency,
         ], $event->state, $planCorrections, $harnessRun)->plan;
+        $plan = $this->removeContributedItems($plan, $event->state);
+        $plan = $this->normalizeServingQuantities($plan);
 
         $this->guardPlanSafety($plan, $event->state, $event->alcohol_planned);
 
@@ -210,5 +213,69 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
         if (! $alcoholPlanned && $hasUnansweredAlcoholQuestion && $hasAlcoholItems) {
             throw new UnexpectedValueException('Shopping plan assumes alcohol before the organizer answers.');
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $plan
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function removeContributedItems(array $plan, array $state): array
+    {
+        $contributions = collect($state['participants'] ?? [])
+            ->flatMap(fn (array $participant): array => $participant['brings'] ?? [])
+            ->values();
+
+        $plan['items'] = collect($plan['items'] ?? [])
+            ->reject(function (array $item) use ($contributions): bool {
+                $itemStems = $this->significantStems((string) ($item['name'] ?? ''));
+
+                return $contributions->contains(function (string $contribution) use ($itemStems): bool {
+                    return $itemStems->intersect($this->significantStems($contribution))->isNotEmpty();
+                });
+            })
+            ->values()
+            ->all();
+
+        return $plan;
+    }
+
+    /** @return Collection<int, string> */
+    private function significantStems(string $text): Collection
+    {
+        return collect(preg_split('/[^\p{L}\p{N}]+/u', Str::lower($text)) ?: [])
+            ->filter(fn (string $word): bool => mb_strlen($word) >= 4)
+            ->map(fn (string $word): string => mb_substr($word, 0, 4))
+            ->reject(fn (string $stem): bool => in_array($stem, ['пачк', 'набі', 'упак', 'пляш', 'паке'], true))
+            ->unique()
+            ->values();
+    }
+
+    /**
+     * @param  array<string, mixed>  $plan
+     * @return array<string, mixed>
+     */
+    private function normalizeServingQuantities(array $plan): array
+    {
+        $serves = (int) ($plan['serves'] ?? 0);
+
+        if ($serves < 1) {
+            return $plan;
+        }
+
+        $plan['items'] = collect($plan['items'] ?? [])
+            ->map(function (array $item) use ($serves): array {
+                $name = Str::lower((string) ($item['name'] ?? ''));
+                $unit = Str::lower((string) ($item['unit'] ?? ''));
+
+                if (str_contains($name, 'овоч') && str_contains($name, 'грил') && $unit === 'кг') {
+                    $item['quantity'] = min((float) $item['quantity'], round($serves * 0.375, 2));
+                }
+
+                return $item;
+            })
+            ->all();
+
+        return $plan;
     }
 }

@@ -7,9 +7,11 @@ use App\CartRunStatus;
 use App\HarnessEntryKind;
 use App\Jobs\AdvanceEventCartRunJob;
 use App\Models\EventCartRun;
+use App\Services\CartQuantityCalculator;
 use App\Services\GooseCartStatusService;
 use App\Services\HarnessRecorder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 final class ContinueEventCartRunAction
@@ -17,6 +19,7 @@ final class ContinueEventCartRunAction
     public function __construct(
         private readonly GooseCartStatusService $statuses,
         private readonly HarnessRecorder $harnessRecorder,
+        private readonly CartQuantityCalculator $quantities,
     ) {}
 
     public function execute(EventCartRun $run, string $answer): EventCartRun
@@ -35,7 +38,7 @@ final class ContinueEventCartRunAction
                 $this->harnessRecorder->append(
                     run: $harnessRun,
                     kind: HarnessEntryKind::Answer,
-                    title: $question ?? 'Відповідь організатора',
+                    title: Str::limit($question ?? 'Відповідь організатора', 240),
                     message: $answer,
                     metadata: ['cart_run_id' => $lockedRun->id],
                 );
@@ -50,8 +53,25 @@ final class ContinueEventCartRunAction
                 $state['audit_answer'] = $answer;
             }
 
-            $nextPhase = CartRunPhase::tryFrom((string) data_get($state, 'blocked_phase'))
+            $blockedPhase = CartRunPhase::tryFrom((string) data_get($state, 'blocked_phase'));
+            $nextPhase = $blockedPhase
                 ?? CartRunPhase::Deciding;
+            $requestedQuery = $this->requestedSearchQuery($answer);
+
+            if (isset($state['needs'][$currentIndex])
+                && in_array($blockedPhase, [CartRunPhase::Searching, CartRunPhase::Deciding], true)
+                && $requestedQuery !== null) {
+                $attemptedQueries = collect(data_get($state, "needs.{$currentIndex}.attempts", []))
+                    ->pluck('query')
+                    ->filter(fn (mixed $query): bool => is_string($query));
+
+                if (! $attemptedQueries->contains($requestedQuery)) {
+                    $state['needs'][$currentIndex]['search_query'] = $requestedQuery;
+                    $state['needs'][$currentIndex]['assisted_search_pending'] = true;
+                    $nextPhase = CartRunPhase::Searching;
+                }
+            }
+
             $state['blocked_phase'] = null;
             $lockedRun->update([
                 'status' => CartRunStatus::Running,
@@ -66,5 +86,16 @@ final class ContinueEventCartRunAction
 
             return $lockedRun;
         });
+    }
+
+    private function requestedSearchQuery(string $answer): ?string
+    {
+        if (preg_match('/^(?:шукай|шукати|пошук)\s*:\s*(.+)$/iu', trim($answer), $matches) !== 1) {
+            return null;
+        }
+
+        $query = $this->quantities->normalizeSearchQuery($matches[1]);
+
+        return $query !== '' ? $query : null;
     }
 }

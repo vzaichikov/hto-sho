@@ -35,4 +35,36 @@ class HarnessPayloadSanitizerTest extends TestCase
             'sha256' => hash('sha256', $bytes),
         ], $payload['image_url']);
     }
+
+    public function test_it_redacts_private_account_and_delivery_fields_but_keeps_cart_evidence(): void
+    {
+        $payload = (new HarnessPayloadSanitizer)->sanitize([
+            'cart' => [
+                'address' => ['street' => 'Private street', 'latitude' => '50.1'],
+                'phone' => '+380000000000',
+                'checkoutWebLink' => 'https://shop.example/private-cart',
+                'calculation' => [
+                    'totalAfterDiscounts' => 123.45,
+                    'loyalty' => ['bonusAvailable' => 100],
+                ],
+                'shipments' => [['products' => [['name' => 'Вода', 'quantity' => 2]]]],
+            ],
+            'text' => json_encode([
+                'cart' => [
+                    'address' => ['street' => 'Private street'],
+                    'calculation' => ['totalAfterDiscounts' => 123.45],
+                ],
+            ], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->assertSame('[REDACTED]', $payload['cart']['address']);
+        $this->assertSame('[REDACTED]', $payload['cart']['phone']);
+        $this->assertSame('[REDACTED]', $payload['cart']['checkoutWebLink']);
+        $this->assertSame('[REDACTED]', $payload['cart']['calculation']['loyalty']);
+        $this->assertSame(123.45, $payload['cart']['calculation']['totalAfterDiscounts']);
+        $this->assertSame('Вода', $payload['cart']['shipments'][0]['products'][0]['name']);
+        $text = json_decode($payload['text'], true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('[REDACTED]', $text['cart']['address']);
+        $this->assertSame(123.45, $text['cart']['calculation']['totalAfterDiscounts']);
+    }
 }
