@@ -8,6 +8,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Laravel\Mcp\Enums\ProtocolVersion;
+use RuntimeException;
 use Tests\TestCase;
 
 class McpSilpoCartGatewayTest extends TestCase
@@ -45,9 +46,23 @@ class McpSilpoCartGatewayTest extends TestCase
                         'silpo_get_categories_tree',
                         'silpo_get_product_sets',
                         'silpo_get_products',
+                        'silpo_find_address',
+                        'silpo_find_nova_poshta_offices',
+                        'silpo_get_available_delivery_types',
+                        'silpo_get_time_slots',
                     ])->map(fn (string $name): array => [
                         'name' => $name,
-                        'inputSchema' => ['type' => 'object', 'properties' => (object) []],
+                        'inputSchema' => [
+                            'type' => 'object',
+                            'properties' => $name === 'silpo_get_time_slots'
+                                ? ['deliveryTypes' => ['items' => ['enum' => [
+                                    'DeliveryHome',
+                                    'WideAssortDelivery',
+                                    'SelfPickup',
+                                    'NovaPoshta',
+                                ]]]]
+                                : (object) [],
+                        ],
                     ])->all()],
                 ]);
             }
@@ -77,6 +92,22 @@ class McpSilpoCartGatewayTest extends TestCase
                 'silpo_get_products' => ['products' => [[
                     'id' => 'zucchini-1',
                     'name' => 'Кабачок зелений',
+                ]]],
+                'silpo_find_address' => ['addresses' => [[
+                    'address' => data_get($payload, 'params.arguments.address'),
+                    'latitude' => 50.45,
+                    'longitude' => 30.52,
+                ]]],
+                'silpo_find_nova_poshta_offices' => ['offices' => [[
+                    'id' => 'office-1',
+                    'title' => 'Відділення №1',
+                ]]],
+                'silpo_get_available_delivery_types' => ['options' => [[
+                    'deliveryType' => 'DeliveryHome',
+                    'branchId' => 'branch-1',
+                ], [
+                    'deliveryType' => 'B2B',
+                    'branchId' => 'branch-2',
                 ]]],
                 default => ['updated' => true],
             };
@@ -154,6 +185,160 @@ class McpSilpoCartGatewayTest extends TestCase
         $this->assertTrue($arguments['inStock']);
         $this->assertSame(12, $arguments['limit']);
         $this->assertArrayNotHasKey('set', $arguments);
+    }
+
+    public function test_tool_manifest_is_discovered_once_per_gateway_instance_and_fresh_for_a_new_instance(): void
+    {
+        $gateway = $this->app->make(McpSilpoCartGateway::class);
+
+        $gateway->findDeliveryAddresses('secret-token', 'Київ, Хрещатик, 1');
+        $gateway->findDeliveryAddresses('secret-token', 'Київ, Саксаганського, 57-Б');
+
+        $manifestCalls = Http::recorded(
+            fn (Request $request): bool => $request->data()['method'] === 'tools/list',
+        );
+        $this->assertCount(1, $manifestCalls);
+
+        $freshGateway = $this->app->make(McpSilpoCartGateway::class);
+        $freshGateway->findDeliveryAddresses('secret-token', 'Львів, проспект Свободи, 10');
+
+        $manifestCalls = Http::recorded(
+            fn (Request $request): bool => $request->data()['method'] === 'tools/list',
+        );
+        $this->assertCount(2, $manifestCalls);
+    }
+
+    public function test_transient_manifest_failure_is_retried_once_on_a_fresh_client(): void
+    {
+        $manifestAttempts = 0;
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) use (&$manifestAttempts) {
+            $payload = $request->data();
+            $method = $payload['method'] ?? null;
+
+            if ($method === 'notifications/initialized') {
+                return Http::response('', 202);
+            }
+
+            if ($method === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'protocolVersion' => ProtocolVersion::LATEST->value,
+                        'capabilities' => [],
+                        'serverInfo' => ['name' => 'silpo-test', 'version' => '1.0.0'],
+                    ],
+                ]);
+            }
+
+            if ($method === 'tools/list') {
+                $manifestAttempts++;
+
+                if ($manifestAttempts === 1) {
+                    return Http::response(['message' => 'temporary'], 502);
+                }
+
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => ['tools' => [[
+                        'name' => 'silpo_find_address',
+                        'inputSchema' => ['type' => 'object', 'properties' => (object) []],
+                    ]]],
+                ]);
+            }
+
+            return Http::response([
+                'jsonrpc' => '2.0',
+                'id' => $payload['id'],
+                'result' => [
+                    'content' => [],
+                    'isError' => false,
+                    'structuredContent' => ['addresses' => [[
+                        'address' => 'Київ, Хрещатик, 1',
+                        'latitude' => 50.45,
+                        'longitude' => 30.52,
+                    ]]],
+                ],
+            ]);
+        });
+
+        $addresses = $this->app->make(McpSilpoCartGateway::class)
+            ->findDeliveryAddresses('secret-token', 'Київ, Хрещатик, 1');
+
+        $this->assertSame('Київ, Хрещатик, 1', data_get($addresses, '0.address'));
+        $this->assertSame(2, $manifestAttempts);
+        $this->assertCount(1, Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'params.name') === 'silpo_find_address',
+        ));
+    }
+
+    public function test_manifest_retry_exhaustion_returns_a_branded_failure_without_calling_a_tool(): void
+    {
+        $manifestAttempts = 0;
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) use (&$manifestAttempts) {
+            $payload = $request->data();
+            $method = $payload['method'] ?? null;
+
+            if ($method === 'notifications/initialized') {
+                return Http::response('', 202);
+            }
+
+            if ($method === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'protocolVersion' => ProtocolVersion::LATEST->value,
+                        'capabilities' => [],
+                        'serverInfo' => ['name' => 'silpo-test', 'version' => '1.0.0'],
+                    ],
+                ]);
+            }
+
+            if ($method === 'tools/list') {
+                $manifestAttempts++;
+
+                return Http::response(['message' => 'temporary'], 503);
+            }
+
+            return Http::response('', 500);
+        });
+
+        try {
+            $this->app->make(McpSilpoCartGateway::class)
+                ->findDeliveryAddresses('secret-token', 'Київ, Хрещатик, 1');
+            $this->fail('Expected manifest discovery to fail.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame(
+                'Сільпо двічі не відкрило Гусю список маршрутів. Спробуйте ще раз за хвилину.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertSame(2, $manifestAttempts);
+        $this->assertCount(0, Http::recorded(
+            fn (Request $request): bool => ($request->data()['method'] ?? null) === 'tools/call',
+        ));
+    }
+
+    public function test_fulfilment_filters_unsupported_delivery_types_and_passes_nova_poshta_office_hint(): void
+    {
+        $gateway = $this->app->make(McpSilpoCartGateway::class);
+
+        $types = $gateway->getAvailableDeliveryTypes('secret-token', 50.45, 30.52);
+        $gateway->findNovaPoshtaOffices('secret-token', 'settlement-1', 'поштомат 28122');
+
+        $this->assertSame(['DeliveryHome'], collect($types)->pluck('deliveryType')->all());
+        $officeCall = Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'params.name') === 'silpo_find_nova_poshta_offices',
+        )->sole()[0];
+        $this->assertSame('settlement-1', data_get($officeCall->data(), 'params.arguments.settlementId'));
+        $this->assertSame('поштомат 28122', data_get($officeCall->data(), 'params.arguments.title'));
     }
 
     public function test_expired_slot_refresh_copies_the_route_verifies_read_back_and_replay_is_idempotent(): void
@@ -308,6 +493,76 @@ class McpSilpoCartGatewayTest extends TestCase
                 (string) data_get($request->data(), 'params.arguments.start'),
             );
         }
+    }
+
+    public function test_fulfilment_update_stops_before_writing_when_the_live_schema_gains_a_required_field(): void
+    {
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) {
+            $payload = $request->data();
+            $method = $payload['method'] ?? null;
+
+            if ($method === 'notifications/initialized') {
+                return Http::response('', 202);
+            }
+
+            if ($method === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'protocolVersion' => ProtocolVersion::LATEST->value,
+                        'capabilities' => [],
+                        'serverInfo' => ['name' => 'silpo-test', 'version' => '1.0.0'],
+                    ],
+                ]);
+            }
+
+            if ($method === 'tools/list') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => ['tools' => [[
+                        'name' => 'silpo_get_shopping_cart_by_id',
+                        'inputSchema' => ['type' => 'object', 'properties' => (object) []],
+                    ], [
+                        'name' => 'silpo_update_shopping_cart',
+                        'inputSchema' => [
+                            'type' => 'object',
+                            'properties' => (object) [],
+                            'required' => [
+                                'shoppingCartId',
+                                'deliveryType',
+                                'timeslot',
+                                'address',
+                                'shipments',
+                                'surpriseRequiredField',
+                            ],
+                        ],
+                    ]]],
+                ]);
+            }
+
+            return Http::response([
+                'jsonrpc' => '2.0',
+                'id' => $payload['id'],
+                'result' => ['content' => [], 'isError' => false, 'structuredContent' => []],
+            ]);
+        });
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Сільпо змінило правила маршруту. Гусь зупинився, щоб нічого не вигадувати.');
+
+        $this->app->make(McpSilpoCartGateway::class)->updateFulfilment(
+            accessToken: 'secret-token',
+            cartId: 'cart-1',
+            deliveryType: 'DeliveryHome',
+            slotStart: '2026-08-25T10:00:00Z',
+            slotEnd: '2026-08-25T11:00:00Z',
+            address: ['addressType' => 'delivery'],
+            shipments: [['companyId' => 'company-1', 'branchId' => 'branch-1']],
+        );
     }
 
     private function cart(): SilpoCartContextData

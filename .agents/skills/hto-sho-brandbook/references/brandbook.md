@@ -28,7 +28,7 @@ Supporting neutrals may be derived from cream and ink for borders, muted text, a
 
 - Use **Manrope** for interface text, body copy, labels, and readable headings.
 - Use bold, clear, friendly headings with compact line-height.
-- **Neucha** may be used as a display or handwritten accent in the current landing language. Keep it out of dense body copy and small UI controls.
+- Use the Ukrainian **Курка лапою** typeface by Богдан Гдаль for display or handwritten accents. Keep it out of dense body copy and small UI controls.
 - Hand-drawn underlines, arrows, hearts, speech bubbles, and paper notes should feel imperfect but intentional.
 
 ## Logo

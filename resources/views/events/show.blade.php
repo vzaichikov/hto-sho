@@ -52,7 +52,7 @@
         <header class="mt-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-3">
-                    <h1 class="max-w-full break-words font-display text-4xl leading-none tracking-[-0.035em] sm:text-5xl">{{ $event->title }}</h1>
+                    <h1 class="max-w-full break-words font-display text-4xl leading-[1.1] tracking-[-0.035em] sm:text-5xl">{{ $event->title }}</h1>
                     <x-status-badge :status="$event->status" data-event-status-badge />
                 </div>
                 <p class="mt-2 text-sm text-muted">Матеріалів: {{ $event->sources->count() }}</p>
@@ -113,8 +113,8 @@
         @if ($activeTab === 'context')
             <section class="mt-7 overflow-hidden rounded-[30px] border-2 border-ink bg-paper shadow-[7px_8px_0_#20201D]" id="composer">
                 <div class="relative min-h-28 overflow-hidden border-b-2 border-ink/10 bg-yellow/35 px-5 py-5 pr-28 sm:px-7 sm:pr-40">
-                    <p class="font-display text-lg leading-none text-green-dark">Гусь слухає уважно</p>
-                    <h2 class="mt-1 font-display text-3xl leading-none">Підкиньте новий контекст</h2>
+                    <p class="font-display text-lg leading-[1.15] text-green-dark">Гусь слухає уважно</p>
+                    <h2 class="mt-1 font-display text-3xl leading-[1.1]">Підкиньте новий контекст</h2>
                     <p class="mt-2 max-w-xl text-xs leading-5 text-muted sm:text-sm">Текст, уривки переписки чи картинки — усе, що допоможе скласти актуальний план.</p>
                     <img class="absolute -bottom-24 right-2 w-28 drop-shadow-lg sm:-bottom-32 sm:right-6 sm:w-40" src="{{ asset('images/brand/goose-sho.png') }}" alt="" aria-hidden="true">
                 </div>
@@ -591,8 +591,8 @@
                 <div class="flex h-full min-h-0 flex-col">
                     <header class="flex items-start justify-between gap-4 border-b-2 border-ink/10 bg-yellow/35 px-5 py-4 sm:px-7">
                         <div>
-                            <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Гусь у Сільпо</p>
-                            <h3 class="mt-1 font-display text-3xl leading-none sm:text-4xl" id="silpo-dialog-title">Збираємо справжній кошик</h3>
+                            <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Перед походом у Сільпо</p>
+                            <h3 class="mt-1 font-display text-3xl leading-[1.1] sm:text-4xl" id="silpo-dialog-title">Куди Гусю йти по кошик?</h3>
                         </div>
                         <form method="dialog">
                             <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-rotate-6 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-silpo-dialog-close aria-label="Закрити">×</button>
@@ -603,60 +603,54 @@
                         <section class="grid min-h-72 place-items-center text-center" data-silpo-loading>
                             <div>
                                 <img class="goose-working mx-auto size-28 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо перевіряє кошик">
-                                <p class="mt-3 font-display text-2xl">Гусь перевіряє маршрут і кошик…</p>
+                                <p class="mt-3 font-display text-2xl">Гусь звіряє ваш нинішній маршрут…</p>
                             </div>
                         </section>
 
                         <section class="hidden min-h-72 place-items-center" data-silpo-guard>
                             <div class="max-w-2xl rounded-[26px] border-2 border-orange/40 bg-orange/8 p-6 text-center sm:p-8">
                                 <img class="mx-auto size-24 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="">
-                                <h4 class="mt-3 font-display text-3xl" data-silpo-guard-title>Без маршруту — ніяк</h4>
+                                <h4 class="mt-3 font-display text-3xl" data-silpo-guard-title>Гусь уперся в зачинені двері</h4>
                                 <p class="mt-3 text-base leading-7 text-muted" data-silpo-guard-message></p>
-                                <div class="mt-5 hidden rounded-[22px] border-2 border-green/35 bg-green-soft/25 p-4 text-left" data-silpo-refresh>
-                                    <p class="text-xs font-extrabold uppercase tracking-[0.14em] text-green-dark">Зміниться тільки час</p>
-                                    <p class="mt-2 font-extrabold" data-silpo-refresh-delivery></p>
-                                    <dl class="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-                                        <div class="rounded-2xl bg-paper p-3"><dt class="font-bold text-muted">Було</dt><dd class="mt-1 font-extrabold" data-silpo-refresh-current></dd></div>
-                                        <div class="rounded-2xl bg-paper p-3"><dt class="font-bold text-muted">Стане</dt><dd class="mt-1 font-extrabold text-green-dark" data-silpo-refresh-next></dd></div>
-                                    </dl>
-                                    <p class="mt-3 text-xs leading-5 text-muted">Магазин, адреса, спосіб отримання, товари й налаштування лишаться як є.</p>
-                                    <button class="mt-4 w-full rounded-2xl bg-green px-5 py-3.5 font-extrabold text-white shadow-[3px_3px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:opacity-50" type="button" data-silpo-refresh-submit>Так, змінити лише час</button>
-                                </div>
                                 <div class="mt-5 flex flex-col justify-center gap-3 sm:flex-row">
                                     <a class="hidden rounded-2xl bg-green px-5 py-3.5 font-extrabold text-white shadow-[3px_3px_0_#20201D]" href="#" target="_blank" rel="noopener" data-silpo-guard-action></a>
-                                    <button class="rounded-2xl border-2 border-ink bg-paper px-5 py-3.5 font-extrabold transition hover:bg-yellow/35" type="button" data-silpo-recheck>Я вже зробив — перевірити</button>
+                                    <button class="rounded-2xl border-2 border-ink bg-paper px-5 py-3.5 font-extrabold transition hover:bg-yellow/35" type="button" data-silpo-recheck>Гусь, перевір іще раз</button>
                                 </div>
                             </div>
                         </section>
 
-                        <section class="hidden" data-silpo-ready>
-                            <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.75fr)]">
+                        <section class="hidden" data-silpo-fulfilment>
+                            <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
-                                    <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark">Маршрут є</p>
-                                    <h4 class="mt-1 font-display text-3xl">Кошик готовий прийняти Гуся</h4>
-                                    <div class="mt-4 grid gap-3 rounded-[22px] bg-canvas p-4 sm:grid-cols-2">
-                                        <div><p class="text-xs font-bold text-muted">Отримання</p><p class="mt-1 font-extrabold" data-silpo-delivery></p></div>
-                                        <div><p class="text-xs font-bold text-muted">Час</p><p class="mt-1 font-extrabold" data-silpo-timeslot></p></div>
-                                        <div><p class="text-xs font-bold text-muted">У кошику зараз</p><p class="mt-1 font-extrabold" data-silpo-existing-count></p></div>
-                                        <div><p class="text-xs font-bold text-muted">Поточна сума</p><p class="mt-1 font-extrabold" data-silpo-existing-total></p></div>
-                                    </div>
-                                    <p class="mt-4 text-sm font-bold">Гусь піде збирати кошик. Це займе деякий час.</p>
-                                    <p class="mt-2 text-sm leading-6 text-muted">Гусь збере товари окремо, а тоді одним махом оновить кількості. Замовлення, оплату й чужі товари не чіпає.</p>
+                                    <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark">Крок перед справжнім кошиком</p>
+                                    <h4 class="mt-1 font-display text-3xl">Спершу посадимо Гуся на правильний маршрут</h4>
+                                    <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">Тут лише адреса, магазин, спосіб отримання і час. Товари Гусь почне підбирати вже після вашого остаточного «лети».</p>
                                 </div>
-
-                                <fieldset class="rounded-[22px] border-2 border-ink/15 bg-paper p-4">
-                                    <legend class="px-2 font-display text-2xl">Як ідемо?</legend>
-                                    <label class="mt-2 block cursor-pointer rounded-2xl border-2 border-green bg-green-soft/25 p-4 has-checked:bg-green-soft/55">
-                                        <span class="flex items-center gap-3 font-extrabold"><input class="size-4 accent-green" type="radio" name="silpo-mode" value="assisted" checked> З підстраховкою</span>
-                                        <span class="mt-1 block pl-7 text-sm leading-5 text-muted">Спитає лише якщо немає жодної адекватної альтернативи.</span>
-                                    </label>
-                                    <label class="mt-3 block cursor-pointer rounded-2xl border-2 border-ink/15 p-4 has-checked:border-green has-checked:bg-green-soft/25">
-                                        <span class="flex items-center gap-3 font-extrabold"><input class="size-4 accent-green" type="radio" name="silpo-mode" value="auto"> Повний автопілот</span>
-                                        <span class="mt-1 block pl-7 text-sm leading-5 text-muted">Не питає, бере найближчі рольові заміни й позначає все, що треба перевірити.</span>
-                                    </label>
-                                    <button class="mt-4 w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:opacity-50" type="button" data-silpo-start>Нехай іде</button>
-                                </fieldset>
+                                <button class="hidden rounded-xl border-2 border-ink bg-paper px-4 py-2 text-sm font-extrabold transition hover:bg-yellow/35" type="button" data-silpo-route-home>До розмови з Гусем</button>
                             </div>
+
+                            <div class="mt-5" data-silpo-fulfilment-content aria-live="polite"></div>
+
+                            <section class="mt-5 hidden rounded-[24px] border-2 border-green bg-green-soft/20 p-4 sm:p-5" data-silpo-route-review>
+                                <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark">Гусь усе занотував</p>
+                                <h5 class="mt-1 font-display text-3xl">Оцей маршрут — і лише оцей</h5>
+                                <dl class="mt-4 grid gap-3 sm:grid-cols-2" data-silpo-review-summary></dl>
+                                <p class="mt-4 text-sm leading-6 text-muted">Після натискання Гусь ще раз звірить маршрут із Сільпо. Якщо хтось устиг щось змінити — зупиниться, а не влаштує доставковий сюрприз.</p>
+
+                                <fieldset class="mt-5 grid gap-3 lg:grid-cols-2">
+                                    <legend class="mb-2 font-display text-2xl">Як Гусю шукати товари?</legend>
+                                    <label class="block cursor-pointer rounded-2xl border-2 border-green bg-paper p-4 has-checked:bg-green-soft/45">
+                                        <span class="flex items-center gap-3 font-extrabold"><input class="size-4 accent-green" type="radio" name="silpo-mode" value="assisted" checked> З підстраховкою</span>
+                                        <span class="mt-1 block pl-7 text-sm leading-5 text-muted">Спитає лише коли пристойної заміни справді немає.</span>
+                                    </label>
+                                    <label class="block cursor-pointer rounded-2xl border-2 border-ink/15 bg-paper p-4 has-checked:border-green has-checked:bg-green-soft/25">
+                                        <span class="flex items-center gap-3 font-extrabold"><input class="size-4 accent-green" type="radio" name="silpo-mode" value="auto"> Повний автопілот</span>
+                                        <span class="mt-1 block pl-7 text-sm leading-5 text-muted">Сам обере рольові заміни й позначить усе сумнівне для фінальної перевірки.</span>
+                                    </label>
+                                </fieldset>
+
+                                <button class="mt-5 w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="button" data-silpo-start>Гусю, маршрут є — лети збирати кошик</button>
+                            </section>
                         </section>
 
                         <section class="hidden" data-silpo-run>

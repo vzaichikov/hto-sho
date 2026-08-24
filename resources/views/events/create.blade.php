@@ -38,8 +38,8 @@
                     @csrf
 
                     <div data-create-step="1">
-                        <p class="font-display text-lg leading-none text-green-dark">Спершу дамо пригоді імʼя</p>
-                        <h1 class="mt-2 font-display text-4xl leading-[0.95] tracking-[-0.035em] sm:text-5xl">Як назвемо цей двіж?</h1>
+                        <p class="font-display text-lg leading-[1.15] text-green-dark">Спершу дамо пригоді імʼя</p>
+                        <h1 class="mt-2 font-display text-4xl leading-[1.1] tracking-[-0.035em] sm:text-5xl">Як назвемо цей двіж?</h1>
                         <p class="mt-4 max-w-xl text-sm leading-6 text-muted sm:text-base">Коротко й упізнавано — щоб потім не шукати «оту штуку десь біля шашликів».</p>
 
                         <label class="mt-7 block text-sm font-extrabold" for="event-title">Назва події</label>
@@ -62,8 +62,8 @@
                     </div>
 
                     <div class="mt-10 border-t border-ink/10 pt-8" data-create-step="2">
-                        <p class="font-display text-lg leading-none text-green-dark">Тепер Гусь слухає</p>
-                        <h2 class="mt-2 font-display text-4xl leading-[0.95] tracking-[-0.035em] sm:text-5xl">Киньте Гусю короткий задум</h2>
+                        <p class="font-display text-lg leading-[1.15] text-green-dark">Тепер Гусь слухає</p>
+                        <h2 class="mt-2 font-display text-4xl leading-[1.1] tracking-[-0.035em] sm:text-5xl">Киньте Гусю короткий задум</h2>
                         <p class="mt-4 max-w-xl text-sm leading-6 text-muted sm:text-base">Пікнік, шашлик, просто випити чи хочете щось нове — одного-двох речень досить. Анкету на сорок питань не заводимо.</p>
 
                         <div class="mt-5 flex flex-wrap gap-2" aria-label="Приклади опису">

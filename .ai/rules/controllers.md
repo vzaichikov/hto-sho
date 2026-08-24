@@ -10,3 +10,6 @@ For the MVP, never create a Silpo cart, choose a store or address, checkout, pay
 
 ## Allow explicit same-route expired-slot refresh
 The owner may explicitly confirm the displayed nearest available slot when the current Silpo slot expires. Re-read the cart, preserve the exact branch, delivery type, address, shipments, products, and preferences, bind the write to route/current-slot fingerprints, update only the timeslot, and verify by read-back. Store/address/delivery-type selection remains a separate reviewed flow.
+
+## Review fulfilment before Silpo product matching
+The old prepared-cart-only MVP rule is superseded for event cart starts. The owner must review the current Silpo address, branch, delivery type, shipments, and live slot or explicitly choose a supported alternative. Bind the final choice to encrypted owner/event-scoped state, serialize and re-read before writing, verify exact read-back while preserving product lines, then and only then launch product matching. Never checkout, pay, clear items, or change bonuses, promos, certificates, or preferences.

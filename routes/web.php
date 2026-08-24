@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\ConfirmEventCartRunController;
 use App\Http\Controllers\ContinueEventCartRunController;
+use App\Http\Controllers\DiscoverSilpoFulfilmentController;
 use App\Http\Controllers\EventAnalysisController;
 use App\Http\Controllers\EventAnswerController;
 use App\Http\Controllers\EventCartRunController;
@@ -65,6 +66,9 @@ Route::middleware('auth')->group(function (): void {
     Route::get('/events/{event}/silpo/cart-preflight', SilpoCartPreflightController::class)
         ->middleware('throttle:cart-runs')
         ->name('events.silpo.cart-preflight');
+    Route::post('/events/{event}/silpo/fulfilment', DiscoverSilpoFulfilmentController::class)
+        ->middleware('throttle:cart-runs')
+        ->name('events.silpo.fulfilment.discover');
     Route::post('/events/{event}/silpo/cart-refresh', RefreshSilpoCartTimeslotController::class)
         ->middleware('throttle:cart-runs')
         ->name('events.silpo.cart-refresh');

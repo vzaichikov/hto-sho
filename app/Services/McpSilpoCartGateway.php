@@ -5,18 +5,29 @@ namespace App\Services;
 use App\Contracts\SilpoCartGateway;
 use App\Data\SilpoCartContextData;
 use App\Data\SilpoCartRefreshCandidateData;
+use App\Data\SilpoFulfilmentSnapshotData;
 use App\HarnessEntryKind;
 use App\Models\HarnessRun;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use JsonException;
 use Laravel\Mcp\Client;
+use Laravel\Mcp\Client\Primitives\Tool;
 use Laravel\Mcp\Client\Schema\ToolResult;
+use Laravel\Mcp\Exceptions\ClientException;
 use RuntimeException;
 use Throwable;
 
 final class McpSilpoCartGateway implements SilpoCartGateway
 {
+    /** @var Collection<string, Tool>|null */
+    private ?Collection $toolManifest = null;
+
+    private ?string $manifestTokenFingerprint = null;
+
+    private ?string $activeAccessToken = null;
+
     /** @var array<int, string> */
     private const REQUIRED_TOOLS = [
         'silpo_get_my_shopping_cart',
@@ -42,7 +53,250 @@ final class McpSilpoCartGateway implements SilpoCartGateway
         'silpo_get_products',
     ];
 
+    /** @var array<int, string> */
+    private const FULFILMENT_TOOLS = [
+        'silpo_get_my_shopping_cart',
+        'silpo_get_shopping_cart_by_id',
+        'silpo_get_my_delivery_addresses',
+        'silpo_find_address',
+        'silpo_get_available_delivery_types',
+        'silpo_get_time_slots',
+        'silpo_list_branches',
+        'silpo_find_nova_poshta_settlements',
+        'silpo_find_nova_poshta_offices',
+        'silpo_update_shopping_cart',
+    ];
+
+    /** @var array<int, string> */
+    private const FULFILMENT_DELIVERY_TYPES = [
+        'DeliveryHome',
+        'WideAssortDelivery',
+        'SelfPickup',
+        'NovaPoshta',
+    ];
+
     public function __construct(private readonly HarnessRecorder $harnessRecorder) {}
+
+    public function getFulfilmentSnapshot(
+        string $accessToken,
+        ?HarnessRun $harnessRun = null,
+    ): ?SilpoFulfilmentSnapshotData {
+        $client = $this->client($accessToken);
+
+        try {
+            $this->assertRequiredTools($client, $harnessRun, self::FULFILMENT_TOOLS);
+
+            return $this->readFulfilmentSnapshot($client, $harnessRun);
+        } finally {
+            $client->disconnect();
+        }
+    }
+
+    public function getSavedDeliveryAddresses(
+        string $accessToken,
+        ?HarnessRun $harnessRun = null,
+    ): array {
+        return $this->readListTool(
+            $accessToken,
+            'silpo_get_my_delivery_addresses',
+            [],
+            'addresses',
+            'читання збережених адрес',
+            $harnessRun,
+        );
+    }
+
+    public function findDeliveryAddresses(
+        string $accessToken,
+        string $query,
+        ?HarnessRun $harnessRun = null,
+    ): array {
+        return $this->readListTool(
+            $accessToken,
+            'silpo_find_address',
+            ['address' => $query],
+            'addresses',
+            'пошук адреси',
+            $harnessRun,
+        );
+    }
+
+    public function getAvailableDeliveryTypes(
+        string $accessToken,
+        float $latitude,
+        float $longitude,
+        ?HarnessRun $harnessRun = null,
+    ): array {
+        $client = $this->client($accessToken);
+
+        try {
+            $tools = $this->assertRequiredTools($client, $harnessRun, [
+                'silpo_get_available_delivery_types',
+                'silpo_get_time_slots',
+            ]);
+            $supportedTypes = data_get(
+                $tools->get('silpo_get_time_slots')?->inputSchema,
+                'properties.deliveryTypes.items.enum',
+                [],
+            );
+
+            if (! is_array($supportedTypes) || $supportedTypes === []) {
+                throw new RuntimeException('Сільпо переставило дороговкази. Гусь зупинився, щоб нічого не вигадувати.');
+            }
+
+            $supportedTypes = collect($supportedTypes)
+                ->intersect(self::FULFILMENT_DELIVERY_TYPES)
+                ->values()
+                ->all();
+
+            $payload = $this->payload($this->callTool($client, 'silpo_get_available_delivery_types', [
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+            ], $harnessRun), 'читання способів отримання');
+
+            return collect(data_get($payload, 'options', []))
+                ->filter(fn (mixed $option): bool => is_array($option)
+                    && in_array(data_get($option, 'deliveryType'), $supportedTypes, true))
+                ->values()
+                ->all();
+        } finally {
+            $client->disconnect();
+        }
+    }
+
+    public function getFulfilmentBranches(
+        string $accessToken,
+        bool $pickup,
+        bool $novaPoshta,
+        ?HarnessRun $harnessRun = null,
+    ): array {
+        $arguments = ['limit' => 1000];
+
+        if ($pickup) {
+            $arguments['hasPickup'] = true;
+        }
+
+        if ($novaPoshta) {
+            $arguments['hasNP'] = true;
+        }
+
+        return $this->readListTool(
+            $accessToken,
+            'silpo_list_branches',
+            $arguments,
+            'branches',
+            'читання магазинів',
+            $harnessRun,
+        );
+    }
+
+    public function findNovaPoshtaSettlements(
+        string $accessToken,
+        string $query,
+        ?HarnessRun $harnessRun = null,
+    ): array {
+        return $this->readListTool(
+            $accessToken,
+            'silpo_find_nova_poshta_settlements',
+            ['title' => $query],
+            'settlements',
+            'пошук міста Нової пошти',
+            $harnessRun,
+        );
+    }
+
+    public function findNovaPoshtaOffices(
+        string $accessToken,
+        string $settlementId,
+        ?string $query = null,
+        ?HarnessRun $harnessRun = null,
+    ): array {
+        $arguments = ['settlementId' => $settlementId];
+
+        if ($query !== null && $query !== '') {
+            $arguments['title'] = $query;
+        }
+
+        return $this->readListTool(
+            $accessToken,
+            'silpo_find_nova_poshta_offices',
+            $arguments,
+            'offices',
+            'читання відділень Нової пошти',
+            $harnessRun,
+        );
+    }
+
+    public function getFulfilmentSlots(
+        string $accessToken,
+        string $branchId,
+        string $deliveryType,
+        ?HarnessRun $harnessRun = null,
+    ): array {
+        $client = $this->client($accessToken);
+
+        try {
+            $tools = $this->assertRequiredTools($client, $harnessRun, ['silpo_get_time_slots']);
+            $supportedTypes = data_get(
+                $tools->get('silpo_get_time_slots')?->inputSchema,
+                'properties.deliveryTypes.items.enum',
+                [],
+            );
+
+            if (! is_array($supportedTypes)
+                || ! in_array($deliveryType, self::FULFILMENT_DELIVERY_TYPES, true)
+                || ! in_array($deliveryType, $supportedTypes, true)) {
+                throw new RuntimeException('Цей спосіб отримання Сільпо ще не дає Гусю перевірити час.');
+            }
+
+            return $this->availableSlots($client, [
+                'branch_id' => $branchId,
+                'delivery_type' => $deliveryType,
+            ], $harnessRun);
+        } finally {
+            $client->disconnect();
+        }
+    }
+
+    public function updateFulfilment(
+        string $accessToken,
+        string $cartId,
+        string $deliveryType,
+        string $slotStart,
+        string $slotEnd,
+        array $address,
+        array $shipments,
+        ?HarnessRun $harnessRun = null,
+    ): ?SilpoFulfilmentSnapshotData {
+        $client = $this->client($accessToken);
+
+        try {
+            $tools = $this->assertRequiredTools($client, $harnessRun, [
+                'silpo_get_shopping_cart_by_id',
+                'silpo_update_shopping_cart',
+            ]);
+            $required = data_get($tools->get('silpo_update_shopping_cart')?->inputSchema, 'required', []);
+            $expected = ['shoppingCartId', 'deliveryType', 'timeslot', 'address', 'shipments'];
+
+            if (! is_array($required)
+                || collect($expected)->diff($required)->isNotEmpty()
+                || collect($required)->diff($expected)->isNotEmpty()) {
+                throw new RuntimeException('Сільпо змінило правила маршруту. Гусь зупинився, щоб нічого не вигадувати.');
+            }
+
+            $this->payload($this->callTool($client, 'silpo_update_shopping_cart', [
+                'shoppingCartId' => $cartId,
+                'deliveryType' => $deliveryType,
+                'timeslot' => ['start' => $slotStart, 'end' => $slotEnd],
+                'address' => $address,
+                'shipments' => $shipments,
+            ], $harnessRun), 'оновлення маршруту отримання');
+
+            return $this->readFulfilmentSnapshotById($client, $cartId, $harnessRun);
+        } finally {
+            $client->disconnect();
+        }
+    }
 
     public function getReadyCart(string $accessToken, ?HarnessRun $harnessRun = null): ?SilpoCartContextData
     {
@@ -355,9 +609,54 @@ final class McpSilpoCartGateway implements SilpoCartGateway
 
     private function client(string $accessToken): Client
     {
+        $tokenFingerprint = hash('sha256', $accessToken);
+
+        if ($this->manifestTokenFingerprint !== null
+            && ! hash_equals($this->manifestTokenFingerprint, $tokenFingerprint)) {
+            $this->toolManifest = null;
+        }
+
+        $this->manifestTokenFingerprint = $tokenFingerprint;
+        $this->activeAccessToken = $accessToken;
+
+        return $this->freshClient($accessToken);
+    }
+
+    private function freshClient(string $accessToken): Client
+    {
         return Client::web((string) config('services.silpo_mcp.url'))
             ->withToken($accessToken)
             ->withTimeout((float) config('services.silpo_mcp.timeout', 20));
+    }
+
+    /**
+     * @param  array<string, mixed>  $arguments
+     * @return array<int, array<string, mixed>>
+     */
+    private function readListTool(
+        string $accessToken,
+        string $tool,
+        array $arguments,
+        string $key,
+        string $operation,
+        ?HarnessRun $harnessRun,
+    ): array {
+        $client = $this->client($accessToken);
+
+        try {
+            $this->assertRequiredTools($client, $harnessRun, [$tool]);
+            $payload = $this->payload(
+                $this->callTool($client, $tool, $arguments, $harnessRun),
+                $operation,
+            );
+
+            return collect(data_get($payload, $key, []))
+                ->filter(fn (mixed $item): bool => is_array($item))
+                ->values()
+                ->all();
+        } finally {
+            $client->disconnect();
+        }
     }
 
     /**
@@ -367,44 +666,125 @@ final class McpSilpoCartGateway implements SilpoCartGateway
         Client $client,
         ?HarnessRun $harnessRun,
         array $requiredTools = self::REQUIRED_TOOLS,
-    ): void {
-        if ($harnessRun === null) {
-            $tools = $client->tools();
-        } else {
-            $entry = $this->harnessRecorder->startExternal(
-                run: $harnessRun,
-                kind: HarnessEntryKind::Mcp,
-                title: 'MCP: список доступних інструментів',
-                method: 'POST',
-                endpoint: (string) config('services.silpo_mcp.url'),
-                requestPayload: ['jsonrpc' => '2.0', 'method' => 'tools/list'],
-            );
-            $startedAt = hrtime(true);
-
+    ): Collection {
+        if ($this->toolManifest === null) {
             try {
-                $tools = $client->tools();
-                $this->harnessRecorder->completeExternal(
-                    entry: $entry,
-                    responsePayload: ['tools' => $tools->keys()->values()->all()],
-                    statusCode: 200,
-                    durationMs: (int) round((hrtime(true) - $startedAt) / 1_000_000),
-                );
+                $this->toolManifest = $this->discoverTools($client, $harnessRun, 1);
             } catch (Throwable $throwable) {
-                $this->harnessRecorder->failExternal(
-                    $entry,
-                    $throwable,
-                    (int) round((hrtime(true) - $startedAt) / 1_000_000),
-                );
+                if (! $this->isTransientManifestFailure($throwable) || $this->activeAccessToken === null) {
+                    throw $throwable;
+                }
 
-                throw $throwable;
+                $client->disconnect();
+                $retryClient = $this->freshClient($this->activeAccessToken);
+
+                try {
+                    try {
+                        $this->toolManifest = $this->discoverTools($retryClient, $harnessRun, 2);
+                    } catch (Throwable $retryFailure) {
+                        if ($this->isTransientManifestFailure($retryFailure)) {
+                            throw new RuntimeException(
+                                'Сільпо двічі не відкрило Гусю список маршрутів. Спробуйте ще раз за хвилину.',
+                                previous: $retryFailure,
+                            );
+                        }
+
+                        throw $retryFailure;
+                    }
+                } finally {
+                    $retryClient->disconnect();
+                }
             }
         }
+
+        $tools = $this->toolManifest;
 
         $missingTools = collect($requiredTools)->diff($tools->keys());
 
         if ($missingTools->isNotEmpty()) {
-            throw new RuntimeException('Silpo MCP змінило обовʼязкові інструменти кошика.');
+            throw new RuntimeException('Сільпо сховало потрібні Гусю двері. Він зупинився, щоб нічого не вигадувати.');
         }
+
+        return $tools;
+    }
+
+    /** @return Collection<string, Tool> */
+    private function discoverTools(Client $client, ?HarnessRun $harnessRun, int $attempt): Collection
+    {
+        if ($harnessRun === null) {
+            return $client->tools();
+        }
+
+        $entry = $this->harnessRecorder->startExternal(
+            run: $harnessRun,
+            kind: HarnessEntryKind::Mcp,
+            title: $attempt === 1
+                ? 'MCP: список доступних інструментів'
+                : 'MCP: повторне читання доступних інструментів',
+            method: 'POST',
+            endpoint: (string) config('services.silpo_mcp.url'),
+            requestPayload: ['jsonrpc' => '2.0', 'method' => 'tools/list', 'attempt' => $attempt],
+        );
+        $startedAt = hrtime(true);
+
+        try {
+            $tools = $client->tools();
+            $this->harnessRecorder->completeExternal(
+                entry: $entry,
+                responsePayload: ['tools' => $tools->keys()->values()->all()],
+                statusCode: 200,
+                durationMs: (int) round((hrtime(true) - $startedAt) / 1_000_000),
+            );
+
+            return $tools;
+        } catch (Throwable $throwable) {
+            $this->harnessRecorder->failExternal(
+                $entry,
+                $throwable,
+                (int) round((hrtime(true) - $startedAt) / 1_000_000),
+            );
+
+            throw $throwable;
+        }
+    }
+
+    private function isTransientManifestFailure(Throwable $throwable): bool
+    {
+        return $throwable instanceof ClientException
+            && preg_match('/Unexpected HTTP status \[(?:502|503|504)\]/', $throwable->getMessage()) === 1;
+    }
+
+    private function readFulfilmentSnapshot(
+        Client $client,
+        ?HarnessRun $harnessRun,
+    ): ?SilpoFulfilmentSnapshotData {
+        $cartIdResult = $this->callTool($client, 'silpo_get_my_shopping_cart', [], $harnessRun);
+
+        if ($cartIdResult->isError && str_contains(mb_strtolower($cartIdResult->text()), 'resource not found')) {
+            return null;
+        }
+
+        $cartIdPayload = $this->payload($cartIdResult, 'читання поточного кошика');
+        $cartId = data_get($cartIdPayload, 'shoppingCartId');
+
+        if (! is_string($cartId) || $cartId === '') {
+            return null;
+        }
+
+        return $this->readFulfilmentSnapshotById($client, $cartId, $harnessRun);
+    }
+
+    private function readFulfilmentSnapshotById(
+        Client $client,
+        string $cartId,
+        ?HarnessRun $harnessRun,
+    ): SilpoFulfilmentSnapshotData {
+        $cartPayload = $this->payload(
+            $this->callTool($client, 'silpo_get_shopping_cart_by_id', ['shoppingCartId' => $cartId], $harnessRun),
+            'читання складу кошика',
+        );
+
+        return SilpoFulfilmentSnapshotData::fromMcp($cartId, $cartPayload);
     }
 
     /**

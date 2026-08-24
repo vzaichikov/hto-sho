@@ -21,7 +21,7 @@
                     <span aria-hidden="true">←</span> До події
                 </a>
                 <p class="mt-6 text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Приватна діагностика</p>
-                <h1 class="mt-1 font-display text-4xl leading-none sm:text-5xl">Журнал Гуся</h1>
+                <h1 class="mt-1 font-display text-4xl leading-[1.1] sm:text-5xl">Журнал Гуся</h1>
                 <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">Тут Гусь лишає сліди своїх пригод у «{{ $event->title }}»: що почув, що вирішив і де перечепився. Секрети тримає під крилом.</p>
             </div>
             <span class="w-fit rounded-full border-2 border-ink bg-paper px-4 py-2 text-sm font-extrabold shadow-[2px_2px_0_#F7C84B]">Зберігання: 90 днів</span>

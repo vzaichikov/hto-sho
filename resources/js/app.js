@@ -308,13 +308,18 @@ const silpoDialog = document.querySelector('[data-silpo-dialog]');
 if (silpoDialog instanceof HTMLDialogElement) {
     const loadingPanel = silpoDialog.querySelector('[data-silpo-loading]');
     const guardPanel = silpoDialog.querySelector('[data-silpo-guard]');
-    const readyPanel = silpoDialog.querySelector('[data-silpo-ready]');
+    const fulfilmentPanel = silpoDialog.querySelector('[data-silpo-fulfilment]');
+    const fulfilmentContent = silpoDialog.querySelector('[data-silpo-fulfilment-content]');
+    const fulfilmentReview = silpoDialog.querySelector('[data-silpo-route-review]');
+    const routeHomeButton = silpoDialog.querySelector('[data-silpo-route-home]');
     const runPanel = silpoDialog.querySelector('[data-silpo-run]');
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ?? '';
     let runUrl = null;
     let confirmUrl = null;
-    let refreshUrl = null;
-    let refreshPayload = null;
+    let discoverUrl = null;
+    let startUrl = null;
+    let reviewToken = null;
+    let fulfilmentInitial = null;
     let lastSequence = 0;
     let pollTimer = null;
     let pollPending = false;
@@ -326,7 +331,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
     const quantity = (value) => new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 3 }).format(Number(value ?? 0));
 
     const showPanel = (target) => {
-        [loadingPanel, guardPanel, readyPanel, runPanel].forEach((panel) => {
+        [loadingPanel, guardPanel, fulfilmentPanel, runPanel].forEach((panel) => {
             panel?.classList.toggle('hidden', panel !== target);
             panel?.classList.toggle('grid', panel === target && [loadingPanel, guardPanel].includes(panel));
         });
@@ -359,30 +364,11 @@ if (silpoDialog instanceof HTMLDialogElement) {
 
     const showGuard = (payload) => {
         showPanel(guardPanel);
-        guardPanel.querySelector('[data-silpo-guard-title]').textContent = payload.code === 'timeslot_expired'
-            ? 'Час проситься на заміну'
-            : 'Без маршруту — ніяк';
+        guardPanel.querySelector('[data-silpo-guard-title]').textContent = payload.code === 'connection_missing'
+            ? 'Гусь загубив ключ від Сільпо'
+            : 'Гусь уперся в зачинені двері';
         guardPanel.querySelector('[data-silpo-guard-message]').textContent = payload.message;
         const action = guardPanel.querySelector('[data-silpo-guard-action]');
-        const refresh = guardPanel.querySelector('[data-silpo-refresh]');
-
-        if (payload.refresh_url && payload.candidate) {
-            refreshUrl = payload.refresh_url;
-            refreshPayload = {
-                route_fingerprint: payload.candidate.route_fingerprint,
-                current_slot_fingerprint: payload.candidate.current_slot_fingerprint,
-                slot_start: payload.candidate.slot_start,
-                slot_end: payload.candidate.slot_end,
-            };
-            refresh.querySelector('[data-silpo-refresh-delivery]').textContent = payload.candidate.delivery_label;
-            refresh.querySelector('[data-silpo-refresh-current]').textContent = payload.candidate.current_timeslot;
-            refresh.querySelector('[data-silpo-refresh-next]').textContent = payload.candidate.timeslot;
-            refresh.classList.remove('hidden');
-        } else {
-            refreshUrl = null;
-            refreshPayload = null;
-            refresh.classList.add('hidden');
-        }
 
         if (payload.action_url) {
             action.href = payload.action_url;
@@ -394,12 +380,521 @@ if (silpoDialog instanceof HTMLDialogElement) {
         }
     };
 
-    const renderReadyCart = (cart) => {
-        readyPanel.querySelector('[data-silpo-delivery]').textContent = cart.delivery_label || 'Обраний спосіб';
-        readyPanel.querySelector('[data-silpo-timeslot]').textContent = cart.timeslot || 'Час обрано';
-        readyPanel.querySelector('[data-silpo-existing-count]').textContent = `${cart.items_count ?? 0} позицій`;
-        readyPanel.querySelector('[data-silpo-existing-total]').textContent = money(cart.total);
-        showPanel(readyPanel);
+    const element = (tag, className, text = '') => {
+        const node = document.createElement(tag);
+        node.className = className;
+        node.textContent = text;
+
+        return node;
+    };
+
+    const actionButton = (label, onClick, secondary = false) => {
+        const button = element(
+            'button',
+            secondary
+                ? 'rounded-2xl border-2 border-ink bg-paper px-4 py-3 text-left font-extrabold transition hover:bg-yellow/35 disabled:cursor-not-allowed disabled:opacity-45'
+                : 'rounded-2xl bg-green px-4 py-3 text-left font-extrabold text-white shadow-[3px_3px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-45',
+            label,
+        );
+        button.type = 'button';
+        button.addEventListener('click', async (event) => {
+            try {
+                await onClick(event);
+            } catch (error) {
+                showGuard(error.payload ?? { message: error.message });
+            }
+        });
+
+        return button;
+    };
+
+    const detail = (label, value) => {
+        const wrapper = element('div', 'rounded-2xl bg-paper p-3');
+        wrapper.append(
+            element('dt', 'text-xs font-bold text-muted', label),
+            element('dd', 'mt-1 font-extrabold', value || '—'),
+        );
+
+        return wrapper;
+    };
+
+    const cartWarnings = (validations) => {
+        const messages = (validations ?? [])
+            .map((validation) => validation.message)
+            .filter((message) => typeof message === 'string' && message.trim() !== '');
+
+        if (messages.length === 0) {
+            return null;
+        }
+
+        const warning = element('div', 'mt-3 rounded-2xl border-2 border-orange/30 bg-orange/8 p-3');
+        warning.append(element('p', 'text-sm font-extrabold text-orange-dark', 'Сільпо просить звернути увагу'));
+        const list = element('ul', 'mt-2 space-y-1 text-sm leading-6 text-muted');
+        messages.forEach((message) => list.append(element('li', '', `→ ${message}`)));
+        warning.append(list);
+
+        return warning;
+    };
+
+    const setFulfilmentBody = (title, eyebrow, description = '') => {
+        showPanel(fulfilmentPanel);
+        fulfilmentReview.classList.add('hidden');
+        reviewToken = null;
+        routeHomeButton.classList.toggle('hidden', fulfilmentInitial === null || title === 'Скажіть Гусю, куди й як доставити');
+        fulfilmentContent.replaceChildren();
+        const intro = element('div', 'mb-4');
+        intro.append(
+            element('p', 'text-xs font-extrabold uppercase tracking-[0.14em] text-green-dark', eyebrow),
+            element('h5', 'mt-1 font-display text-3xl', title),
+        );
+
+        if (description) {
+            intro.append(element('p', 'mt-2 max-w-3xl text-sm leading-6 text-muted', description));
+        }
+
+        fulfilmentContent.append(intro);
+    };
+
+    const discover = async (input) => {
+        if (! discoverUrl) {
+            throw new Error('Гусь загубив двері до вибору маршруту.');
+        }
+
+        showPanel(loadingPanel);
+
+        return fetchJson(discoverUrl, {
+            method: 'POST',
+            body: JSON.stringify(input),
+        });
+    };
+
+    const renderReview = (review, token) => {
+        showPanel(fulfilmentPanel);
+        fulfilmentContent.replaceChildren();
+        routeHomeButton.classList.remove('hidden');
+        reviewToken = token;
+        const summary = fulfilmentReview.querySelector('[data-silpo-review-summary]');
+        fulfilmentReview.querySelector('[data-silpo-review-split]')?.remove();
+        fulfilmentReview.querySelector('[data-silpo-review-validations]')?.remove();
+        summary.replaceChildren(
+            detail('Отримання', review.delivery_label),
+            detail('Адреса', review.address_label),
+            detail('Магазин', (review.branch_labels ?? []).join(' + ')),
+            detail('Час', review.timeslot),
+            detail('У кошику вже є', `${review.items_count ?? 0} позицій`),
+            detail('Поточна сума', money(review.total)),
+        );
+        const warnings = cartWarnings(review.validations);
+
+        if (warnings) {
+            warnings.dataset.silpoReviewValidations = '';
+            summary.after(warnings);
+        }
+
+        if ((review.shipments_count ?? 0) > 1) {
+            const split = element('p', 'mt-3 rounded-2xl bg-yellow/40 p-3 text-sm font-bold');
+            split.dataset.silpoReviewSplit = '';
+            split.textContent = `Сільпо розділить маршрут на ${review.shipments_count} відправлення. Гусь звірить кожне.`;
+            (warnings ?? summary).after(split);
+        }
+
+        fulfilmentReview.classList.remove('hidden');
+        fulfilmentReview.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
+
+    const renderSlots = async (routeToken) => {
+        const payload = await discover({ stage: 'slots', token: routeToken });
+        setFulfilmentBody('Коли Гусю вирушати?', 'Доступний час', 'Показуємо тільки ті вікна, які Сільпо щойно підтвердило для цього магазину й способу отримання.');
+        const list = element('div', 'grid gap-3 sm:grid-cols-2 lg:grid-cols-3');
+
+        if (payload.preference_note) {
+            fulfilmentContent.append(element('p', 'mb-4 rounded-2xl bg-yellow/45 p-3 text-sm font-bold', payload.preference_note));
+        }
+
+        if ((payload.slots ?? []).length === 0) {
+            list.append(element('p', 'rounded-2xl border-2 border-orange/30 bg-orange/8 p-4 text-sm font-bold', 'Вільний час розлетівся. Спробуйте інший маршрут.'));
+        }
+
+        (payload.slots ?? []).forEach((slot) => {
+            const card = element(
+                'button',
+                `rounded-[20px] border-2 p-4 text-left transition hover:-translate-y-0.5 hover:border-green hover:bg-green-soft/20 ${slot.recommended ? 'border-green bg-green-soft/35 shadow-[3px_3px_0_#F7C84B]' : 'border-ink/15 bg-paper'}`,
+            );
+            card.type = 'button';
+
+            if (slot.recommended) {
+                card.append(element('span', 'mb-2 inline-flex rounded-full bg-green px-2.5 py-1 text-xs font-extrabold text-white', 'Найближче до побажання'));
+            }
+
+            card.append(
+                element('p', 'font-display text-2xl', slot.label),
+                element('p', 'mt-2 text-xs font-bold text-muted', `Доставка: ${money(slot.delivery_cost)} · мінімум: ${money(slot.min_order_cost)}`),
+            );
+            card.addEventListener('click', async () => {
+                try {
+                    const reviewed = await discover({
+                        stage: 'review',
+                        token: payload.route_token,
+                        slot_start: slot.start,
+                        slot_end: slot.end,
+                    });
+                    renderReview(reviewed.review, reviewed.review_token);
+                } catch (error) {
+                    showGuard(error.payload ?? { message: error.message });
+                }
+            });
+            list.append(card);
+        });
+        fulfilmentContent.append(list);
+    };
+
+    const renderRouteOptions = (options) => {
+        setFulfilmentBody('Оберіть, як Гусь дістанеться кошика', 'Маршрути від Сільпо', 'Домашня доставка привʼязана до точної збереженої адреси. Самовивіз і Нова пошта мають свій магазин та свій час.');
+        const list = element('div', 'grid gap-3 lg:grid-cols-2');
+
+        (options ?? []).forEach((option) => {
+            if (option.kind === 'nova_poshta') {
+                const card = element('div', `rounded-[20px] border-2 p-4 ${option.preferred ? 'border-green bg-green-soft/25' : 'border-ink/15 bg-paper'}`);
+
+                if (option.preferred) {
+                    card.append(element('span', 'mb-2 inline-flex rounded-full bg-yellow px-2.5 py-1 text-xs font-extrabold', 'Гусь почув цей спосіб'));
+                }
+
+                card.append(
+                    element('p', 'font-display text-2xl', option.delivery_label),
+                    element('p', 'mt-1 text-sm leading-6 text-muted', option.description),
+                    actionButton('Гусю, знайди місто Нової пошти', () => renderNovaSearch(option.context_token)),
+                );
+                card.lastElementChild.classList.add('mt-3', 'w-full');
+                list.append(card);
+
+                return;
+            }
+
+            const card = element('div', `rounded-[20px] border-2 p-4 ${option.writable ? 'border-green/35 bg-green-soft/15' : 'border-orange/30 bg-orange/8'}`);
+
+            if (option.preferred) {
+                card.classList.add('ring-3', 'ring-yellow/70');
+                card.append(element('span', 'mb-2 inline-flex rounded-full bg-yellow px-2.5 py-1 text-xs font-extrabold', 'Гусь почув цей спосіб'));
+            }
+            card.append(
+                element('p', 'font-display text-2xl', option.delivery_label),
+                element('p', 'mt-1 font-extrabold', option.branch_label || option.address_label),
+                element('p', 'mt-1 text-sm leading-6 text-muted', option.message || option.address_label),
+            );
+
+            if (option.route_token) {
+                const choose = actionButton('Цим шляхом — показати час', () => renderSlots(option.route_token));
+                choose.classList.add('mt-3', 'w-full');
+                card.append(choose);
+            } else {
+                card.append(element('p', 'mt-3 text-xs font-extrabold text-orange-dark', 'Гусь покаже адресу, але не стане вигадувати дані для запису. Сільпо таке любить приблизно ніколи.'));
+            }
+
+            list.append(card);
+        });
+        fulfilmentContent.append(list);
+    };
+
+    const renderAddressOptions = async (token) => {
+        const payload = await discover({ stage: 'address_options', token });
+        renderRouteOptions(payload.options);
+    };
+
+    const renderAddressCandidates = (payload) => {
+        setFulfilmentBody('Звірте точну адресу', 'Гусь не вгадує координати', 'Оберіть саме той варіант, який підтвердило Сільпо. Від цієї точки залежать магазин і доступні способи отримання.');
+        const comparison = element('div', 'grid gap-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]');
+        const heard = element('section', 'rounded-[20px] border-2 border-yellow bg-yellow/30 p-4');
+        heard.append(
+            element('p', 'text-xs font-extrabold uppercase tracking-[0.13em] text-orange-dark', 'Гусь почув…'),
+            element('p', 'mt-2 font-extrabold leading-6', payload.heard || payload.address_query || 'Нову адресу'),
+        );
+        const found = element('section', 'rounded-[20px] border-2 border-green/35 bg-green-soft/15 p-4');
+        found.append(element('p', 'text-xs font-extrabold uppercase tracking-[0.13em] text-green-dark', 'Сільпо знайшло…'));
+        const list = element('div', 'mt-3 grid gap-2');
+
+        if ((payload.addresses ?? []).length === 0) {
+            list.append(element('p', 'rounded-2xl border-2 border-orange/30 bg-orange/8 p-4 font-bold', 'Точка не знайшлася. Спробуйте повнішу адресу або відкрийте ручний вибір — телепатію в цей реліз знову не завезли.'));
+        }
+
+        (payload.addresses ?? []).forEach((address) => {
+            list.append(actionButton(address.label, () => renderAddressOptions(address.token), true));
+        });
+        found.append(list);
+        comparison.append(heard, found);
+        fulfilmentContent.append(comparison);
+    };
+
+    const renderAddressSearch = () => {
+        setFulfilmentBody('Куди саме?', 'Нова точка на карті', 'Напишіть місто, вулицю й будинок. Гусь знайде точку для самовивозу або Нової пошти. Нову домашню адресу без повних даних Сільпо він нишком не вигадуватиме.');
+        const form = element('form', 'flex flex-col gap-3 rounded-[22px] bg-canvas p-4 sm:flex-row');
+        const input = element('input', 'min-w-0 flex-1 rounded-2xl border-2 border-ink/15 bg-paper px-4 py-3 outline-none focus:border-green focus:ring-3 focus:ring-green/15');
+        input.type = 'search';
+        input.maxLength = 120;
+        input.placeholder = 'Наприклад: Київ, Хрещатик, 1';
+        input.setAttribute('aria-label', 'Адреса для пошуку');
+        const submit = actionButton('Гусь, шукай адресу', () => {});
+        submit.type = 'submit';
+        form.append(input, submit);
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const query = input.value.trim();
+
+            if (query.length < 2) {
+                input.focus();
+
+                return;
+            }
+
+            submit.disabled = true;
+            submit.textContent = 'Гусь водить дзьобом по мапі…';
+
+            try {
+                const payload = await discover({ stage: 'address_search', query });
+                renderAddressCandidates(payload);
+            } catch (error) {
+                showGuard(error.payload ?? { message: error.message });
+            } finally {
+                submit.disabled = false;
+                submit.textContent = 'Гусь, шукай адресу';
+            }
+        });
+        fulfilmentContent.append(form);
+        input.focus();
+    };
+
+    const renderNovaOffices = async (settlementToken) => {
+        const payload = await discover({ stage: 'nova_offices', token: settlementToken });
+        setFulfilmentBody('Яке відділення впізнає Гуся?', 'Нова пошта', 'Оберіть відділення або поштомат. Далі Сільпо покаже магазин, який може туди відправити кошик.');
+        const list = element('div', 'grid gap-3 sm:grid-cols-2');
+
+        (payload.offices ?? []).forEach((office) => {
+            list.append(actionButton(office.label, async () => {
+                const branchPayload = await discover({ stage: 'nova_branches', token: office.token });
+                renderRouteOptions(branchPayload.options);
+            }, true));
+        });
+        fulfilmentContent.append(list);
+    };
+
+    const renderNovaSettlements = (settlements, heard = null, officeHint = null) => {
+        setFulfilmentBody('Куди летить посилка?', 'Місто Нової пошти', 'Оберіть населений пункт без ворожіння на однакових назвах.');
+        const list = element('div', 'grid gap-3 sm:grid-cols-2');
+
+        if (heard) {
+            const understood = element('div', 'mb-4 grid gap-3 sm:grid-cols-2');
+            understood.append(
+                element('p', 'rounded-2xl bg-yellow/35 p-4 text-sm font-bold', `Гусь почув… ${heard}`),
+                element('p', 'rounded-2xl bg-green-soft/25 p-4 text-sm font-bold', officeHint
+                    ? `Сільпо шукає місто й відділення: ${officeHint}`
+                    : 'Сільпо знайшло такі населені пункти.'),
+            );
+            fulfilmentContent.append(understood);
+        }
+
+        if ((settlements ?? []).length === 0) {
+            list.append(element('p', 'rounded-2xl border-2 border-orange/30 bg-orange/8 p-4 font-bold', 'Місто від Гуся сховалося. Спробуйте повнішу назву.'));
+        }
+
+        (settlements ?? []).forEach((settlement) => {
+            list.append(actionButton(settlement.label, () => renderNovaOffices(settlement.token), true));
+        });
+        fulfilmentContent.append(list);
+    };
+
+    const renderNovaSearch = (contextToken) => {
+        setFulfilmentBody('До якого міста летимо?', 'Нова пошта', 'Почніть вводити населений пункт, а Гусь дістане офіційний список.');
+        const form = element('form', 'flex flex-col gap-3 rounded-[22px] bg-canvas p-4 sm:flex-row');
+        const input = element('input', 'min-w-0 flex-1 rounded-2xl border-2 border-ink/15 bg-paper px-4 py-3 outline-none focus:border-green focus:ring-3 focus:ring-green/15');
+        input.type = 'search';
+        input.maxLength = 120;
+        input.placeholder = 'Наприклад: Київ';
+        input.setAttribute('aria-label', 'Місто Нової пошти');
+        const submit = actionButton('Гусь, знайди місто', () => {});
+        submit.type = 'submit';
+        form.append(input, submit);
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const query = input.value.trim();
+
+            if (query.length < 2) {
+                input.focus();
+
+                return;
+            }
+
+            submit.disabled = true;
+
+            try {
+                const payload = await discover({ stage: 'nova_settlements', token: contextToken, query });
+                renderNovaSettlements(payload.settlements);
+            } catch (error) {
+                showGuard(error.payload ?? { message: error.message });
+            } finally {
+                submit.disabled = false;
+            }
+        });
+        fulfilmentContent.append(form);
+        input.focus();
+    };
+
+    const currentRouteCard = (currentRoute, withKeepAction = false) => {
+        const current = element('section', 'rounded-[22px] border-2 border-green/35 bg-green-soft/15 p-4 sm:p-5');
+
+        if (! currentRoute) {
+            current.append(
+                element('h6', 'font-display text-2xl', 'Маршрут іще не склався'),
+                element('p', 'mt-2 text-sm leading-6 text-muted', 'Адреса, магазин або час відсутні. Гусь не геройствує, а просить обрати їх явно.'),
+            );
+
+            return current;
+        }
+
+        current.append(element('h6', 'font-display text-2xl', 'Що стоїть у кошику зараз'));
+        const details = element('dl', 'mt-3 grid gap-3 sm:grid-cols-2');
+        details.append(
+            detail('Отримання', currentRoute.delivery_label),
+            detail('Адреса', currentRoute.address_label),
+            detail('Магазин', (currentRoute.branch_labels ?? []).join(' + ')),
+            detail('Час', currentRoute.timeslot),
+            detail('У кошику вже є', `${currentRoute.items_count ?? 0} позицій`),
+            detail('Поточна сума', money(currentRoute.total)),
+        );
+        current.append(details);
+        const warnings = cartWarnings(currentRoute.validations);
+
+        if (warnings) {
+            current.append(warnings);
+        }
+
+        if ((currentRoute.shipments_count ?? 0) > 1) {
+            current.append(element('p', 'mt-3 rounded-2xl bg-yellow/45 p-3 text-sm font-bold', `Маршрут розділено на ${currentRoute.shipments_count} відправлення.`));
+        }
+
+        if (withKeepAction && currentRoute.review_token) {
+            const keep = actionButton('Лишаємо так — Гусю, покажи фінальну звірку', () => renderReview(currentRoute, currentRoute.review_token));
+            keep.classList.add('mt-4', 'w-full');
+            current.append(keep);
+        } else if (! currentRoute.review_token) {
+            current.append(element('p', 'mt-4 rounded-2xl border-2 border-orange/30 bg-orange/8 p-3 text-sm font-bold text-orange-dark', 'Цей час уже недоступний. Попросіть Гуся знайти свіжий маршрут.'));
+        }
+
+        return current;
+    };
+
+    const renderManualFulfilment = () => {
+        const payload = fulfilmentInitial;
+        setFulfilmentBody('Оберіть маршрут вручну', 'Запасний план Гуся', 'Оберіть нинішню чи збережену адресу або знайдіть іншу точку. Усе одно кожен крок доведеться підтвердити — диктатури дзьоба не буде.');
+        const layout = element('div', 'grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]');
+        const change = element('section', 'rounded-[22px] bg-canvas p-4 sm:p-5');
+        change.append(
+            element('h6', 'font-display text-2xl', 'Інший маршрут'),
+            element('p', 'mt-1 text-sm leading-6 text-muted', 'Оберіть знайому адресу або дайте Гусю нову точку для пошуку.'),
+        );
+        const addresses = element('div', 'mt-3 grid gap-2');
+        (payload.addresses ?? []).forEach((address) => {
+            addresses.append(actionButton(`${address.eyebrow}: ${address.label}`, () => renderAddressOptions(address.token), true));
+        });
+        change.append(addresses);
+        const search = actionButton('Інша точка — нехай Гусь пошукає', renderAddressSearch, false);
+        search.classList.add('mt-3', 'w-full');
+        change.append(search);
+        layout.append(currentRouteCard(payload.current, true), change);
+        fulfilmentContent.append(layout);
+    };
+
+    const handleRouteIntent = (payload, sentence) => {
+        if (payload.kind === 'clarification') {
+            renderIntentPrompt(payload.question, sentence);
+
+            return;
+        }
+
+        if (payload.kind === 'keep_current') {
+            if (fulfilmentInitial.current?.review_token) {
+                renderReview(fulfilmentInitial.current, fulfilmentInitial.current.review_token);
+            } else {
+                renderIntentPrompt('Нинішній час уже не підходить. Скажіть Гусю нову адресу, спосіб і бажаний час.', sentence);
+            }
+
+            return;
+        }
+
+        if (payload.kind === 'address_candidates') {
+            renderAddressCandidates(payload);
+
+            return;
+        }
+
+        if (payload.kind === 'nova_settlements') {
+            renderNovaSettlements(payload.settlements, payload.heard, payload.office_hint);
+
+            return;
+        }
+
+        renderIntentPrompt('Гусь не впізнав маршрут. Скажіть адресу й спосіб отримання ще раз.', sentence);
+    };
+
+    const renderIntentPrompt = (question = null, previousSentence = '') => {
+        setFulfilmentBody('Скажіть Гусю, куди й як доставити', 'Маршрут людською мовою', 'Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.');
+        const layout = element('div', 'grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(18rem,0.9fr)]');
+        const prompt = element('section', 'rounded-[24px] border-2 border-ink bg-yellow/25 p-4 shadow-[4px_4px_0_#20201D] sm:p-5');
+
+        if (question) {
+            prompt.append(element('p', 'mb-4 rounded-2xl bg-paper p-3 font-extrabold text-orange-dark', question));
+        }
+
+        const form = element('form', 'grid gap-3');
+        const input = element('textarea', 'min-h-28 w-full resize-y rounded-2xl border-2 border-ink/20 bg-paper px-4 py-3 leading-6 outline-none focus:border-green focus:ring-3 focus:ring-green/15');
+        input.maxLength = 600;
+        input.rows = 3;
+        input.value = previousSentence;
+        input.placeholder = 'Доставка додому: Київ, вул. Саксаганського, 57-Б. Завтра після 18:00';
+        input.setAttribute('aria-label', 'Куди й як доставити кошик');
+        const example = element('p', 'text-sm leading-6 text-muted', 'Наприклад: Доставка додому: Київ, вул. Саксаганського, 57-Б. Завтра після 18:00');
+        const submit = actionButton('Гусю, розбери маршрут', () => {});
+        submit.type = 'submit';
+        submit.classList.add('w-full', 'sm:w-auto');
+        form.append(input, example, submit);
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const sentence = input.value.trim();
+
+            if (sentence.length < 2) {
+                input.focus();
+
+                return;
+            }
+
+            submit.disabled = true;
+            submit.textContent = 'Гусь розкладає маршрут по пірʼїнках…';
+
+            try {
+                handleRouteIntent(await discover({ stage: 'intent', query: sentence }), sentence);
+            } catch (error) {
+                showGuard(error.payload ?? { message: error.message });
+            } finally {
+                submit.disabled = false;
+                submit.textContent = 'Гусю, розбери маршрут';
+            }
+        });
+        prompt.append(form);
+        const manual = actionButton('Обрати маршрут вручну', renderManualFulfilment, true);
+        manual.classList.add('mt-4', 'w-full', 'sm:w-auto');
+        prompt.append(manual);
+        layout.append(prompt, currentRouteCard(fulfilmentInitial.current));
+        fulfilmentContent.append(layout);
+
+        if (question) {
+            input.focus();
+        }
+    };
+
+    const renderInitialFulfilment = (payload) => {
+        fulfilmentInitial = payload;
+        discoverUrl = payload.discover_url;
+        startUrl = payload.start_url;
+        renderIntentPrompt();
     };
 
     const productCard = (product, compact = false) => {
@@ -588,7 +1083,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
                 return;
             }
 
-            renderReadyCart(payload.cart);
+            renderInitialFulfilment(payload);
         } catch (error) {
             showGuard(error.payload ?? { message: error.message });
         }
@@ -604,20 +1099,25 @@ if (silpoDialog instanceof HTMLDialogElement) {
     silpoDialog.querySelector('[data-silpo-start]').addEventListener('click', async (event) => {
         const button = event.currentTarget;
         const mode = silpoDialog.querySelector('input[name="silpo-mode"]:checked')?.value ?? 'assisted';
+
+        if (! reviewToken || ! startUrl) {
+            return;
+        }
+
         button.disabled = true;
-        button.textContent = 'Гусь натягує авоську…';
+        button.textContent = 'Гусь звіряє маршрут і натягує авоську…';
 
         try {
-            const payload = await fetchJson(silpoDialog.dataset.startUrl, {
+            const payload = await fetchJson(startUrl, {
                 method: 'POST',
-                body: JSON.stringify({ mode }),
+                body: JSON.stringify({ mode, review_token: reviewToken }),
             });
             openRun(payload.run_url);
         } catch (error) {
             showGuard(error.payload ?? { message: error.message });
         } finally {
             button.disabled = false;
-            button.textContent = 'Нехай іде';
+            button.textContent = 'Гусю, маршрут є — лети збирати кошик';
         }
     });
 
@@ -670,32 +1170,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
         }
     });
 
-    silpoDialog.querySelector('[data-silpo-refresh-submit]').addEventListener('click', async (event) => {
-        const button = event.currentTarget;
-
-        if (! refreshUrl || ! refreshPayload) {
-            return;
-        }
-
-        button.disabled = true;
-        button.textContent = 'Гусь переставляє час…';
-
-        try {
-            const payload = await fetchJson(refreshUrl, {
-                method: 'POST',
-                body: JSON.stringify(refreshPayload),
-            });
-            refreshUrl = null;
-            refreshPayload = null;
-            renderReadyCart(payload.cart);
-        } catch (error) {
-            showGuard(error.payload ?? { message: error.message });
-        } finally {
-            button.disabled = false;
-            button.textContent = 'Так, змінити лише час';
-        }
-    });
-
+    routeHomeButton.addEventListener('click', () => renderInitialFulfilment(fulfilmentInitial));
     silpoDialog.querySelector('[data-silpo-recheck]').addEventListener('click', preflight);
     silpoDialog.querySelector('[data-silpo-dialog-close]').addEventListener('click', () => silpoDialog.close('cancel'));
     silpoDialog.addEventListener('close', stopPolling);

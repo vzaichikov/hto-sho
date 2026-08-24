@@ -29,6 +29,15 @@ class StartEventCartRunRequest extends FormRequest
     {
         return [
             'mode' => ['required', Rule::enum(CartRunMode::class)],
+            'review_token' => ['required', 'string', 'max:50000'],
+        ];
+    }
+
+    /** @return array<string, string> */
+    public function messages(): array
+    {
+        return [
+            'review_token.required' => 'Гусь просить спершу перевірити маршрут кошика.',
         ];
     }
 }

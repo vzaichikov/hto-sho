@@ -23,6 +23,7 @@ final readonly class SilpoCartContextData
         public array $validations,
         public array $slot,
         public ?float $totalAfterDiscounts,
+        public ?string $verifiedFulfilmentFingerprint = null,
     ) {}
 
     /**
@@ -104,6 +105,18 @@ final readonly class SilpoCartContextData
             totalAfterDiscounts: is_numeric(Arr::get($cart, 'calculation.totalAfterDiscounts'))
                 ? (float) Arr::get($cart, 'calculation.totalAfterDiscounts')
                 : null,
+            verifiedFulfilmentFingerprint: SilpoFulfilmentSnapshotData::selectionFingerprint([
+                'cart_id' => $cartId,
+                'delivery_type' => $deliveryType,
+                'address' => $address,
+                'shipments' => collect(Arr::get($cart, 'shipments', []))
+                    ->filter(fn (mixed $shipment): bool => is_array($shipment))
+                    ->map(fn (array $shipment): array => Arr::only($shipment, ['companyId', 'branchId']))
+                    ->values()
+                    ->all(),
+                'slot_start' => $slotStart,
+                'slot_end' => $slotEnd,
+            ]),
         );
     }
 
@@ -123,6 +136,9 @@ final readonly class SilpoCartContextData
             totalAfterDiscounts: is_numeric(Arr::get($context, 'total_after_discounts'))
                 ? (float) Arr::get($context, 'total_after_discounts')
                 : null,
+            verifiedFulfilmentFingerprint: is_string(Arr::get($context, 'fulfilment_fingerprint'))
+                ? Arr::get($context, 'fulfilment_fingerprint')
+                : null,
         );
     }
 
@@ -140,11 +156,16 @@ final readonly class SilpoCartContextData
             'validations' => $this->validations,
             'slot' => $this->slot,
             'total_after_discounts' => $this->totalAfterDiscounts,
+            'fulfilment_fingerprint' => $this->verifiedFulfilmentFingerprint,
         ];
     }
 
     public function fingerprint(): string
     {
+        if ($this->verifiedFulfilmentFingerprint !== null) {
+            return $this->verifiedFulfilmentFingerprint;
+        }
+
         return hash('sha256', json_encode([
             $this->cartId,
             $this->deliveryType,

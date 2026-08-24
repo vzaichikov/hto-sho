@@ -5,6 +5,8 @@ namespace App\Providers;
 use App\Contracts\CartProductAgent;
 use App\Contracts\SilpoCartGateway;
 use App\Contracts\SilpoProfileGateway;
+use App\Contracts\SilpoRouteIntentInterpreter;
+use App\Services\AiSilpoRouteIntentInterpreter;
 use App\Services\CartProductDecisionService;
 use App\Services\McpSilpoCartGateway;
 use App\Services\McpSilpoProfileGateway;
@@ -20,6 +22,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(SilpoProfileGateway::class, McpSilpoProfileGateway::class);
         $this->app->bind(SilpoCartGateway::class, McpSilpoCartGateway::class);
         $this->app->bind(CartProductAgent::class, CartProductDecisionService::class);
+        $this->app->bind(SilpoRouteIntentInterpreter::class, AiSilpoRouteIntentInterpreter::class);
     }
 
     public function boot(): void

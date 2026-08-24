@@ -1,0 +1,8 @@
+/* Kurka Lapoyu by Bohdan Hdal: https://bohdan.com.ua/tvory/kurka-lapoyu-font/ */
+@font-face {
+    font-family: 'Kurka Lapoyu';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('../fonts/KurkaLapoyu-Regular.otf') format('opentype');
+}

@@ -1,3 +1,5 @@
+@import './fonts.css';
+
 :root {
   --cream: #fff4dc;
   --cream-deep: #f6e8ca;
@@ -94,7 +96,7 @@ a {
   width: max-content;
   display: grid;
   justify-items: start;
-  font: 400 34px/0.68 "Neucha", cursive;
+  font: 400 34px/0.78 "Kurka Lapoyu", cursive;
   letter-spacing: -0.08em;
   transform: rotate(-4deg);
 }
@@ -159,6 +161,8 @@ a {
 .hero-copy {
   position: relative;
   z-index: 5;
+  width: 100%;
+  min-width: 0;
   max-width: 500px;
 }
 
@@ -168,7 +172,7 @@ a {
   max-width: 100%;
   margin: 0 0 20px;
   color: var(--ink);
-  font: 400 25px/1.05 "Neucha", cursive;
+  font: 400 25px/1.15 "Kurka Lapoyu", cursive;
   transform: rotate(-1deg);
 }
 
@@ -187,7 +191,7 @@ a {
 .hero h1 {
   margin: 0;
   max-width: 600px;
-  font: 400 clamp(64px, 6vw, 94px) / 0.82 "Neucha", cursive;
+  font: 400 clamp(64px, 6vw, 88px) / 1.08 "Kurka Lapoyu", cursive;
   letter-spacing: -0.035em;
   text-transform: uppercase;
   text-shadow:
@@ -204,7 +208,7 @@ a {
   margin-top: 18px;
   color: var(--red);
   font-size: 0.56em;
-  line-height: 0.98;
+  line-height: 1.12;
   font-style: normal;
   text-transform: none;
   transform: rotate(-1deg);
@@ -481,7 +485,7 @@ a {
 .doodle {
   position: absolute;
   z-index: 5;
-  font-family: "Neucha", cursive;
+  font-family: "Kurka Lapoyu", cursive;
 }
 
 .doodle-one {
@@ -507,7 +511,7 @@ a {
   padding: 10px 17px;
   border-radius: 3px;
   background: var(--green-soft);
-  font: 400 18px/1.05 "Neucha", cursive;
+  font: 400 18px/1.15 "Kurka Lapoyu", cursive;
   text-align: center;
   transform: rotate(-3deg);
 }
@@ -588,7 +592,7 @@ a {
   margin: 0 0 20px;
   padding: 8px 14px;
   background: var(--yellow);
-  font: 400 18px/1 "Neucha", cursive;
+  font: 400 18px/1.15 "Kurka Lapoyu", cursive;
   transform: rotate(-2deg);
 }
 
@@ -596,7 +600,7 @@ a {
 .how h2,
 .final-copy h2 {
   margin: 0;
-  font: 400 clamp(48px, 5vw, 78px) / 0.92 "Neucha", cursive;
+  font: 400 clamp(48px, 5vw, 78px) / 1.08 "Kurka Lapoyu", cursive;
   letter-spacing: -0.03em;
   text-shadow:
     -0.45px 0 0 currentColor,
@@ -691,7 +695,7 @@ a {
 .typing {
   margin-top: 27px;
   color: var(--green);
-  font: 400 15px/1 "Neucha", cursive;
+  font: 400 15px/1 "Kurka Lapoyu", cursive;
 }
 
 .summary-card {
@@ -804,7 +808,7 @@ a {
 .how-heading p {
   margin: 0 0 7px;
   color: var(--red);
-  font: 400 25px/1 "Neucha", cursive;
+  font: 400 25px/1.15 "Kurka Lapoyu", cursive;
   transform: rotate(-2deg);
 }
 
@@ -829,7 +833,7 @@ a {
   top: 62px;
   right: -27px;
   color: var(--red);
-  font: 400 31px/1 "Neucha", cursive;
+  font: 400 31px/1 "Kurka Lapoyu", cursive;
   transform: rotate(-8deg);
 }
 
@@ -839,7 +843,7 @@ a {
   top: -8px;
   left: calc(50% - 58px);
   color: var(--red);
-  font: 400 17px/1 "Neucha", cursive;
+  font: 400 17px/1 "Kurka Lapoyu", cursive;
   transform: rotate(-8deg);
 }
 
@@ -903,7 +907,7 @@ a {
   top: -28px;
   left: 14px;
   color: var(--yellow);
-  font: 400 70px/1 "Neucha", cursive;
+  font: 400 70px/1 "Kurka Lapoyu", cursive;
 }
 
 .quote-card p {
@@ -1064,14 +1068,14 @@ a {
 .legal-eyebrow {
   margin: 0 0 9px;
   color: var(--red-dark);
-  font: 400 18px/1 "Neucha", cursive;
+  font: 400 18px/1.15 "Kurka Lapoyu", cursive;
   transform: rotate(-1deg);
 }
 
 .legal-header h2 {
   max-width: 610px;
   margin: 0;
-  font: 400 clamp(35px, 6vw, 51px) / 0.96 "Neucha", cursive;
+  font: 400 clamp(35px, 6vw, 51px) / 1.1 "Kurka Lapoyu", cursive;
   letter-spacing: -0.02em;
 }
 
@@ -1275,7 +1279,7 @@ a {
   }
 
   .hero {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     padding-top: 44px;
   }
 
@@ -1327,7 +1331,7 @@ a {
   }
 
   .example-shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .section-heading {
@@ -1350,7 +1354,7 @@ a {
   }
 
   .final-inner {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     padding-block: 72px;
   }
 
@@ -1552,7 +1556,10 @@ a {
     font-size: 15px;
   }
 
-  .section-heading h2,
+  .section-heading h2 {
+    font-size: clamp(44px, 12.5vw, 56px);
+  }
+
   .how h2 {
     font-size: clamp(48px, 15vw, 64px);
   }
@@ -1630,7 +1637,7 @@ a {
   }
 
   .final-copy h2 {
-    font-size: clamp(46px, 15vw, 62px);
+    font-size: clamp(44px, 13vw, 58px);
   }
 
   .quote-card {

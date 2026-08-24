@@ -13,9 +13,6 @@ export default defineConfig({
                     subsets: ['cyrillic', 'latin'],
                     weights: [400, 500, 600, 700, 800],
                 }),
-                bunny('Neucha', {
-                    subsets: ['cyrillic', 'latin'],
-                }),
             ],
         }),
         tailwindcss(),

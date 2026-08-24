@@ -28,8 +28,11 @@ final class StartEventCartRunAction
         private readonly HarnessRecorder $harnessRecorder,
     ) {}
 
-    public function execute(Event $event, CartRunMode $mode): EventCartRun
-    {
+    public function execute(
+        Event $event,
+        CartRunMode $mode,
+        ?string $expectedFulfilmentFingerprint = null,
+    ): EventCartRun {
         $activeRun = $event->cartRuns()
             ->whereIn('status', $this->activeStatuses())
             ->latest()
@@ -60,6 +63,13 @@ final class StartEventCartRunAction
 
         try {
             $cart = $this->silpo->getReadyCart($connection->access_token, $harnessRun);
+
+            if ($cart !== null
+                && $expectedFulfilmentFingerprint !== null
+                && ! hash_equals($expectedFulfilmentFingerprint, $cart->fingerprint())) {
+                throw new RuntimeException('Маршрут змінився просто перед стартом. Гусь просить перевірити його ще раз.');
+            }
+
             $catalogScopes = $cart === null
                 ? ['categories' => [], 'sets' => []]
                 : $this->silpo->getCatalogScopes($connection->access_token, $cart, $harnessRun);

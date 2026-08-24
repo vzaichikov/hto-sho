@@ -96,10 +96,16 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
         $missingTargets = $this->missingTargets($verifiedCart, $targets);
         $managedProductIds = array_keys($targets);
         $managedValidations = collect($verifiedCart->validations)
+            ->reject(fn (array $validation): bool => data_get($validation, 'message') === 'promotion.available'
+                || mb_strtolower((string) data_get($validation, 'level')) === 'info'
+                || mb_strtolower((string) data_get($validation, 'type')) === 'info')
             ->filter(fn (array $validation): bool => in_array(data_get($validation, 'product_id'), $managedProductIds, true))
             ->values()
             ->all();
         $validationWarnings = collect($verifiedCart->validations)
+            ->reject(fn (array $validation): bool => data_get($validation, 'message') === 'promotion.available'
+                || mb_strtolower((string) data_get($validation, 'level')) === 'info'
+                || mb_strtolower((string) data_get($validation, 'type')) === 'info')
             ->map(fn (array $validation): string => $this->validationMessage((string) data_get($validation, 'message')))
             ->unique()
             ->values()

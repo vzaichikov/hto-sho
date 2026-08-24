@@ -5,7 +5,7 @@
         <section class="relative mt-5 overflow-hidden rounded-[32px] border-2 border-ink bg-paper px-6 py-8 shadow-[7px_8px_0_#20201D] sm:px-9 sm:py-10">
             <span class="inline-block -rotate-2 rounded-sm bg-yellow px-3 py-1.5 font-display text-lg">Гусь усе тримає під контролем</span>
             <div class="relative z-10 mt-5 max-w-xl sm:max-w-[65%]">
-                <h1 class="font-display text-5xl leading-[0.9] tracking-[-0.035em] sm:text-6xl">Ваші смачні плани</h1>
+                <h1 class="font-display text-5xl leading-[1.1] tracking-[-0.035em] sm:text-6xl">Ваші смачні плани</h1>
                 <p class="mt-4 max-w-lg text-sm leading-6 text-muted sm:text-base sm:leading-7">Створюйте подію, додавайте уривки переписки — і повертайтеся до одного актуального списку без перечитування чату.</p>
 
                 <div class="mt-6">
@@ -30,7 +30,7 @@
         @else
             <div class="mt-11 flex items-end justify-between gap-4">
                 <div>
-                    <p class="font-display text-lg leading-none text-green-dark">Усе в одному місці</p>
+                    <p class="font-display text-lg leading-[1.15] text-green-dark">Усе в одному місці</p>
                     <h2 class="mt-1 font-display text-4xl">Ваші події</h2>
                 </div>
                 <span class="-rotate-2 rounded-sm bg-yellow/70 px-3 py-1 font-display text-lg">{{ $events->total() }} подій</span>
@@ -47,7 +47,7 @@
                             <div class="grid size-11 -rotate-3 place-items-center rounded-[45%] bg-yellow font-display text-xl transition group-hover:rotate-0">{{ $loop->iteration }}</div>
                             <x-status-badge :status="$event->status" />
                         </div>
-                        <h3 class="mt-6 font-display text-2xl leading-none tracking-tight transition group-hover:text-orange-dark">{{ $event->title }}</h3>
+                        <h3 class="mt-6 font-display text-2xl leading-[1.15] tracking-tight transition group-hover:text-orange-dark">{{ $event->title }}</h3>
                         <p class="mt-1 text-sm text-muted">Оновлено {{ $event->updated_at->diffForHumans() }} · матеріалів: {{ $event->sources_count }}</p>
 
                         <div class="mt-auto flex items-end justify-between border-t border-ink/10 pt-5">

@@ -6,4 +6,4 @@ paths:
 # Layouts
 
 ## Bundle and render Cyrillic brand fonts
-Manrope and Neucha must request both cyrillic and latin subsets in the Laravel Vite font configuration. Layouts must render @fonts(['manrope', 'neucha']); declaring the CSS family alone silently falls back for Ukrainian text.
+Manrope must request both cyrillic and latin subsets in the Laravel Vite font configuration, and layouts must render @fonts('manrope'). Kurka Lapoyu is self-hosted from the author's unchanged OTF file and imported through resources/css/fonts.css in both CSS entries.

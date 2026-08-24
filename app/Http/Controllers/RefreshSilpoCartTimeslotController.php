@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Actions\RefreshSilpoCartTimeslotAction;
 use App\Http\Requests\RefreshSilpoCartTimeslotRequest;
 use App\Models\Event;
+use App\Services\SilpoCartValidationPresenter;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\JsonResponse;
@@ -17,6 +18,7 @@ class RefreshSilpoCartTimeslotController extends Controller
         RefreshSilpoCartTimeslotRequest $request,
         Event $event,
         RefreshSilpoCartTimeslotAction $refresh,
+        SilpoCartValidationPresenter $validationPresenter,
     ): JsonResponse {
         try {
             $cart = $refresh->execute($request->user(), $event, $request->validated());
@@ -48,7 +50,7 @@ class RefreshSilpoCartTimeslotController extends Controller
                 'total' => $cart->totalAfterDiscounts,
                 'delivery_cost' => data_get($cart->slot, 'deliveryCost'),
                 'min_order_cost' => data_get($cart->slot, 'minOrderCost'),
-                'validations' => $cart->validations,
+                'validations' => $validationPresenter->present($cart->validations),
             ],
         ]);
     }
