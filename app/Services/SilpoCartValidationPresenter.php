@@ -16,7 +16,9 @@ final class SilpoCartValidationPresenter
                 $level = mb_strtolower((string) Arr::get($validation, 'level'));
                 $type = mb_strtolower((string) Arr::get($validation, 'type'));
 
-                return $message === 'promotion.available' || $level === 'info' || $type === 'info';
+                return in_array($message, ['promotion.available', 'order.cost.min'], true)
+                    || $level === 'info'
+                    || $type === 'info';
             })
             ->map(fn (array $validation): array => [
                 'message' => $this->message((string) Arr::get($validation, 'message')),
@@ -31,7 +33,6 @@ final class SilpoCartValidationPresenter
         return match ($message) {
             'timeslot.not_available' => 'Цей час уже недоступний. Гусь допоможе обрати свіжий.',
             'product.offer.stock.max' => 'Одного з товарів у Сільпо вже менше, ніж просить кошик.',
-            'order.cost.min' => 'Кошик ще не досяг мінімальної суми для обраної доставки.',
             'order.payment_types.disabled' => 'Для цього кошика Сільпо ще не відкрило спосіб оплати.',
             default => 'Сільпо просить додатково перевірити кошик.',
         };

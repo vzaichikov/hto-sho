@@ -96,14 +96,22 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
         $missingTargets = $this->missingTargets($verifiedCart, $targets);
         $managedProductIds = array_keys($targets);
         $managedValidations = collect($verifiedCart->validations)
-            ->reject(fn (array $validation): bool => data_get($validation, 'message') === 'promotion.available'
+            ->reject(fn (array $validation): bool => in_array(
+                data_get($validation, 'message'),
+                ['promotion.available', 'order.cost.min'],
+                true,
+            )
                 || mb_strtolower((string) data_get($validation, 'level')) === 'info'
                 || mb_strtolower((string) data_get($validation, 'type')) === 'info')
             ->filter(fn (array $validation): bool => in_array(data_get($validation, 'product_id'), $managedProductIds, true))
             ->values()
             ->all();
         $validationWarnings = collect($verifiedCart->validations)
-            ->reject(fn (array $validation): bool => data_get($validation, 'message') === 'promotion.available'
+            ->reject(fn (array $validation): bool => in_array(
+                data_get($validation, 'message'),
+                ['promotion.available', 'order.cost.min'],
+                true,
+            )
                 || mb_strtolower((string) data_get($validation, 'level')) === 'info'
                 || mb_strtolower((string) data_get($validation, 'type')) === 'info')
             ->map(fn (array $validation): string => $this->validationMessage((string) data_get($validation, 'message')))
@@ -308,7 +316,6 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
     {
         return match ($message) {
             'product.offer.stock.max' => 'Один із товарів перевищує доступний залишок Сільпо.',
-            'order.cost.min' => 'Кошик ще не досяг мінімальної суми для обраної доставки.',
             'order.payment_types.disabled' => 'Для поточного кошика Сільпо ще не дозволило спосіб оплати.',
             default => 'Сільпо просить додатково перевірити кошик.',
         };

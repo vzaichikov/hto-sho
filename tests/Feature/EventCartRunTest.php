@@ -613,6 +613,7 @@ class EventCartRunTest extends TestCase
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
         $gateway = new FakeCartGateway($this->readyCart([
             ['type' => 'info', 'message' => 'promotion.available'],
+            ['type' => 'error', 'message' => 'order.cost.min'],
             ['type' => 'error', 'message' => 'timeslot.not_available'],
             ['type' => 'warning', 'message' => 'mystery.code'],
         ]));
@@ -633,6 +634,8 @@ class EventCartRunTest extends TestCase
 
         $encoded = $response->getContent();
         $this->assertStringNotContainsString('promotion.available', $encoded);
+        $this->assertStringNotContainsString('order.cost.min', $encoded);
+        $this->assertStringNotContainsString('Кошик ще не досяг мінімальної суми', $encoded);
         $this->assertStringNotContainsString('timeslot.not_available', $encoded);
         $this->assertStringNotContainsString('mystery.code', $encoded);
     }
@@ -2016,6 +2019,64 @@ class EventCartRunTest extends TestCase
         $this->assertFalse($gateway->writes[0][0]['addQuantity']);
     }
 
+    public function test_minimum_order_validation_does_not_block_writing_products_to_an_empty_cart(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $readyCart = $this->readyCart();
+        $emptyCart = new SilpoCartContextData(
+            cartId: $readyCart->cartId,
+            deliveryType: $readyCart->deliveryType,
+            branchId: $readyCart->branchId,
+            companyId: $readyCart->companyId,
+            slotStart: $readyCart->slotStart,
+            slotEnd: $readyCart->slotEnd,
+            items: [],
+            validations: [[
+                'level' => 'error',
+                'type' => 'order',
+                'message' => 'order.cost.min',
+                'product_id' => null,
+            ]],
+            slot: $readyCart->slot,
+            totalAfterDiscounts: 69,
+            verifiedFulfilmentFingerprint: $readyCart->verifiedFulfilmentFingerprint,
+        );
+        $run = EventCartRun::factory()->for($event)->create([
+            'phase' => CartRunPhase::ReadyToCommit,
+            'status' => CartRunStatus::Committing,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $emptyCart->cartId,
+            'delivery_fingerprint' => $emptyCart->fingerprint(),
+            'cart_context' => $emptyCart->toRunContext(),
+            'state' => ['has_unmet_needs' => false],
+            'staged_items' => [[
+                'need_key' => 'water',
+                'product_id' => 'water-1',
+                'company_id' => 'company-1',
+                'branch_id' => 'branch-1',
+                'name' => 'Вода негазована 2 л',
+                'quantity' => 2,
+                'price' => 30,
+                'step' => 1,
+                'stock' => 20,
+            ]],
+        ]);
+        $gateway = new FakeCartGateway($emptyCart);
+        $gateway->validationsAfterWrite = $emptyCart->validations;
+
+        (new CommitEventCartRunJob($run->id, 0))->handle($gateway, new GooseCartStatusService);
+
+        $run->refresh();
+        $this->assertSame(CartRunStatus::Synced, $run->status);
+        $this->assertSame(CartSyncStatus::Synced, $event->refresh()->cart_sync_status);
+        $this->assertSame([], $run->warnings);
+        $this->assertCount(1, $gateway->writes);
+        $this->assertSame('water-1', $gateway->writes[0][0]['productId']);
+        $this->assertSame(['water-1'], collect($gateway->cart?->items)->pluck('product_id')->all());
+    }
+
     public function test_event_page_contains_the_large_live_cart_workspace(): void
     {
         [$owner, $event] = $this->eventWithPlan();
@@ -2387,6 +2448,9 @@ final class FakeCartGateway implements SilpoCartGateway
 
     /** @var array<int, array<int, array<string, mixed>>> */
     public array $writes = [];
+
+    /** @var array<int, array<string, mixed>> */
+    public array $validationsAfterWrite = [];
 
     public ?SilpoCartRefreshCandidateData $refreshCandidate = null;
 
@@ -2771,7 +2835,7 @@ final class FakeCartGateway implements SilpoCartGateway
             slotStart: $this->cart->slotStart,
             slotEnd: $this->cart->slotEnd,
             items: $items->values()->all(),
-            validations: [],
+            validations: $this->validationsAfterWrite,
             slot: $this->cart->slot,
             totalAfterDiscounts: (float) $items->sum('total'),
             verifiedFulfilmentFingerprint: $this->cart->verifiedFulfilmentFingerprint,
