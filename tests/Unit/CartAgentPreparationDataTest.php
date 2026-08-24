@@ -209,6 +209,30 @@ class CartAgentPreparationDataTest extends TestCase
         $this->assertSame(['пучки', 'пучки'], array_column($preparation->needs, 'unit'));
     }
 
+    public function test_it_starts_with_the_shortest_query_that_preserves_repeated_product_identity(): void
+    {
+        $need = [
+            ...$this->need('chips', 0, 'Чіпси'),
+            'unit' => 'пачка',
+            'search_queries' => [
+                'чіпси',
+                'картопляні чіпси',
+                'чипси картопляні',
+                'солоні картопляні чіпси',
+            ],
+        ];
+
+        $preparation = CartAgentPreparationData::from(['needs' => [$need]], [[
+            'name' => 'Чіпси',
+            'category' => 'food',
+            'quantity' => 1,
+            'unit' => 'пачка',
+            'note' => '',
+        ]]);
+
+        $this->assertSame('картопляні чіпси', data_get($preparation->needs, '0.search_query'));
+    }
+
     /** @return array<string, mixed> */
     private function need(string $key, int $sourceIndex, string $name): array
     {

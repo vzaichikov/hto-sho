@@ -673,6 +673,12 @@ final class CartCandidateSuitability
 
     private function isProduceNeed(string $needText): bool
     {
+        if ($this->containsAny($needText, [
+            'чіпс', 'чипс', 'снек', 'крекер',
+        ])) {
+            return false;
+        }
+
         return $this->containsAny($needText, [
             'овоч', 'гриб', 'печериц', 'шампіньйон', 'салат', 'зелень', 'фрукт', 'томат', 'помід', 'огір', 'перець',
             'кабач', 'цукіні', 'баклаж', 'капуст', 'моркв', 'буряк', 'картоп', 'цибул', 'часник',
@@ -897,7 +903,8 @@ final class CartCandidateSuitability
     /** @return array<int, string> */
     private function catalogRoots(string $text): array
     {
-        $tokens = preg_split('/[^\p{L}\p{N}]+/u', Str::lower($text), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $normalizedText = str_replace('чіпс', 'чипс', Str::lower($text));
+        $tokens = preg_split('/[^\p{L}\p{N}]+/u', $normalizedText, -1, PREG_SPLIT_NO_EMPTY) ?: [];
 
         return collect($tokens)
             ->filter(fn (string $token): bool => mb_strlen($token) >= 4)

@@ -79,7 +79,7 @@ final readonly class CartAgentPreparationData
                 ...$need,
                 'key' => sprintf('n_%02d', $index + 1),
                 'quantity' => (float) $need['quantity'],
-                'search_query' => $need['search_queries'][0],
+                'search_query' => self::preferredInitialSearchQuery($need['search_queries']),
                 'status' => 'pending',
                 'attempts' => [],
                 'inspected_products' => [],
@@ -297,6 +297,61 @@ final readonly class CartAgentPreparationData
             'note' => (string) data_get($planItem, 'note', ''),
             'search_queries' => array_values(array_unique([$name, $alternateQuery])),
         ];
+    }
+
+    /** @param array<int, string> $queries */
+    private static function preferredInitialSearchQuery(array $queries): string
+    {
+        $queries = collect($queries)
+            ->map(fn (string $query): string => Str::squish($query))
+            ->filter()
+            ->unique(fn (string $query): string => Str::lower($query))
+            ->values();
+        $rootsByQuery = $queries->mapWithKeys(
+            fn (string $query): array => [$query => self::searchIdentityRoots($query)],
+        );
+        $repeatedRoots = $rootsByQuery
+            ->flatten()
+            ->countBy()
+            ->filter(fn (int $count): bool => $count >= 2)
+            ->keys()
+            ->values();
+
+        if ($repeatedRoots->count() < 2) {
+            return (string) $queries->first();
+        }
+
+        return (string) ($queries
+            ->filter(function (string $query) use ($repeatedRoots, $rootsByQuery): bool {
+                $queryRoots = collect($rootsByQuery->get($query, []));
+
+                return $repeatedRoots->diff($queryRoots)->isEmpty();
+            })
+            ->sortBy(fn (string $query): array => [
+                count($rootsByQuery->get($query, [])),
+                mb_strlen($query),
+            ])
+            ->first() ?? $queries->first());
+    }
+
+    /** @return array<int, string> */
+    private static function searchIdentityRoots(string $query): array
+    {
+        $positivePhrase = preg_split('/\b(?:без|крім|without)\b/ui', Str::lower($query), 2)[0] ?? '';
+        $positivePhrase = str_replace('чіпс', 'чипс', $positivePhrase);
+        $tokens = preg_split('/[^\p{L}\p{N}]+/u', $positivePhrase, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        return collect($tokens)
+            ->filter(fn (string $token): bool => mb_strlen($token) >= 4)
+            ->map(fn (string $token): string => mb_substr($token, 0, 4))
+            ->reject(fn (string $root): bool => in_array($root, [
+                'альт', 'банк', 'бана', 'варі', 'гото', 'грил', 'кіло', 'літр',
+                'паке', 'пачк', 'пози', 'прод', 'свіж', 'сири', 'смак', 'това',
+                'упак', 'харч', 'част', 'штук',
+            ], true))
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /** @param array<string, mixed> $need */

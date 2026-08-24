@@ -28,6 +28,32 @@ class CartCandidateSuitabilityTest extends TestCase
         ));
     }
 
+    public function test_potato_chips_are_not_misclassified_as_fresh_produce(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'Картопляні чіпси',
+            'category' => 'food',
+            'quantity' => 1,
+            'unit' => 'пачка',
+            'search_queries' => ['картопляні чіпси', 'чипси картопляні'],
+        ];
+        $candidate = [
+            'name' => "Чипси Lay's зі смаком солі",
+            'slug' => 'chypsy-lays-zi-smakom-soli',
+            'available' => true,
+            'stock' => 20,
+            'weighted' => false,
+            'display_ratio' => '120 г',
+        ];
+
+        $this->assertTrue($suitability->allows($need, $candidate, [], []));
+        $this->assertSame(
+            CartProductEvidence::MATCH_EXACT,
+            $suitability->evidence($need, $candidate, [], [])['match'],
+        );
+    }
+
     public function test_it_rejects_processed_pork_and_offers_a_raw_cut_query(): void
     {
         $suitability = new CartCandidateSuitability;

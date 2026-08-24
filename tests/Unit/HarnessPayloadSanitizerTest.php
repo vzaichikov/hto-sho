@@ -12,13 +12,44 @@ class HarnessPayloadSanitizerTest extends TestCase
         $payload = (new HarnessPayloadSanitizer)->sanitize([
             'headers' => ['Authorization' => 'Bearer secret-token'],
             'access_token' => 'token',
-            'nested' => ['client_secret' => 'secret', 'safe' => 'visible'],
+            'nested' => [
+                'client_secret' => 'secret',
+                'encrypted_content' => 'opaque-reasoning-payload',
+                'safe' => 'visible',
+            ],
         ]);
 
         $this->assertSame('[REDACTED]', $payload['headers']['Authorization']);
         $this->assertSame('[REDACTED]', $payload['access_token']);
         $this->assertSame('[REDACTED]', $payload['nested']['client_secret']);
+        $this->assertSame('[REDACTED]', $payload['nested']['encrypted_content']);
         $this->assertSame('visible', $payload['nested']['safe']);
+    }
+
+    public function test_it_discards_model_reasoning_items_but_keeps_semantic_output(): void
+    {
+        $payload = (new HarnessPayloadSanitizer)->sanitize([
+            'output' => [
+                [
+                    'type' => 'reasoning',
+                    'encrypted_content' => 'opaque-reasoning-payload',
+                ],
+                [
+                    'type' => 'message',
+                    'content' => [[
+                        'type' => 'output_text',
+                        'text' => '{"reason":"Корисне пояснення"}',
+                    ]],
+                ],
+            ],
+        ]);
+
+        $this->assertCount(1, $payload['output']);
+        $this->assertSame('message', $payload['output'][0]['type']);
+        $this->assertSame(
+            '{"reason":"Корисне пояснення"}',
+            $payload['output'][0]['content'][0]['text'],
+        );
     }
 
     public function test_it_replaces_image_data_with_safe_metadata(): void

@@ -14,6 +14,7 @@ class HarnessPayloadSanitizer
         'refresh_token',
         'api_key',
         'client_secret',
+        'encrypted_content',
         'password',
         'cookie',
         'csrf',
@@ -32,11 +33,22 @@ class HarnessPayloadSanitizer
     {
         if (is_array($value)) {
             $sanitized = [];
+            $isList = array_is_list($value);
 
             foreach ($value as $key => $item) {
-                $sanitized[$key] = is_string($key) && $this->isSensitiveKey($key)
+                if ($isList && is_array($item) && data_get($item, 'type') === 'reasoning') {
+                    continue;
+                }
+
+                $sanitizedItem = is_string($key) && $this->isSensitiveKey($key)
                     ? '[REDACTED]'
                     : $this->sanitize($item);
+
+                if ($isList) {
+                    $sanitized[] = $sanitizedItem;
+                } else {
+                    $sanitized[$key] = $sanitizedItem;
+                }
             }
 
             return $sanitized;
