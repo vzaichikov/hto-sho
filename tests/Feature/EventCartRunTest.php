@@ -2026,6 +2026,11 @@ class EventCartRunTest extends TestCase
             ->assertSee('Скажіть Гусю, куди й як доставити')
             ->assertSee('Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.')
             ->assertSee('data-silpo-dialog', false)
+            ->assertSee('data-silpo-dialog-minimize', false)
+            ->assertSee('data-silpo-dialog-minimized', false)
+            ->assertSee('data-silpo-dialog-restore', false)
+            ->assertSee('Згорнути вікно кошика')
+            ->assertSee('Розгорнути вікно кошика')
             ->assertSee('Перед походом у Сільпо')
             ->assertSee('Куди Гусю йти по кошик?')
             ->assertDontSee('Крок перед справжнім кошиком')
@@ -2039,6 +2044,16 @@ class EventCartRunTest extends TestCase
             ->assertSee('рольові заміни')
             ->assertSee('Підтверджую товари — додати в кошик')
             ->assertSee('Повний автопілот');
+
+        $javascript = file_get_contents(resource_path('js/app.js'));
+        $css = file_get_contents(resource_path('css/app.css'));
+        $this->assertStringContainsString("silpoDialog.addEventListener('cancel'", $javascript);
+        $this->assertStringContainsString('(! silpoDialog.open && ! harnessMinimized)', $javascript);
+        $this->assertStringContainsString('pendingStagedRevealKeys', $javascript);
+        $this->assertStringContainsString('stagedItemsContainer.scrollTo', $javascript);
+        $this->assertStringNotContainsString("silpoDialog.close('cancel')", $javascript);
+        $this->assertStringNotContainsString("silpoDialog.addEventListener('close', stopPolling)", $javascript);
+        $this->assertStringContainsString('.staged-cart-item-arrival', $css);
     }
 
     public function test_silpo_tab_shows_verified_products_from_the_completed_cart(): void

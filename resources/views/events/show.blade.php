@@ -681,7 +681,7 @@
                             <h3 class="mt-1 font-display text-3xl leading-[1.1] sm:text-4xl" id="silpo-dialog-title">Куди Гусю йти по кошик?</h3>
                         </div>
                         <form method="dialog">
-                            <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-rotate-6 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-silpo-dialog-close aria-label="Закрити">×</button>
+                            <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-translate-y-0.5 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-silpo-dialog-close data-silpo-dialog-minimize aria-label="Згорнути вікно кошика">−</button>
                         </form>
                     </header>
 
@@ -794,6 +794,28 @@
                     </div>
                 </div>
             </dialog>
+
+            <aside
+                class="fixed inset-x-4 bottom-4 z-50 hidden rounded-[24px] border-2 border-ink bg-paper p-4 shadow-[6px_7px_0_#20201D] sm:inset-x-auto sm:right-5 sm:w-[min(22rem,calc(100vw-2.5rem))]"
+                data-silpo-dialog-minimized
+                aria-live="polite"
+                aria-atomic="true"
+            >
+                <div class="flex items-start gap-3">
+                    <img class="goose-working -ml-1 size-16 shrink-0 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="">
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-start justify-between gap-2">
+                            <p class="font-display text-xl leading-[1.15]" data-silpo-minimized-title>Гусь працює</p>
+                            <button class="grid size-8 shrink-0 place-items-center rounded-full bg-canvas text-base font-extrabold transition hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-green" type="button" data-silpo-dialog-restore aria-label="Розгорнути вікно кошика">+</button>
+                        </div>
+                        <p class="mt-1 text-sm leading-5 text-muted" data-silpo-minimized-status>Гусь звіряє ваш нинішній маршрут…</p>
+                        <div class="mt-3 hidden h-2 overflow-hidden rounded-full bg-ink/10" data-silpo-minimized-progress-wrap>
+                            <div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: 0%" data-silpo-minimized-progress></div>
+                            <span class="sr-only" data-silpo-minimized-progress-label>0%</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
         @endif
     </div>
 

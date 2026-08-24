@@ -313,6 +313,10 @@ if (silpoDialog instanceof HTMLDialogElement) {
     const fulfilmentReview = silpoDialog.querySelector('[data-silpo-route-review]');
     const routeHomeButton = silpoDialog.querySelector('[data-silpo-route-home]');
     const runPanel = silpoDialog.querySelector('[data-silpo-run]');
+    const minimizedHarness = document.querySelector('[data-silpo-dialog-minimized]');
+    const minimizeButton = silpoDialog.querySelector('[data-silpo-dialog-minimize]');
+    const restoreButton = minimizedHarness?.querySelector('[data-silpo-dialog-restore]');
+    const stagedItemsContainer = runPanel.querySelector('[data-silpo-staged-items]');
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ?? '';
     let runUrl = null;
     let confirmUrl = null;
@@ -323,6 +327,9 @@ if (silpoDialog instanceof HTMLDialogElement) {
     let lastSequence = 0;
     let pollTimer = null;
     let pollPending = false;
+    let harnessMinimized = false;
+    let renderedStagedItemKeys = null;
+    const pendingStagedRevealKeys = new Set();
 
     const money = (value) => value === null || value === undefined
         ? '—'
@@ -330,11 +337,44 @@ if (silpoDialog instanceof HTMLDialogElement) {
 
     const quantity = (value) => new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 3 }).format(Number(value ?? 0));
 
+    const scrollBehavior = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+
+    const updateMinimizedHarness = ({ title, message, progress = null, active = false }) => {
+        if (! minimizedHarness) {
+            return;
+        }
+
+        minimizedHarness.querySelector('[data-silpo-minimized-title]').textContent = title;
+        minimizedHarness.querySelector('[data-silpo-minimized-status]').textContent = message;
+        minimizedHarness.querySelector('img')?.classList.toggle('goose-working', active);
+        const progressWrap = minimizedHarness.querySelector('[data-silpo-minimized-progress-wrap]');
+        const hasProgress = progress !== null;
+        progressWrap.classList.toggle('hidden', ! hasProgress);
+
+        if (hasProgress) {
+            minimizedHarness.querySelector('[data-silpo-minimized-progress]').style.width = `${progress}%`;
+            minimizedHarness.querySelector('[data-silpo-minimized-progress-label]').textContent = `${progress}%`;
+        }
+    };
+
     const showPanel = (target) => {
         [loadingPanel, guardPanel, fulfilmentPanel, runPanel].forEach((panel) => {
             panel?.classList.toggle('hidden', panel !== target);
             panel?.classList.toggle('grid', panel === target && [loadingPanel, guardPanel].includes(panel));
         });
+
+        if (target === loadingPanel) {
+            updateMinimizedHarness({
+                title: 'Гусь працює',
+                message: 'Гусь звіряє ваш нинішній маршрут…',
+                active: true,
+            });
+        } else if (target === fulfilmentPanel) {
+            updateMinimizedHarness({
+                title: 'Гусь чекає на маршрут',
+                message: 'Розгорніть вікно й підкажіть, куди йому летіти.',
+            });
+        }
     };
 
     const fetchJson = async (url, options = {}) => {
@@ -364,10 +404,12 @@ if (silpoDialog instanceof HTMLDialogElement) {
 
     const showGuard = (payload) => {
         showPanel(guardPanel);
-        guardPanel.querySelector('[data-silpo-guard-title]').textContent = payload.code === 'connection_missing'
+        const title = payload.code === 'connection_missing'
             ? 'Гусь загубив ключ від Сільпо'
             : 'Гусь уперся в зачинені двері';
+        guardPanel.querySelector('[data-silpo-guard-title]').textContent = title;
         guardPanel.querySelector('[data-silpo-guard-message]').textContent = payload.message;
+        updateMinimizedHarness({ title: 'Гусь зупинився', message: payload.message || title });
         const action = guardPanel.querySelector('[data-silpo-guard-action]');
 
         if (payload.action_url) {
@@ -916,11 +958,15 @@ if (silpoDialog instanceof HTMLDialogElement) {
         renderIntentPrompt();
     };
 
-    const productCard = (product, compact = false) => {
+    const productCard = (product, compact = false, stagedItemKey = null) => {
         const card = document.createElement('article');
         card.className = compact
             ? 'flex items-center justify-between gap-3 rounded-xl bg-canvas px-3 py-2 text-sm'
             : 'grid grid-cols-[3.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-ink/10 bg-paper p-3';
+
+        if (stagedItemKey !== null) {
+            card.dataset.silpoStagedItemKey = stagedItemKey;
+        }
 
         if (! compact) {
             const visual = document.createElement('div');
@@ -997,6 +1043,81 @@ if (silpoDialog instanceof HTMLDialogElement) {
         products.forEach((product) => container.append(productCard(product, compact)));
     };
 
+    const stagedItemKey = (product, index) => [
+        product.need_key || `position-${index}`,
+        product.product_id || product.external_product_id || product.name || `product-${index}`,
+    ].join('::');
+
+    const stagedCardsForKeys = (keys) => Array.from(stagedItemsContainer.children)
+        .filter((card) => keys.includes(card.dataset.silpoStagedItemKey));
+
+    const revealStagedItems = (keys) => {
+        const cards = stagedCardsForKeys(keys);
+
+        if (cards.length === 0) {
+            return;
+        }
+
+        cards.forEach((card) => card.classList.add('staged-cart-item-arrival'));
+        window.requestAnimationFrame(() => {
+            stagedItemsContainer.scrollTo({
+                top: stagedItemsContainer.scrollHeight,
+                behavior: scrollBehavior(),
+            });
+        });
+    };
+
+    const revealPendingStagedItems = () => {
+        const currentKeys = new Set(renderedStagedItemKeys ?? []);
+        const keys = Array.from(pendingStagedRevealKeys).filter((key) => currentKeys.has(key));
+        pendingStagedRevealKeys.clear();
+        revealStagedItems(keys);
+    };
+
+    const renderStagedProducts = (products) => {
+        const previousScrollTop = stagedItemsContainer.scrollTop;
+        const currentKeys = products.map(stagedItemKey);
+        const currentKeySet = new Set(currentKeys);
+        const addedKeys = renderedStagedItemKeys === null
+            ? []
+            : currentKeys.filter((key) => ! renderedStagedItemKeys.has(key));
+
+        stagedItemsContainer.replaceChildren();
+
+        if (products.length === 0) {
+            const empty = document.createElement('p');
+            empty.className = 'rounded-2xl border border-dashed border-ink/20 bg-paper p-4 text-sm text-muted';
+            empty.textContent = 'Поки порожньо. Гусь лише зайшов.';
+            stagedItemsContainer.append(empty);
+        } else {
+            products.forEach((product, index) => {
+                stagedItemsContainer.append(productCard(product, false, currentKeys[index]));
+            });
+        }
+
+        renderedStagedItemKeys = currentKeySet;
+        Array.from(pendingStagedRevealKeys).forEach((key) => {
+            if (! currentKeySet.has(key)) {
+                pendingStagedRevealKeys.delete(key);
+            }
+        });
+
+        if (addedKeys.length === 0) {
+            stagedItemsContainer.scrollTop = previousScrollTop;
+
+            return;
+        }
+
+        if (silpoDialog.open) {
+            revealStagedItems(addedKeys);
+
+            return;
+        }
+
+        addedKeys.forEach((key) => pendingStagedRevealKeys.add(key));
+        stagedItemsContainer.scrollTop = previousScrollTop;
+    };
+
     const renderRun = (payload) => {
         showPanel(runPanel);
         runPanel.querySelector('[data-silpo-status-label]').textContent = payload.status_label;
@@ -1004,6 +1125,13 @@ if (silpoDialog instanceof HTMLDialogElement) {
         runPanel.querySelector('[data-silpo-progress]').style.width = `${payload.progress}%`;
         runPanel.querySelector('[data-silpo-progress-label]').textContent = `${payload.progress}%`;
         runPanel.querySelector('[data-silpo-live-dot]').classList.toggle('hidden', payload.terminal);
+        const waitingForUser = ['waiting_for_answer', 'waiting_for_confirmation'].includes(payload.status);
+        updateMinimizedHarness({
+            title: payload.terminal ? 'Гусь повернувся' : (waitingForUser ? 'Гусь чекає на вас' : 'Гусь працює'),
+            message: payload.status_label,
+            progress: payload.progress,
+            active: ! payload.terminal && ! waitingForUser,
+        });
 
         const steps = runPanel.querySelector('[data-silpo-steps]');
         payload.steps.forEach((step) => {
@@ -1015,11 +1143,11 @@ if (silpoDialog instanceof HTMLDialogElement) {
         });
 
         if (payload.steps.length > 0) {
-            steps.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            steps.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() });
         }
 
         lastSequence = Math.max(lastSequence, Number(payload.last_sequence ?? 0));
-        renderProducts('[data-silpo-staged-items]', payload.staged_items);
+        renderStagedProducts(payload.staged_items);
         renderProducts('[data-silpo-existing-items]', payload.existing_items, true);
         runPanel.querySelector('[data-silpo-existing-badge]').textContent = `(${payload.existing_items.length})`;
         runPanel.querySelector('[data-silpo-staged-total]').textContent = money(payload.estimated_total ?? 0);
@@ -1054,7 +1182,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
     };
 
     const pollRun = async () => {
-        if (! runUrl || pollPending || ! silpoDialog.open) {
+        if (! runUrl || pollPending || (! silpoDialog.open && ! harnessMinimized)) {
             return;
         }
 
@@ -1081,7 +1209,12 @@ if (silpoDialog instanceof HTMLDialogElement) {
         }
     };
 
-    const openRun = (url) => {
+    const openRun = (url, preserveStagedBaseline = false) => {
+        if (! preserveStagedBaseline) {
+            renderedStagedItemKeys = null;
+            pendingStagedRevealKeys.clear();
+        }
+
         runUrl = url;
         lastSequence = 0;
         runPanel.querySelector('[data-silpo-steps]').replaceChildren();
@@ -1108,8 +1241,39 @@ if (silpoDialog instanceof HTMLDialogElement) {
         }
     };
 
+    const minimizeHarness = () => {
+        if (! silpoDialog.open || ! minimizedHarness) {
+            return;
+        }
+
+        harnessMinimized = true;
+        silpoDialog.close('minimized');
+        minimizedHarness.classList.remove('hidden');
+        window.requestAnimationFrame(() => restoreButton?.focus());
+    };
+
+    const restoreHarness = () => {
+        if (! harnessMinimized || silpoDialog.open) {
+            return;
+        }
+
+        harnessMinimized = false;
+        minimizedHarness?.classList.add('hidden');
+        silpoDialog.showModal();
+        window.requestAnimationFrame(() => {
+            revealPendingStagedItems();
+            minimizeButton?.focus();
+        });
+    };
+
     document.querySelectorAll('[data-silpo-dialog-open]').forEach((button) => {
         button.addEventListener('click', () => {
+            if (harnessMinimized) {
+                restoreHarness();
+
+                return;
+            }
+
             silpoDialog.showModal();
             preflight();
         });
@@ -1160,7 +1324,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
                 body: JSON.stringify({ answer }),
             });
             input.value = '';
-            openRun(runUrl);
+            openRun(runUrl, true);
         } catch (error) {
             showGuard(error.payload ?? { message: error.message });
         } finally {
@@ -1180,7 +1344,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
 
         try {
             await fetchJson(confirmUrl, { method: 'POST' });
-            openRun(runUrl);
+            openRun(runUrl, true);
         } catch (error) {
             showGuard(error.payload ?? { message: error.message });
         } finally {
@@ -1191,11 +1355,15 @@ if (silpoDialog instanceof HTMLDialogElement) {
 
     routeHomeButton.addEventListener('click', () => renderInitialFulfilment(fulfilmentInitial));
     silpoDialog.querySelector('[data-silpo-recheck]').addEventListener('click', preflight);
-    silpoDialog.querySelector('[data-silpo-dialog-close]').addEventListener('click', () => silpoDialog.close('cancel'));
-    silpoDialog.addEventListener('close', stopPolling);
+    minimizeButton?.addEventListener('click', minimizeHarness);
+    restoreButton?.addEventListener('click', restoreHarness);
+    silpoDialog.addEventListener('cancel', (event) => {
+        event.preventDefault();
+        minimizeHarness();
+    });
     silpoDialog.addEventListener('click', (event) => {
         if (event.target === silpoDialog) {
-            silpoDialog.close('cancel');
+            minimizeHarness();
         }
     });
 }
