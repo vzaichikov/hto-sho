@@ -129,6 +129,50 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertSame(['мангал', 'шампури'], $event->state['participants'][0]['brings']);
     }
 
+    public function test_future_promise_to_confirm_is_not_a_confirmed_contribution(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $source = EventSource::factory()->for($event)->create([
+            'text' => '24 серпня, 09:32, Леся: Торт теж maybe на мені, підтверджу.',
+        ]);
+        $payload = $this->summaryPayload([$source->id]);
+        $payload['participants'] = [[
+            'name' => 'Леся',
+            'status' => 'confirmed',
+            'preferences' => [],
+            'restrictions' => [],
+            'allergies' => [],
+            'brings' => ['торт'],
+            'source_ids' => [$source->id],
+        ]];
+        $payload['restrictions'] = [];
+        $payload['summary'] = 'Леся остаточно підтвердила, що бере торт. Інші деталі вечері ще уточнюються.';
+        $payload['agreements'] = [[
+            'summary' => 'Леся остаточно підтвердила торт.',
+            'source_ids' => [$source->id],
+        ]];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse($payload)),
+        ]);
+
+        (new SummarizeEventContextJob($event->id, $taskId))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $event->refresh();
+        $this->assertSame([], $event->state['participants'][0]['brings']);
+        $this->assertSame([], $event->state['agreements']);
+        $this->assertStringNotContainsString('торт', Str::lower($event->state['summary']));
+        $this->assertTrue(collect($event->state['warnings'])->contains(
+            fn (array $warning): bool => str_contains(Str::lower($warning['message']), 'умовн'),
+        ));
+        Http::assertSent(fn (Request $request): bool => str_contains(
+            $request['input'][0]['content'][0]['text'],
+            'Майбутнє «підтверджу» означає, що підтвердження ще буде',
+        ));
+    }
+
     public function test_confirmed_peanut_safe_hummus_is_not_tentative_and_closes_the_old_allergy_question(): void
     {
         [$event, $taskId] = $this->activeEvent(1);
@@ -240,6 +284,126 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertSame(['свинина на шашлик'], $event->state['participants'][0]['preferences']);
         $this->assertSame(['2 пачки вугілля по 2,5 кг', 'розпал'], $event->state['participants'][1]['brings']);
         $this->assertSame([], $event->state['warnings']);
+    }
+
+    public function test_a_negative_clause_for_whiskey_does_not_cancel_charcoal_and_starter(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $source = EventSource::factory()->for($event)->create([
+            'text' => '26 серпня, 18:20, Роман: Фінальні внески: Богдан бере 2 пачки вугілля й розпал, але віскі не бере.',
+        ]);
+        $payload = $this->summaryPayload([$source->id]);
+        $payload['participants'] = [[
+            'name' => 'Богдан',
+            'status' => 'confirmed',
+            'preferences' => ['віскі'],
+            'restrictions' => [],
+            'allergies' => [],
+            'brings' => ['2 пачки вугілля', 'розпал'],
+            'source_ids' => [$source->id],
+        ]];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse($payload)),
+        ]);
+
+        (new SummarizeEventContextJob($event->id, $taskId))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $event->refresh();
+        $this->assertSame(['2 пачки вугілля', 'розпал'], $event->state['participants'][0]['brings']);
+    }
+
+    public function test_contribution_refusal_gets_one_repair_instead_of_erasing_consumption_preference(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $source = EventSource::factory()->for($event)->create([
+            'text' => '26 серпня, 18:20, Роман: Фінальні внески: Богдан бере вугілля, але віскі не бере.',
+        ]);
+        $draft = $this->summaryPayload([$source->id]);
+        $draft['participants'] = [[
+            'name' => 'Богдан',
+            'status' => 'confirmed',
+            'preferences' => ['пиво'],
+            'restrictions' => ['Не бере віскі'],
+            'allergies' => [],
+            'brings' => ['вугілля'],
+            'source_ids' => [$source->id],
+        ]];
+        $draft['restrictions'] = [[
+            'participant' => 'Богдан',
+            'restriction' => 'Не бере віскі',
+            'severity' => 'preference',
+            'source_ids' => [$source->id],
+        ]];
+        $repaired = $draft;
+        $repaired['participants'][0]['preferences'] = ['пиво', 'віскі'];
+        $repaired['participants'][0]['restrictions'] = [];
+        $repaired['restrictions'] = [];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::sequence()
+                ->push($this->openAiResponse($draft))
+                ->push($this->openAiResponse($repaired)),
+        ]);
+
+        (new SummarizeEventContextJob($event->id, $taskId))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $event->refresh();
+        $this->assertSame(['пиво', 'віскі'], $event->state['participants'][0]['preferences']);
+        $this->assertSame([], $event->state['participants'][0]['restrictions']);
+        $this->assertSame([], $event->state['restrictions']);
+        Http::assertSentCount(2);
+        $repairPrompt = (string) data_get(Http::recorded()[1][0]->data(), 'input.0.content.0.text');
+        $this->assertStringContainsString('не перетворена на відмову їсти чи пити', $repairPrompt);
+    }
+
+    public function test_one_bounded_repair_restores_an_omitted_tentative_contribution_need(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $source = EventSource::factory()->for($event)->create([
+            'text' => '24 серпня, 09:31, Роман: Леся, якщо встигне, торт. Це ще не фінальна обіцянка.',
+        ]);
+        $draft = $this->summaryPayload([$source->id]);
+        $draft['participants'] = [[
+            'name' => 'Леся',
+            'status' => 'confirmed',
+            'preferences' => [],
+            'restrictions' => [],
+            'allergies' => [],
+            'brings' => [],
+            'source_ids' => [$source->id],
+        ]];
+        $repaired = $draft;
+        $repaired['shopping_requirements'] = [[
+            'name' => 'торт',
+            'quantity' => null,
+            'unit' => null,
+            'constraints' => ['умовний внесок Лесі ще не підтверджений'],
+            'source_ids' => [$source->id],
+        ]];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::sequence()
+                ->push($this->openAiResponse($draft))
+                ->push($this->openAiResponse($repaired)),
+        ]);
+
+        (new SummarizeEventContextJob($event->id, $taskId))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $event->refresh();
+        $this->assertSame('торт', $event->state['shopping_requirements'][0]['name']);
+        $this->assertSame([], $event->state['participants'][0]['brings']);
+        Http::assertSentCount(2);
+        $this->assertTrue(Http::recorded()->contains(fn (array $record): bool => str_contains(
+            $record[0]['input'][0]['content'][0]['text'],
+            'Ти один раз перевіряєш повноту',
+        )));
     }
 
     protected function setUp(): void
@@ -393,7 +557,15 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertStringContainsString('закриває питання про точний алерген', $prompt);
         $this->assertStringContainsString('Фінальний summary також описує лише актуальний стан', $prompt);
         $this->assertStringContainsString('додає ці brings лише Олі, ніколи Саші', $prompt);
+        $this->assertStringContainsString('повинна мати цю річ у participants.brings саме цієї людини', $prompt);
+        $this->assertStringContainsString('shopping_requirements є структурованим доказовим переліком', $prompt);
+        $this->assertStringContainsString('Якщо джерело назвало товар, але не назвало його кількість, quantity=null', $prompt);
+        $this->assertStringContainsString('перенеси до shopping_requirements кожну його позицію без винятків', $prompt);
+        $this->assertStringContainsString('не додавай механічно до constraints кожної спільної покупки', $prompt);
+        $this->assertStringContainsString('Пізніша агрегована кількість для всієї групи не стирає person-level атрибуцію', $prompt);
+        $this->assertStringContainsString('якщо товар лишився у shopping_requirements або summary, але зникло відоме авторство бажання', $prompt);
         $this->assertStringContainsString('додай unresolved question про імена решти 3', $prompt);
+        $this->assertStringContainsString('Скорочене формулювання не скасовує відомих деталей', $prompt);
         $this->assertIsInt($laterPosition);
         $this->assertIsInt($olderPosition);
         $this->assertLessThan($olderPosition, $laterPosition);

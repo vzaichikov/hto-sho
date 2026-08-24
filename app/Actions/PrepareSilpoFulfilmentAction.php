@@ -32,6 +32,7 @@ final class PrepareSilpoFulfilmentAction
     {
         $activeRun = $event->cartRuns()
             ->whereIn('status', $this->activeStatuses())
+            ->where('plan_state_version', $event->state_version)
             ->latest()
             ->first();
 

@@ -48,6 +48,29 @@
     ],
     "restrictions": [],
     "agreements": [],
+    "shopping_requirements": [
+      {
+        "name": "вугілля",
+        "quantity": null,
+        "unit": null,
+        "constraints": ["умовний внесок Тараса ще не підтверджений"],
+        "source_ids": [1302]
+      },
+      {
+        "name": "хумус",
+        "quantity": null,
+        "unit": null,
+        "constraints": ["умовний внесок Олі ще не підтверджений"],
+        "source_ids": [1302]
+      },
+      {
+        "name": "лід",
+        "quantity": null,
+        "unit": null,
+        "constraints": ["умовний внесок Каті ще не підтверджений"],
+        "source_ids": [1302]
+      }
+    ],
     "warnings": [
       {"message": "Вугілля, хумус і лід ще ніхто остаточно не підтвердив, тому їх не можна виключати із закупів.", "source_ids": [1302]}
     ],

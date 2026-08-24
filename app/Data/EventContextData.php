@@ -20,6 +20,7 @@ final readonly class EventContextData
         array $answeredQuestionKeys = [],
     ): self {
         $payload = self::withoutAggregateParticipants($payload);
+        $payload['shopping_requirements'] ??= [];
         $validated = Validator::make($payload, [
             'summary' => ['required', 'string', 'max:10000'],
             'participants' => ['present', 'array'],
@@ -45,6 +46,14 @@ final readonly class EventContextData
             'agreements.*.summary' => ['required', 'string', 'max:2000'],
             'agreements.*.source_ids' => ['present', 'array'],
             'agreements.*.source_ids.*' => ['integer'],
+            'shopping_requirements' => ['present', 'array'],
+            'shopping_requirements.*.name' => ['required', 'string', 'max:1000'],
+            'shopping_requirements.*.quantity' => ['nullable', 'numeric', 'gt:0'],
+            'shopping_requirements.*.unit' => ['nullable', 'string', 'max:255'],
+            'shopping_requirements.*.constraints' => ['present', 'array'],
+            'shopping_requirements.*.constraints.*' => ['string', 'max:1000'],
+            'shopping_requirements.*.source_ids' => ['present', 'array'],
+            'shopping_requirements.*.source_ids.*' => ['integer'],
             'warnings' => ['present', 'array'],
             'warnings.*.message' => ['required', 'string', 'max:2000'],
             'warnings.*.source_ids' => ['present', 'array'],
@@ -64,7 +73,7 @@ final readonly class EventContextData
             'source_ids.*' => ['integer'],
         ])->validate();
 
-        foreach (['participants', 'restrictions', 'agreements', 'warnings', 'unresolved_questions'] as $section) {
+        foreach (['participants', 'restrictions', 'agreements', 'shopping_requirements', 'warnings', 'unresolved_questions'] as $section) {
             foreach ($validated[$section] as &$item) {
                 $item['source_ids'] = array_values(array_unique($item['source_ids']));
 

@@ -2,7 +2,6 @@
 
 namespace App\Data;
 
-use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -26,8 +25,9 @@ final readonly class CartAgentPreparationData
                 }
 
                 $need['search_queries'] = collect($need['search_queries'])
+                    ->map(fn (mixed $query): mixed => is_string($query) ? Str::squish($query) : $query)
                     ->unique(fn (mixed $query): string => is_string($query)
-                        ? Str::lower(trim($query))
+                        ? Str::lower($query)
                         : serialize($query))
                     ->values()
                     ->all();
@@ -49,160 +49,96 @@ final readonly class CartAgentPreparationData
             'needs.*.search_queries.*' => ['required', 'string', 'max:160'],
         ])->validate();
 
-        $deduplicatedNeeds = self::normalizePlanQuantities(
-            self::deduplicateNeeds($validated['needs'], $planItems),
-            $planItems,
-        );
-        $coveredIndexes = $deduplicatedNeeds->pluck('source_index')->unique()->sort()->values();
-        $expectedIndexes = collect(array_keys($planItems));
-        $hasOverDecomposition = $deduplicatedNeeds
-            ->groupBy('source_index')
-            ->contains(fn ($needs): bool => $needs->count() > 3);
-        $groupCounts = $deduplicatedNeeds->countBy('source_index');
-        $hasUnderDecomposedBroadNeed = collect($planItems)->contains(
-            function (array $planItem, int $sourceIndex) use ($groupCounts): bool {
-                return self::requiresMultipleSkuDecomposition($planItem)
-                    && $groupCounts->get($sourceIndex, 0) < 2;
-            },
-        );
+        $needs = collect($validated['needs'])->values();
+        self::assertExactProductNamesAreUnique($needs);
+        self::assertPlanCoverage($needs, $planItems);
 
-        if ($coveredIndexes->diff($expectedIndexes)->isNotEmpty()
-            || $expectedIndexes->diff($coveredIndexes)->isNotEmpty()
-            || $hasOverDecomposition
-            || $hasUnderDecomposedBroadNeed) {
-            throw new UnexpectedValueException('Agent preparation did not preserve the approved shopping plan.');
-        }
-
-        $needs = $deduplicatedNeeds
+        $needs = self::normalizePlanQuantities($needs, $planItems)
             ->values()
             ->map(fn (array $need, int $index): array => [
                 ...$need,
                 'key' => sprintf('n_%02d', $index + 1),
                 'quantity' => (float) $need['quantity'],
-                'search_query' => self::preferredInitialSearchQuery($need['search_queries']),
+                'optional' => (bool) data_get(
+                    $planItems,
+                    ((int) $need['source_index']).'.optional',
+                    false,
+                ),
+                'search_query' => (string) $need['search_queries'][0],
                 'status' => 'pending',
                 'attempts' => [],
                 'inspected_products' => [],
                 'selected_item' => null,
                 'human_answer' => null,
             ])
-            ->values()
             ->all();
 
         return new self($needs);
     }
 
     /**
-     * Repair structurally valid model output only from the authoritative plan.
-     *
-     * @param  array<string, mixed>  $payload
+     * @param  Collection<int, array<string, mixed>>  $needs
      * @param  array<int, array<string, mixed>>  $planItems
-     * @return array<string, mixed>
      */
-    public static function repairAgainstPlan(array $payload, array $planItems): array
+    private static function assertPlanCoverage(Collection $needs, array $planItems): void
     {
-        $deduplicatedNeeds = self::deduplicateNeeds(
-            collect(data_get($payload, 'needs', []))
-                ->filter(fn (mixed $need): bool => is_array($need))
-                ->values()
-                ->all(),
-            $planItems,
-        );
-        $usedSemanticKeys = $deduplicatedNeeds
-            ->mapWithKeys(fn (array $need): array => [self::semanticNeedKey($need) => true])
-            ->all();
+        $coveredIndexes = $needs->pluck('source_index')->unique()->sort()->values();
+        $expectedIndexes = collect(array_keys($planItems))->sort()->values();
 
-        foreach ($planItems as $sourceIndex => $planItem) {
-            $requiredCount = self::requiresMultipleSkuDecomposition($planItem) ? 2 : 1;
-            $existingNeeds = $deduplicatedNeeds->where('source_index', $sourceIndex);
-            $missingCount = $requiredCount - $existingNeeds->count();
-
-            if ($missingCount <= 0) {
-                continue;
-            }
-
-            $planQuantity = (float) data_get($planItem, 'quantity', 1);
-            $remainingQuantity = max(
-                $planQuantity - $existingNeeds->sum(fn (array $need): float => (float) data_get($need, 'quantity', 0)),
-                0,
-            );
-            $fallbackQuantity = $remainingQuantity > 0
-                ? $remainingQuantity / $missingCount
-                : $planQuantity / $requiredCount;
-            $fallbackNames = self::fallbackNeedNames($planItem, $requiredCount + 3);
-
-            foreach ($fallbackNames as $fallbackName) {
-                if ($missingCount <= 0) {
-                    break;
-                }
-
-                $fallbackNeed = self::fallbackNeed(
-                    $planItem,
-                    $sourceIndex,
-                    $fallbackName,
-                    $fallbackQuantity,
-                );
-                $semanticKey = self::semanticNeedKey($fallbackNeed);
-
-                if (isset($usedSemanticKeys[$semanticKey])) {
-                    continue;
-                }
-
-                $deduplicatedNeeds->push($fallbackNeed);
-                $usedSemanticKeys[$semanticKey] = true;
-                $missingCount--;
-            }
+        if ($coveredIndexes->diff($expectedIndexes)->isNotEmpty()
+            || $expectedIndexes->diff($coveredIndexes)->isNotEmpty()) {
+            throw new UnexpectedValueException(sprintf(
+                'Preparation source indexes must exactly cover [%s]; received [%s].',
+                $expectedIndexes->implode(', '),
+                $coveredIndexes->implode(', '),
+            ));
         }
 
-        return [
-            'needs' => $deduplicatedNeeds
-                ->sortBy(fn (array $need): int => (int) data_get($need, 'source_index'))
-                ->values()
-                ->all(),
-        ];
+        $counts = $needs->countBy('source_index');
+
+        foreach ($planItems as $sourceIndex => $planItem) {
+            $minimum = (int) data_get($planItem, 'minimum_distinct_products', 1);
+            $actual = (int) $counts->get($sourceIndex, 0);
+
+            if ($minimum < 1 || $minimum > 3) {
+                throw new UnexpectedValueException(sprintf(
+                    'Plan item %d has invalid minimum_distinct_products %d.',
+                    $sourceIndex,
+                    $minimum,
+                ));
+            }
+
+            if ($actual < $minimum || $actual > 3) {
+                throw new UnexpectedValueException(sprintf(
+                    'Plan item %d requires %d to 3 distinct products; received %d.',
+                    $sourceIndex,
+                    $minimum,
+                    $actual,
+                ));
+            }
+        }
     }
 
-    /** @param array<string, mixed> $planItem */
-    public static function requiresMultipleSkuDecomposition(array $planItem): bool
+    /** @param Collection<int, array<string, mixed>> $needs */
+    private static function assertExactProductNamesAreUnique(Collection $needs): void
     {
-        $name = Str::lower((string) data_get($planItem, 'name'));
+        $duplicateNames = $needs
+            ->groupBy(fn (array $need): string => Str::lower(Str::squish((string) $need['name'])))
+            ->filter(fn (Collection $duplicates): bool => $duplicates->count() > 1)
+            ->keys();
 
-        return (Str::contains($name, ['овоч'])
-                && Str::contains($name, ['грил', 'салат']))
-            || (Str::contains($name, [' та ', ' і '])
-                && Str::contains($name, ['овоч', 'зелень', 'салат', 'фрукт']));
+        if ($duplicateNames->isNotEmpty()) {
+            throw new UnexpectedValueException(sprintf(
+                'Preparation contains duplicate product names: %s.',
+                $duplicateNames->implode(', '),
+            ));
+        }
     }
 
     /**
-     * @param  array<int, array<string, mixed>>  $needs
+     * @param  Collection<int, array<string, mixed>>  $needs
      * @param  array<int, array<string, mixed>>  $planItems
-     */
-    private static function deduplicateNeeds(array $needs, array $planItems): Collection
-    {
-        return collect($needs)
-            ->values()
-            ->map(fn (array $need, int $position): array => [
-                ...$need,
-                '_preparation_position' => $position,
-            ])
-            ->groupBy(fn (array $need): string => self::semanticNeedKey($need))
-            ->map(function ($duplicates) use ($planItems): array {
-                return $duplicates
-                    ->sortBy(fn (array $need): array => [
-                        self::requiresMultipleSkuDecomposition(
-                            $planItems[(int) data_get($need, 'source_index')] ?? [],
-                        ) ? 1 : 0,
-                        (int) data_get($need, '_preparation_position'),
-                    ])
-                    ->first();
-            })
-            ->sortBy('_preparation_position')
-            ->map(fn (array $need): array => Arr::except($need, '_preparation_position'))
-            ->values();
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $planItems
+     * @return Collection<int, array<string, mixed>>
      */
     private static function normalizePlanQuantities(Collection $needs, array $planItems): Collection
     {
@@ -248,130 +184,5 @@ final readonly class CartAgentPreparationData
                     ->all();
             })
             ->values();
-    }
-
-    /** @param array<string, mixed> $planItem @return array<int, string> */
-    private static function fallbackNeedNames(array $planItem, int $limit): array
-    {
-        $name = trim((string) data_get($planItem, 'name', 'Позиція списку'));
-        $components = preg_split('/\s+(?:та|і|й)\s+|[,\/]+/ui', $name, -1, PREG_SPLIT_NO_EMPTY) ?: [];
-
-        return collect([
-            ...$components,
-            $name,
-            ...collect(range(2, $limit))->map(fn (int $variant): string => "{$name} — вид {$variant}"),
-        ])
-            ->map(fn (string $candidate): string => trim($candidate))
-            ->filter(fn (string $candidate): bool => mb_strlen($candidate) >= 3)
-            ->unique(fn (string $candidate): string => Str::lower($candidate))
-            ->take($limit)
-            ->values()
-            ->all();
-    }
-
-    /**
-     * @param  array<string, mixed>  $planItem
-     * @return array<string, mixed>
-     */
-    private static function fallbackNeed(
-        array $planItem,
-        int $sourceIndex,
-        string $name,
-        float $quantity,
-    ): array {
-        $category = (string) data_get($planItem, 'category', 'other');
-
-        if (! in_array($category, ['food', 'water', 'soft_drinks', 'alcohol', 'supplies', 'other'], true)) {
-            $category = 'other';
-        }
-
-        $alternateQuery = trim($name.' '.($category === 'food' ? 'сирий' : 'товар'));
-
-        return [
-            'key' => 'repaired_'.$sourceIndex.'_'.Str::slug($name, '_'),
-            'source_index' => $sourceIndex,
-            'name' => $name,
-            'category' => $category,
-            'quantity' => max($quantity, 0.01),
-            'unit' => (string) data_get($planItem, 'unit', 'шт'),
-            'note' => (string) data_get($planItem, 'note', ''),
-            'search_queries' => array_values(array_unique([$name, $alternateQuery])),
-        ];
-    }
-
-    /** @param array<int, string> $queries */
-    private static function preferredInitialSearchQuery(array $queries): string
-    {
-        $queries = collect($queries)
-            ->map(fn (string $query): string => Str::squish($query))
-            ->filter()
-            ->unique(fn (string $query): string => Str::lower($query))
-            ->values();
-        $rootsByQuery = $queries->mapWithKeys(
-            fn (string $query): array => [$query => self::searchIdentityRoots($query)],
-        );
-        $repeatedRoots = $rootsByQuery
-            ->flatten()
-            ->countBy()
-            ->filter(fn (int $count): bool => $count >= 2)
-            ->keys()
-            ->values();
-
-        if ($repeatedRoots->count() < 2) {
-            return (string) $queries->first();
-        }
-
-        return (string) ($queries
-            ->filter(function (string $query) use ($repeatedRoots, $rootsByQuery): bool {
-                $queryRoots = collect($rootsByQuery->get($query, []));
-
-                return $repeatedRoots->diff($queryRoots)->isEmpty();
-            })
-            ->sortBy(fn (string $query): array => [
-                count($rootsByQuery->get($query, [])),
-                mb_strlen($query),
-            ])
-            ->first() ?? $queries->first());
-    }
-
-    /** @return array<int, string> */
-    private static function searchIdentityRoots(string $query): array
-    {
-        $positivePhrase = preg_split('/\b(?:без|крім|without)\b/ui', Str::lower($query), 2)[0] ?? '';
-        $positivePhrase = str_replace('чіпс', 'чипс', $positivePhrase);
-        $tokens = preg_split('/[^\p{L}\p{N}]+/u', $positivePhrase, -1, PREG_SPLIT_NO_EMPTY) ?: [];
-
-        return collect($tokens)
-            ->filter(fn (string $token): bool => mb_strlen($token) >= 4)
-            ->map(fn (string $token): string => mb_substr($token, 0, 4))
-            ->reject(fn (string $root): bool => in_array($root, [
-                'альт', 'банк', 'бана', 'варі', 'гото', 'грил', 'кіло', 'літр',
-                'паке', 'пачк', 'пози', 'прод', 'свіж', 'сири', 'смак', 'това',
-                'упак', 'харч', 'част', 'штук',
-            ], true))
-            ->unique()
-            ->values()
-            ->all();
-    }
-
-    /** @param array<string, mixed> $need */
-    private static function semanticNeedKey(array $need): string
-    {
-        $tokens = preg_split(
-            '/[^\p{L}\p{N}]+/u',
-            Str::lower((string) data_get($need, 'name')),
-            -1,
-            PREG_SPLIT_NO_EMPTY,
-        ) ?: [];
-        $ignoredRoots = [
-            'овоч', 'грил', 'свіж', 'сири', 'прод', 'набі', 'част', 'пози', 'соло', 'болг',
-        ];
-        $identityToken = collect($tokens)
-            ->filter(fn (string $token): bool => mb_strlen($token) >= 4)
-            ->first(fn (string $token): bool => ! in_array(mb_substr($token, 0, 4), $ignoredRoots, true));
-
-        return $identityToken === null
-            ? Str::lower(trim((string) data_get($need, 'name')))
-            : mb_substr($identityToken, 0, 4);
     }
 }

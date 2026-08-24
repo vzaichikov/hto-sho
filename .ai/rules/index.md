@@ -12,7 +12,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | {vite.config.js,resources/css/**,resources/fonts/**,resources/views/components/layouts/**} | .ai/rules/components-layouts.md |
 | resources/views/{components,events}/** | .ai/rules/componentsevents.md |
 | app/{Actions,Jobs,Services,Http/Controllers}/**/*Cart*.php | .ai/rules/controllers.md |
-| app/{Data,Jobs,Services}/**, app/{Data,Jobs,Services}/**/*Cart*.php | .ai/rules/data-jobs-services.md |
+| app/{Data,Jobs,Services}/**, app/{Data,Jobs,Services}/**/*Cart*.php, app/{Data,Jobs,Services}/**/*.php | .ai/rules/data-jobs-services.md |
 | {resources/css/**,resources/views/components/**,resources/views/events/**} | .ai/rules/events.md |
 | tests/{Feature,Live,Fixtures,Support}/**/*AiProductLogic* | .ai/rules/feature-live-fixtures-support.md |
 | .agents/skills/hto-sho-local-qa/** | .ai/rules/hto-sho-local-qa.md |

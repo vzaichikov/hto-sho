@@ -35,6 +35,7 @@ final class StartEventCartRunAction
     ): EventCartRun {
         $activeRun = $event->cartRuns()
             ->whereIn('status', $this->activeStatuses())
+            ->where('plan_state_version', $event->state_version)
             ->latest()
             ->first();
 
@@ -96,8 +97,23 @@ final class StartEventCartRunAction
             $lockedEvent = Event::query()->lockForUpdate()->findOrFail($event->id);
             $this->guardPlan($lockedEvent);
 
+            $lockedEvent->cartRuns()
+                ->whereIn('status', $this->activeStatuses())
+                ->where('plan_state_version', '!=', $lockedEvent->state_version)
+                ->get()
+                ->each(function (EventCartRun $staleRun): void {
+                    $staleRun->update([
+                        'status' => CartRunStatus::Stale,
+                        'phase' => CartRunPhase::Finished,
+                        'error' => 'Список події змінився. Цей кошик лишається в історії без запису в Сільпо.',
+                        'finished_at' => now(),
+                    ]);
+                    $this->statuses->append($staleRun, 'warning');
+                });
+
             $activeRun = $lockedEvent->cartRuns()
                 ->whereIn('status', $this->activeStatuses())
+                ->where('plan_state_version', $lockedEvent->state_version)
                 ->latest()
                 ->first();
 

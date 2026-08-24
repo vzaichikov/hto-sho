@@ -84,7 +84,9 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
         ], $event->state, $planCorrections, $harnessRun)->plan;
         $plan = $this->removeContributedItems($plan, $event->state);
         $plan = $this->normalizeServingQuantities($plan);
+        $plan = $this->normalizeOptionalItems($plan, $event->state);
 
+        $this->guardExplicitShoppingRequirements($plan, $event->state);
         $this->guardPlanSafety($plan, $event->state, $event->alcohol_planned);
 
         DB::transaction(function () use ($plan): void {
@@ -218,6 +220,72 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
     /**
      * @param  array<string, mixed>  $plan
      * @param  array<string, mixed>  $state
+     */
+    private function guardExplicitShoppingRequirements(array $plan, array $state): void
+    {
+        $items = collect($plan['items'] ?? []);
+
+        foreach ($state['shopping_requirements'] ?? [] as $requirement) {
+            $name = Str::lower(Str::squish((string) ($requirement['name'] ?? '')));
+            $item = $items->first(fn (array $candidate): bool => Str::lower(
+                Str::squish((string) ($candidate['name'] ?? '')),
+            ) === $name);
+
+            if ($item === null) {
+                throw new UnexpectedValueException('Shopping plan omitted an explicit shopping requirement.');
+            }
+
+            if (($requirement['quantity'] ?? null) !== null
+                && abs((float) $item['quantity'] - (float) $requirement['quantity']) > 0.0001) {
+                throw new UnexpectedValueException('Shopping plan changed an explicit shopping quantity.');
+            }
+
+            if (($requirement['unit'] ?? null) !== null
+                && Str::lower(Str::squish((string) $item['unit'])) !== Str::lower(Str::squish((string) $requirement['unit']))) {
+                throw new UnexpectedValueException('Shopping plan changed an explicit shopping unit.');
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $plan
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    private function normalizeOptionalItems(array $plan, array $state): array
+    {
+        $explicitRequirementNames = collect($state['shopping_requirements'] ?? [])
+            ->pluck('name')
+            ->filter(fn (mixed $name): bool => is_string($name) && filled($name))
+            ->map(fn (string $name): string => Str::lower(Str::squish($name)));
+
+        $plan['items'] = collect($plan['items'] ?? [])
+            ->map(function (array $item) use ($explicitRequirementNames): array {
+                $isExplicitRequirement = $explicitRequirementNames->contains(
+                    Str::lower(Str::squish((string) data_get($item, 'name'))),
+                );
+
+                return [
+                    ...$item,
+                    'optional' => $isExplicitRequirement
+                        ? false
+                        : (bool) data_get($item, 'optional', false),
+                    'minimum_distinct_products' => (int) data_get(
+                        $item,
+                        'minimum_distinct_products',
+                        1,
+                    ),
+                ];
+            })
+            ->values()
+            ->all();
+
+        return $plan;
+    }
+
+    /**
+     * @param  array<string, mixed>  $plan
+     * @param  array<string, mixed>  $state
      * @return array<string, mixed>
      */
     private function removeContributedItems(array $plan, array $state): array
@@ -225,9 +293,19 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
         $contributions = collect($state['participants'] ?? [])
             ->flatMap(fn (array $participant): array => $participant['brings'] ?? [])
             ->values();
+        $explicitRequirementNames = collect($state['shopping_requirements'] ?? [])
+            ->pluck('name')
+            ->filter()
+            ->map(fn (string $name): string => Str::lower(Str::squish($name)));
 
         $plan['items'] = collect($plan['items'] ?? [])
-            ->reject(function (array $item) use ($contributions): bool {
+            ->reject(function (array $item) use ($contributions, $explicitRequirementNames): bool {
+                if ($explicitRequirementNames->contains(
+                    Str::lower(Str::squish((string) ($item['name'] ?? ''))),
+                )) {
+                    return false;
+                }
+
                 $itemStems = $this->significantStems((string) ($item['name'] ?? ''));
 
                 return $contributions->contains(function (string $contribution) use ($itemStems): bool {

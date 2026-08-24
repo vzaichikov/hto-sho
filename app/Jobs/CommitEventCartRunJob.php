@@ -123,8 +123,7 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ...$validationWarnings,
             ...collect($missingTargets)->map(fn (string $name): string => "Не вдалося підтвердити кількість: {$name}.")->all(),
         ]));
-        $hasCoverageGap = (bool) data_get($run->state, 'has_unmet_needs', false)
-            || $hasObsoleteManagedItems
+        $hasSynchronizationGap = $hasObsoleteManagedItems
             || $missingTargets !== []
             || $managedValidations !== []
             || collect($warnings)->contains(
@@ -134,7 +133,7 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
         $this->finish(
             $run,
             $verifiedCart,
-            $hasCoverageGap ? CartRunStatus::Partial : CartRunStatus::Synced,
+            $hasSynchronizationGap ? CartRunStatus::Partial : CartRunStatus::Synced,
             $warnings,
             $statuses,
         );
@@ -195,7 +194,7 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ->first();
         $previousByProduct = collect($previousRun?->staged_items ?? [])->groupBy('product_id');
         $currentByProduct = collect($currentCart->items)->keyBy('product_id');
-        $warnings = [];
+        $warnings = $run->warnings ?? [];
         $targets = [];
         $products = [];
 

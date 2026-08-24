@@ -1,0 +1,84 @@
+{
+  "id": "15-positive-contribution-with-separate-refusal",
+  "title": "Відмова від віскі не скасовує вугілля й розпал",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "Мангал",
+    "description": "Друзі розподіляють внески.",
+    "alcohol_planned": true,
+    "people_count": 1,
+    "budget_amount": "3000.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "final-contribution",
+      "batch_uploaded_at": "2026-08-26T18:20:00+03:00",
+      "sources": [
+        {
+          "source_id": 1501,
+          "kind": "text",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-26T18:20:00+03:00",
+          "position": 0,
+          "text": "26 серпня, 18:20, Роман: Фінальні внески: Богдан бере 2 пачки вугілля й розпал, але віскі не бере."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Богдан остаточно бере вугілля й розпал, але не бере віскі.",
+    "participants": [
+      {
+        "name": "Богдан",
+        "status": "confirmed",
+        "preferences": ["віскі"],
+        "restrictions": [],
+        "allergies": [],
+        "brings": ["2 пачки вугілля", "розпал"],
+        "source_ids": [1501]
+      }
+    ],
+    "restrictions": [],
+    "agreements": [
+      {
+        "summary": "Богдан бере 2 пачки вугілля й розпал; віскі лишається у спільній закупівлі.",
+        "source_ids": [1501]
+      }
+    ],
+    "shopping_requirements": [
+      {
+        "name": "Віскі",
+        "quantity": null,
+        "unit": null,
+        "constraints": [],
+        "source_ids": [1501]
+      }
+    ],
+    "warnings": [],
+    "unresolved_questions": [],
+    "source_ids": [1501]
+  },
+  "expect": {
+    "event": {
+      "people_count": 1
+    },
+    "state": {
+      "participant_count": 1,
+      "participants": [
+        {
+          "name": "Богдан",
+          "status": "confirmed",
+          "brings": ["вугіл", "розпал"]
+        }
+      ],
+      "agreements": [
+        {
+          "all": ["Богдан", "вугіл", "розпал"],
+          "source_ids": [1501]
+        }
+      ],
+      "source_ids": [1501]
+    }
+  }
+}

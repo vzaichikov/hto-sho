@@ -122,6 +122,10 @@ final class CartQuantityCalculator
             return null;
         }
 
+        if ($this->isPackageCountUnit((string) data_get($need, 'unit'))) {
+            return ceil($needAmount['amount']);
+        }
+
         if ((bool) data_get($product, 'weighted', false)) {
             return $needAmount['group'] === 'weight'
                 ? $needAmount['amount'] / 1000
@@ -140,6 +144,19 @@ final class CartQuantityCalculator
         }
 
         return ceil($needAmount['amount'] / $pack['amount']);
+    }
+
+    private function isPackageCountUnit(string $unit): bool
+    {
+        $normalizedUnit = Str::of($unit)->lower()->trim()->trim('.')->toString();
+
+        return in_array($normalizedUnit, [
+            'пачка', 'пачки', 'пачок',
+            'упаковка', 'упаковки', 'упаковок',
+            'банка', 'банки', 'банок',
+            'пляшка', 'пляшки', 'пляшок',
+            'пучок', 'пучки', 'пучків',
+        ], true);
     }
 
     /** @return array{amount: float, group: string}|null */

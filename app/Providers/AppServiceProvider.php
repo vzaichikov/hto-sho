@@ -8,6 +8,8 @@ use App\Contracts\SilpoProfileGateway;
 use App\Contracts\SilpoRouteIntentInterpreter;
 use App\Services\AiSilpoRouteIntentInterpreter;
 use App\Services\CartProductDecisionService;
+use App\Services\GooseCartStatusService;
+use App\Services\HarnessRecorder;
 use App\Services\McpSilpoCartGateway;
 use App\Services\McpSilpoProfileGateway;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -23,6 +25,10 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(SilpoCartGateway::class, McpSilpoCartGateway::class);
         $this->app->bind(CartProductAgent::class, CartProductDecisionService::class);
         $this->app->bind(SilpoRouteIntentInterpreter::class, AiSilpoRouteIntentInterpreter::class);
+        $this->app->bind(
+            GooseCartStatusService::class,
+            fn ($app): GooseCartStatusService => new GooseCartStatusService($app->make(HarnessRecorder::class)),
+        );
     }
 
     public function boot(): void

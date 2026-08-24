@@ -25,6 +25,7 @@ Investigate from small, explicit projections. Keep raw harness payloads in the d
 5. Compare the smallest failing and passing projections.
 6. Change one application behavior at a time, run the narrowest test, then repeat the same projection.
 7. If an agent/platform prompt rejection recurs, bisect allowlisted field groups. Do not retry by pasting the same raw envelope.
+8. For cart workflows, compare the business run and its linked harness lifecycle. A terminal cart run must leave the harness `completed` or `failed`, with `finished_at` set; a lingering `running` harness is a flow defect even when the cart result is correct.
 
 Use [projection recipes](references/projections.md) for safe query shapes. Report run IDs and entry sequences so another person can inspect the authoritative raw record without copying it into an LLM prompt.
 

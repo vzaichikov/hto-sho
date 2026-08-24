@@ -55,7 +55,7 @@ class AiProductLogicRegressionTest extends TestCase
     {
         $scenarios = AiProductLogicScenarioRepository::all();
 
-        $this->assertCount(13, $scenarios, 'The product AI regression pack must retain all thirteen baseline scenarios.');
+        $this->assertCount(15, $scenarios, 'The product AI regression pack must retain all fifteen baseline scenarios.');
 
         foreach ($scenarios as $scenario) {
             $this->assertFalse(

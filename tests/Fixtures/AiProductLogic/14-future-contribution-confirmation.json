@@ -1,0 +1,84 @@
+{
+  "id": "14-future-contribution-confirmation",
+  "title": "Майбутнє підтвердження внеску не є остаточним brings",
+  "pipeline": "context",
+  "organizer_context": {
+    "title": "День народження",
+    "description": "Невелика дружня вечеря.",
+    "alcohol_planned": false,
+    "people_count": 1,
+    "budget_amount": "2000.00",
+    "currency": "UAH"
+  },
+  "source_batches": [
+    {
+      "upload_batch": "future-confirmation",
+      "batch_uploaded_at": "2026-08-24T09:32:00+03:00",
+      "sources": [
+        {
+          "source_id": 1401,
+          "kind": "text",
+          "origin": "organizer_context",
+          "uploaded_at": "2026-08-24T09:32:00+03:00",
+          "position": 0,
+          "text": "24 серпня, 09:32, Леся: Торт теж maybe на мені, підтверджу."
+        }
+      ]
+    }
+  ],
+  "model_response": {
+    "summary": "Леся остаточно підтвердила, що принесе торт. Інші деталі вечері ще уточнюються.",
+    "participants": [
+      {
+        "name": "Леся",
+        "status": "confirmed",
+        "preferences": [],
+        "restrictions": [],
+        "allergies": [],
+        "brings": ["торт"],
+        "source_ids": [1401]
+      }
+    ],
+    "restrictions": [],
+    "agreements": [
+      {
+        "summary": "Леся остаточно підтвердила торт.",
+        "source_ids": [1401]
+      }
+    ],
+    "warnings": [
+      {
+        "message": "Торт ще не підтверджений як остаточний внесок.",
+        "source_ids": [1401]
+      }
+    ],
+    "unresolved_questions": [],
+    "source_ids": [1401]
+  },
+  "expect": {
+    "event": {
+      "people_count": 1
+    },
+    "state": {
+      "participant_count": 1,
+      "participants": [
+        {
+          "name": "Леся",
+          "status": "confirmed",
+          "not_brings": ["торт"]
+        }
+      ],
+      "warnings": [
+        {
+          "all": ["торт", "не підтвердж"]
+        }
+      ],
+      "not_agreements": [
+        {
+          "all": ["Леся", "торт"]
+        }
+      ],
+      "source_ids": [1401]
+    }
+  }
+}

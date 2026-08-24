@@ -2,6 +2,7 @@
 paths:
   - 'app/{Data,Jobs,Services}/**'
   - 'app/{Data,Jobs,Services}/**/*Cart*.php'
+  - 'app/{Data,Jobs,Services}/**/*.php'
 ---
 
 # Data Jobs Services
@@ -14,3 +15,15 @@ Image extraction accepts only chat evidence or products plausibly useful for pla
 
 ## Stage explained MVP fallbacks with evidence grades
 Prefer exact catalog matches, then general same-role substitutes that preserve category, use, preparation state, and known hard exclusions. Reject any product explicitly disclosing a forbidden allergen. After bounded detail checks, missing allergen/composition disclosure may be staged as unverified only with a visible question-mark package-check warning; never present it as proven safe.
+
+## Scope food restrictions to intended consumers
+Treat an allergy or dietary restriction as a hard SKU constraint only when the affected participant is an intended consumer, or when the source makes the requirement group-wide. First try a suitable safe variant. If none is available and the item can still serve other guests, keep it with a clear participant-specific warning that the affected person must avoid it; do not universalize one person's restriction across the cart.
+
+## Distinguish incomplete evidence from a known conflict
+Do not reject a catalog candidate merely because composition or allergen detail is absent after bounded inspection; stage it with a visible package-check warning when identity and role are proven and no forbidden property is disclosed. Treat products explicitly catalogued as non-alcoholic as non-alcoholic even when the technical declaration is up to 0.5%, unless the event explicitly requires exactly 0.0%. Keep known allergen, preparation-state, and physical-role conflicts strict; an LLM-proposed species change may be a visible same-role replacement only after exact searches are exhausted.
+
+## Use gluten-free labels without proof-document checks
+For the MVP, an explicit gluten-free catalog label is enough to match the product role. Do not add proof-document requirements to prompts, needs, or queries. Missing full composition may remain an unverified package warning; explicit conflicts still reject.
+
+## Let the model propose broad visible replacements
+Exhaust exact catalog queries first. If the exact need is unavailable, let the LLM order practical alternatives by purpose similarity and stop at the first viable result; PHP must not contain product or species substitution maps. A hard identity change such as meat species may be staged only as a visible same-role replacement, while explicit allergens and preparation-state conflicts remain hard rejections.

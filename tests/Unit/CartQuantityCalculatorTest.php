@@ -51,6 +51,17 @@ class CartQuantityCalculatorTest extends TestCase
         $this->assertSame(6.0, $quantity);
     }
 
+    public function test_requested_package_count_is_not_divided_by_the_items_inside_each_package(): void
+    {
+        $quantity = $this->calculator->quantityFor(
+            ['quantity' => 2, 'unit' => 'пачки'],
+            ['display_ratio' => '50шт/уп', 'weighted' => false, 'step' => 1, 'stock' => 20, 'available' => true],
+            2,
+        );
+
+        $this->assertSame(2.0, $quantity);
+    }
+
     public function test_non_exact_package_volume_has_an_explicit_rounding_note(): void
     {
         $note = $this->calculator->packageRoundingNote(

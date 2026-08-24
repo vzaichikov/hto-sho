@@ -15,6 +15,10 @@ final readonly class CartAgentDecisionData
         public string $reason,
         public ?string $question,
         public CartAgentAuditData $audit,
+        public bool $allowCatalogFallback = false,
+        public bool $candidateMatchesRequiredProduct = true,
+        public string $safetyEvidence = 'not_required',
+        public bool $isReplacement = false,
     ) {}
 
     /** @param array<string, mixed> $payload */
@@ -28,15 +32,25 @@ final readonly class CartAgentDecisionData
             'reason' => ['required', 'string', 'max:1000'],
             'question' => ['nullable', 'string', 'max:1000'],
             'audit' => ['required', 'array'],
+            'allow_catalog_fallback' => ['sometimes', 'boolean'],
+            'candidate_matches_required_product' => ['sometimes', 'boolean'],
+            'safety_evidence' => ['sometimes', 'in:not_required,verified,unverified'],
+            'is_replacement' => ['sometimes', 'boolean'],
         ])->validate();
 
         $action = $validated['action'];
         $question = $validated['question'] ?? null;
+        $candidateMatchesRequiredProduct = (bool) ($validated['candidate_matches_required_product'] ?? true);
+
+        if ($action === 'select' && ! $candidateMatchesRequiredProduct) {
+            $action = 'skip';
+            $validated['selected_product_id'] = null;
+            $validated['quantity'] = null;
+        }
 
         if (in_array($action, ['select', 'inspect'], true)
             && blank($validated['selected_product_id'] ?? null)) {
-            $action = 'ask';
-            $question = $question ?: $validated['reason'];
+            throw new UnexpectedValueException('Agent selected no catalog product.');
         }
 
         if ($action === 'select' && ! is_numeric($validated['quantity'] ?? null)) {
@@ -59,6 +73,10 @@ final readonly class CartAgentDecisionData
             reason: $validated['reason'],
             question: $question,
             audit: CartAgentAuditData::from($validated['audit']),
+            allowCatalogFallback: (bool) ($validated['allow_catalog_fallback'] ?? false),
+            candidateMatchesRequiredProduct: $candidateMatchesRequiredProduct,
+            safetyEvidence: $validated['safety_evidence'] ?? 'not_required',
+            isReplacement: (bool) ($validated['is_replacement'] ?? false),
         );
     }
 }

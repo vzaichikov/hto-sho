@@ -156,14 +156,28 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
                 );
             });
 
-        $context = $analysis->summarizeEvent([
+        $organizerContext = [
             'title' => $event->title,
             'description' => $event->description,
             'alcohol_planned' => $event->alcohol_planned,
             'people_count' => $event->people_count,
             'budget_amount' => $event->budget_amount,
             'currency' => $event->currency,
-        ], $evidence, $this->questionLedger($event, $usableSources), $harnessRun);
+        ];
+        $questionLedger = $this->questionLedger($event, $usableSources);
+        $context = $analysis->summarizeEvent($organizerContext, $evidence, $questionLedger, $harnessRun);
+
+        if ($this->hasOmittedTentativeContribution($context->state, $usableSources)
+            || $this->hasContributionConsumptionAmbiguity($context->state, $usableSources)) {
+            $context = $analysis->repairEventSummary(
+                $organizerContext,
+                $evidence,
+                $context->state,
+                $questionLedger,
+                $harnessRun,
+            );
+        }
+
         $state = $this->normalizeOrganizerConfirmedAlcohol($context->state, $event->alcohol_planned);
         $state = $this->normalizeCompleteRosterQuestions($state, $event->people_count);
         $state = $this->normalizeExplicitConfirmedFacts($state, $usableSources);
@@ -409,13 +423,96 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
 
     /**
      * @param  array<string, mixed>  $state
+     * @param  Collection<int, EventSource>  $sources
+     */
+    private function hasOmittedTentativeContribution(array $state, Collection $sources): bool
+    {
+        $structuredText = Str::lower(Str::squish(collect([
+            ...collect($state['agreements'] ?? [])->pluck('summary'),
+            ...collect($state['warnings'] ?? [])->pluck('message'),
+            ...collect($state['shopping_requirements'] ?? [])->flatMap(
+                fn (array $requirement): array => [
+                    $requirement['name'] ?? '',
+                    ...($requirement['constraints'] ?? []),
+                ],
+            ),
+        ])->filter()->implode(' ')));
+        $participants = collect($state['participants'] ?? []);
+        $tentativePattern = '/(може(?!\s+містити)|ніби|maybe|якщо\s+встиг|мабуть|підтверджу(?!ю)|не\s+фінальн|не\s+підтвердж|умовн)/u';
+
+        return $sources->contains(function (EventSource $source) use ($participants, $structuredText, $tentativePattern): bool {
+            $segments = collect();
+
+            if (filled($source->text)) {
+                $segments->push(preg_replace(
+                    '/^\d{1,2}\s+[\p{L}]+,\s*\d{1,2}:\d{2},\s*[\p{L}\s]+:\s*/u',
+                    '',
+                    (string) $source->text,
+                ));
+            }
+
+            foreach ($source->imageExtraction?->message_timeline ?? [] as $message) {
+                $segments->push(Str::squish(
+                    (string) ($message['author'] ?? '').' '.(string) ($message['text'] ?? ''),
+                ));
+            }
+
+            return $segments->filter()->contains(function (string $segment) use ($participants, $structuredText, $tentativePattern): bool {
+                $segment = Str::lower($segment);
+
+                if (preg_match($tentativePattern, $segment) !== 1) {
+                    return false;
+                }
+
+                return $participants->contains(function (array $participant) use ($segment, $structuredText): bool {
+                    $name = Str::lower((string) ($participant['name'] ?? ''));
+                    $nameStem = mb_substr($name, 0, max(2, mb_strlen($name) - 1));
+
+                    return $name !== ''
+                        && ($participant['brings'] ?? []) === []
+                        && str_contains($segment, $nameStem)
+                        && ! str_contains($structuredText, $nameStem);
+                });
+            });
+        });
+    }
+
+    /**
+     * A preference-like restriction sourced from a responsibility-allocation
+     * message merits one model review: declining to bring an item is not the
+     * same fact as declining to consume it.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  Collection<int, EventSource>  $sources
+     */
+    private function hasContributionConsumptionAmbiguity(array $state, Collection $sources): bool
+    {
+        $contributionSourceIds = $sources
+            ->filter(fn (EventSource $source): bool => preg_match(
+                '/(внес|принес|привез|везе|бер(?:е|у|уть)|на\s+мені|відповіда)/u',
+                $this->contributionEvidenceText($source),
+            ) === 1)
+            ->pluck('id');
+
+        if ($contributionSourceIds->isEmpty()) {
+            return false;
+        }
+
+        return collect($state['restrictions'] ?? [])->contains(
+            fn (array $restriction): bool => ($restriction['severity'] ?? null) === 'preference'
+                && collect($restriction['source_ids'] ?? [])->intersect($contributionSourceIds)->isNotEmpty(),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $state
      * @param  array<int, int>  $validSourceIds
      */
     private function hasValidProvenance(array $state, array $validSourceIds): bool
     {
         $referenced = collect($state['source_ids'] ?? []);
 
-        foreach (['participants', 'restrictions', 'agreements', 'warnings', 'unresolved_questions'] as $section) {
+        foreach (['participants', 'restrictions', 'agreements', 'shopping_requirements', 'warnings', 'unresolved_questions'] as $section) {
             foreach ($state[$section] ?? [] as $item) {
                 $referenced = $referenced->merge($item['source_ids'] ?? []);
             }
@@ -636,19 +733,20 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
      */
     private function normalizeTentativeBrings(array $state, Collection $sources): array
     {
-        $textSources = $sources
-            ->filter(fn (EventSource $source): bool => filled($source->text))
+        $evidenceSources = $sources
+            ->filter(fn (EventSource $source): bool => filled($this->contributionEvidenceText($source)))
             ->sortBy(fn (EventSource $source): int => $this->semanticTextTimestamp($source))
             ->values();
+        $tentativeClaims = collect();
 
         $state['participants'] = collect($state['participants'] ?? [])
-            ->map(function (array $participant) use ($textSources): array {
+            ->map(function (array $participant) use ($evidenceSources, $tentativeClaims): array {
                 $name = Str::lower((string) ($participant['name'] ?? ''));
                 $participant['brings'] = collect($participant['brings'] ?? [])
-                    ->reject(function (string $item) use ($name, $textSources): bool {
-                        $latestEvidence = $textSources
+                    ->reject(function (string $item) use ($name, $evidenceSources, $tentativeClaims): bool {
+                        $latestEvidence = $evidenceSources
                             ->filter(function (EventSource $source) use ($name, $item): bool {
-                                $text = Str::lower((string) $source->text);
+                                $text = $this->contributionEvidenceText($source);
 
                                 return str_contains($text, $name)
                                     && $this->textMentionsContribution($text, $item);
@@ -659,10 +757,20 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
                             return false;
                         }
 
-                        return $this->textMakesContributionTentativeOrCancelled(
-                            Str::lower((string) $latestEvidence->text),
+                        if (! $this->textMakesContributionTentativeOrCancelled(
+                            $this->contributionEvidenceText($latestEvidence),
                             $item,
-                        );
+                        )) {
+                            return false;
+                        }
+
+                        $tentativeClaims->push([
+                            'participant' => (string) ($participant['name'] ?? ''),
+                            'item' => $item,
+                            'source_id' => $latestEvidence->id,
+                        ]);
+
+                        return true;
                     })
                     ->values()
                     ->all();
@@ -671,7 +779,62 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             })
             ->all();
 
+        $tentativeClaims = $tentativeClaims
+            ->unique(fn (array $claim): string => Str::lower($claim['participant'].'|'.$claim['item']))
+            ->values();
+
+        if ($tentativeClaims->isEmpty()) {
+            return $state;
+        }
+
+        $mentionsTentativeClaim = fn (string $text): bool => $tentativeClaims->contains(
+            fn (array $claim): bool => str_contains(Str::lower($text), Str::lower($claim['participant']))
+                && $this->textMentionsContribution($text, $claim['item']),
+        );
+
+        $state['agreements'] = collect($state['agreements'] ?? [])
+            ->reject(fn (array $agreement): bool => $mentionsTentativeClaim((string) ($agreement['summary'] ?? '')))
+            ->values()
+            ->all();
+        $state['summary'] = collect(preg_split('/(?<=[.!?])\s+/u', (string) ($state['summary'] ?? '')) ?: [])
+            ->reject(fn (string $sentence): bool => $mentionsTentativeClaim($sentence))
+            ->implode(' ');
+
+        $warningSourceIds = $tentativeClaims
+            ->pluck('source_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $hasTentativeWarning = collect($state['warnings'] ?? [])->contains(
+            fn (array $warning): bool => preg_match(
+                '/(умовн|не\s+підтвердж|не\s+остаточн)/u',
+                Str::lower((string) ($warning['message'] ?? '')),
+            ) === 1,
+        );
+
+        if (! $hasTentativeWarning) {
+            $state['warnings'][] = [
+                'message' => 'Умовні внески ще не підтверджені остаточно, тому відповідні товари лишаються в закупівлі.',
+                'source_ids' => $warningSourceIds,
+            ];
+        }
+
         return $state;
+    }
+
+    private function contributionEvidenceText(EventSource $source): string
+    {
+        $timelineTexts = collect($source->imageExtraction?->message_timeline ?? [])
+            ->pluck('text')
+            ->filter()
+            ->implode(' ');
+
+        return Str::lower(Str::squish(collect([
+            $source->text,
+            $source->imageExtraction?->ocr_text,
+            $timelineTexts,
+        ])->filter()->implode(' ')));
     }
 
     private function semanticTextTimestamp(EventSource $source): int
@@ -718,7 +881,7 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
 
     private function textMakesContributionTentativeOrCancelled(string $text, string $item): bool
     {
-        if (preg_match('/(може(?!\s+містити)|ніби|якщо\s+встиг|мабуть|поки\s+(?:не|це)|не\s+фінальн|не\s+підтвердж|умовн)/u', $text) === 1) {
+        if (preg_match('/(може(?!\s+містити)|ніби|maybe|якщо\s+встиг|мабуть|підтверджу(?!ю)|поки\s+(?:не|це)|не\s+фінальн|не\s+підтвердж|умовн)/u', $text) === 1) {
             return true;
         }
 
@@ -729,7 +892,13 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             $stem = preg_quote(mb_substr($word, 0, min(5, mb_strlen($word))), '/');
             $negative = '(?:не\s+бер\p{L}*|не\s+вез\p{L}*|більше\s+не|не\s+принос\p{L}*|купіть)';
 
-            return preg_match('/(?:'.$stem.'.{0,24}'.$negative.'|'.$negative.'.{0,24}'.$stem.')/u', $text) === 1;
+            if (preg_match('/'.$stem.'\p{L}*([^.!?]{0,24})'.$negative.'/u', $text, $matches) === 1
+                && preg_match('/\bале\b/u', $matches[1]) !== 1) {
+                return true;
+            }
+
+            return preg_match('/'.$negative.'([^.!?]{0,24})'.$stem.'\p{L}*/u', $text, $matches) === 1
+                && preg_match('/\bале\b/u', $matches[1]) !== 1;
         });
     }
 

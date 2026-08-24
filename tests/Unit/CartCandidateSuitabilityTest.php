@@ -28,6 +28,41 @@ class CartCandidateSuitabilityTest extends TestCase
         ));
     }
 
+    public function test_it_does_not_require_a_known_cut_name_for_raw_pork_from_the_matching_category(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'свинина на шашлик',
+            'note' => 'Сира, без готового маринаду',
+            'quantity' => 2.2,
+            'unit' => 'кг',
+        ];
+        $catalogScope = [
+            'type' => 'category',
+            'slug' => 'svynyna-4413',
+            'matched' => true,
+        ];
+
+        $this->assertTrue($suitability->allows($need, [
+            'name' => 'Свиняче яблучко фермерське',
+            'weighted' => true,
+            'stock' => 2.8,
+            'catalog_scope' => $catalogScope,
+        ], [], []));
+        $this->assertTrue($suitability->allows($need, [
+            'name' => 'Свинячий кострець фермерський',
+            'weighted' => true,
+            'stock' => 4.4,
+            'catalog_scope' => $catalogScope,
+        ], [], []));
+        $this->assertFalse($suitability->allows($need, [
+            'name' => 'Шашлик зі свинини маринований',
+            'weighted' => true,
+            'stock' => 4.4,
+            'catalog_scope' => $catalogScope,
+        ], [], []));
+    }
+
     public function test_potato_chips_are_not_misclassified_as_fresh_produce(): void
     {
         $suitability = new CartCandidateSuitability;
@@ -90,18 +125,17 @@ class CartCandidateSuitabilityTest extends TestCase
         $this->assertSame('свинина', $suitability->nextSearchQuery($need));
     }
 
-    public function test_veal_steak_does_not_accept_generic_beef_or_slow_cooking_veal(): void
+    public function test_semantic_meat_replacement_stays_model_driven_while_php_keeps_stock_checks(): void
     {
         $suitability = new CartCandidateSuitability;
         $need = [
             'name' => 'стейки з телятини',
-            'note' => 'Не узагальнювати до іншого мʼяса',
+            'note' => 'Сирий стейковий відруб',
             'search_queries' => ['стейки з телятини', 'сирий телячий відруб для стейка'],
             'attempts' => [['query' => 'стейки з телятини']],
         ];
 
-        $this->assertFalse($suitability->allows($need, ['name' => 'Теляча гомілка Оссобуко'], [], []));
-        $this->assertFalse($suitability->allows($need, ['name' => 'Стейк яловичий Рібай'], [], []));
+        $this->assertTrue($suitability->allows($need, ['name' => 'Стейк яловичий Рібай'], [], []));
         $this->assertTrue($suitability->allows($need, ['name' => 'Вирізка теляча охолоджена'], [], []));
         $this->assertTrue($suitability->allows($need, ['name' => 'Телячий биток охолоджений'], [], []));
         $this->assertSame('стейки', $suitability->nextSearchQuery($need));
@@ -147,13 +181,10 @@ class CartCandidateSuitabilityTest extends TestCase
         ];
 
         $this->assertTrue($suitability->allows($exhaustedNeed, $beefFallback, [], []));
-        $fallbackEvidence = $suitability->evidence($exhaustedNeed, $beefFallback, [], []);
+        $fallbackEvidence = $suitability->evidence($exhaustedNeed, $beefFallback, [], [], null, true);
+        $this->assertTrue($fallbackEvidence['selectable']);
         $this->assertSame(CartProductEvidence::MATCH_SAME_ROLE, $fallbackEvidence['match']);
-        $this->assertStringContainsString('не телятина', (string) $fallbackEvidence['review_note']);
-        $this->assertFalse($suitability->allows($exhaustedNeed, [
-            ...$beefFallback,
-            'name' => 'Котлета яловича для бургера',
-        ], [], []));
+        $this->assertStringContainsString('Заміна', (string) $fallbackEvidence['review_note']);
     }
 
     public function test_high_risk_bread_and_sauce_needs_require_details(): void
@@ -162,7 +193,7 @@ class CartCandidateSuitabilityTest extends TestCase
         $context = ['summary' => 'Маша має алергію на арахіс; Леся має целіакію.'];
 
         $this->assertTrue($suitability->requiresInspection(
-            ['name' => 'сертифікований безглютеновий хліб', 'note' => 'Для Лесі'],
+            ['name' => 'безглютеновий хліб', 'note' => 'Для Лесі'],
             $context,
         ));
         $this->assertTrue($suitability->requiresInspection(
@@ -691,7 +722,7 @@ class CartCandidateSuitabilityTest extends TestCase
         ], $candidate));
     }
 
-    public function test_teliachi_word_form_still_enforces_the_exhausted_veal_fallback_warning(): void
+    public function test_teliachi_word_form_can_accept_a_model_selected_beef_role_fallback(): void
     {
         $suitability = new CartCandidateSuitability;
         $need = [
@@ -710,18 +741,18 @@ class CartCandidateSuitabilityTest extends TestCase
             'weighted' => true,
         ];
 
-        $this->assertFalse($suitability->allows($need, $beef, [], []));
+        $this->assertTrue($suitability->allows($need, $beef, [], []));
 
         $exhaustedNeed = [
             ...$need,
             'attempts' => collect(range(1, 6))->map(fn (int $attempt): array => ['query' => "телятина {$attempt}"])->all(),
             'browse_attempts' => [['type' => 'category', 'slug' => 'yalovychyna-ta-teliatyna-4414']],
         ];
-        $evidence = $suitability->evidence($exhaustedNeed, $beef, [], []);
+        $evidence = $suitability->evidence($exhaustedNeed, $beef, [], [], null, true);
 
         $this->assertTrue($evidence['selectable']);
-        $this->assertSame('same_role', $evidence['match']);
-        $this->assertStringContainsString('не телятина', $evidence['review_note']);
+        $this->assertSame(CartProductEvidence::MATCH_SAME_ROLE, $evidence['match']);
+        $this->assertStringContainsString('Заміна', (string) $evidence['review_note']);
     }
 
     public function test_fresh_greens_reject_dried_seasoning_leaves(): void
@@ -799,6 +830,31 @@ class CartCandidateSuitabilityTest extends TestCase
         ], [], []));
     }
 
+    public function test_soft_drink_need_accepts_an_explicitly_non_alcoholic_version_of_its_product_family(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'безалкогольне пиво для водія',
+            'category' => 'soft_drinks',
+            'quantity' => 1,
+            'unit' => 'л',
+            'search_queries' => ['безалкогольне пиво', 'пиво 0.0'],
+        ];
+
+        $this->assertTrue($suitability->allows($need, [
+            'name' => 'Пиво Hike Zero 0.0 світле безалкогольне',
+            'display_ratio' => '0,5л',
+            'available' => true,
+            'stock' => 214,
+        ], [], []));
+        $this->assertFalse($suitability->allows($need, [
+            'name' => 'Пиво світле алкогольне',
+            'display_ratio' => '0,5л',
+            'available' => true,
+            'stock' => 214,
+        ], [], []));
+    }
+
     public function test_high_risk_sauce_rejects_known_allergen_but_stages_missing_evidence_with_a_question_mark(): void
     {
         $suitability = new CartCandidateSuitability;
@@ -832,6 +888,37 @@ class CartCandidateSuitabilityTest extends TestCase
         ], $context, []));
     }
 
+    public function test_a_packaged_food_with_an_explicit_peanut_constraint_requires_safety_evidence(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'картопляні чипси',
+            'note' => 'Без арахісу та маркування «може містити арахіс».',
+        ];
+        $context = ['summary' => 'Сильна алергія на арахіс.'];
+        $unknownCandidate = [
+            'name' => 'Чипси картопляні з сіллю',
+            'details' => ['attributes' => ['Маса' => '120 г']],
+        ];
+
+        $this->assertTrue($suitability->requiresInspection($need, $context));
+        $this->assertSame(
+            CartProductEvidence::SAFETY_UNVERIFIED,
+            $suitability->evidence($need, $unknownCandidate, $context, [])['safety'],
+        );
+        $this->assertSame(
+            CartProductEvidence::SAFETY_VERIFIED,
+            $suitability->evidence($need, [
+                'name' => 'Чипси картопляні з сіллю',
+                'details' => ['description' => 'Алергени: не містить арахісу.'],
+            ], $context, [])['safety'],
+        );
+        $this->assertFalse($suitability->allows($need, [
+            'name' => 'Чипси картопляні з сіллю',
+            'details' => ['description' => 'Може містити арахіс.'],
+        ], $context, []));
+    }
+
     public function test_sugar_free_drink_prefers_explicit_evidence_but_can_stage_an_unverified_fallback(): void
     {
         $suitability = new CartCandidateSuitability;
@@ -852,5 +939,23 @@ class CartCandidateSuitabilityTest extends TestCase
             'name' => 'Лимонад Zero без цукру',
             'details' => ['description' => 'Цукри 0 г.'],
         ], [], []));
+    }
+
+    public function test_model_can_promote_contextual_missing_safety_disclosure_to_a_visible_warning(): void
+    {
+        $evidence = (new CartCandidateSuitability)->evidence(
+            ['name' => 'raw pork'],
+            [
+                'name' => 'Chilled pork chunks',
+                'details' => ['attributes' => ['Country' => 'Ukraine']],
+            ],
+            [],
+            [],
+            CartProductEvidence::SAFETY_UNVERIFIED,
+        );
+
+        $this->assertTrue($evidence['selectable']);
+        $this->assertSame(CartProductEvidence::SAFETY_UNVERIFIED, $evidence['safety']);
+        $this->assertStringContainsString('❓', (string) $evidence['review_note']);
     }
 }

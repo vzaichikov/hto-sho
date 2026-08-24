@@ -92,9 +92,9 @@ final class CartCandidateSuitability
 
         if (data_get($need, 'category') === 'soft_drinks') {
             $displayRatio = Str::lower((string) data_get($candidate, 'display_ratio'));
-            $isAlcoholStyle = $this->containsAny($candidateText, ['винн', 'пив', 'сидр'])
-                || ($this->containsAny($candidateText, ['алкогол'])
-                    && ! $this->containsAny($candidateText, ['безалкогол']));
+            $isExplicitlyNonAlcoholic = $this->containsAny($candidateText, ['безалкогол']);
+            $isAlcoholStyle = ! $isExplicitlyNonAlcoholic
+                && $this->containsAny($candidateText, ['винн', 'пив', 'сидр', 'алкогол']);
 
             if (! preg_match('/\d+(?:[.,]\d+)?\s*(?:л|мл)(?:$|[^\p{L}])/u', $displayRatio)
                 || $isAlcoholStyle) {
@@ -135,15 +135,11 @@ final class CartCandidateSuitability
         }
 
         if ($this->containsAny($needText, ['шашлик']) && $this->containsAny($needText, ['свинин'])) {
-            $isRawPorkCut = $this->containsAny($candidateText, ['свин'])
-                && $this->containsAny($candidateText, [
-                    'шия', 'оший', 'лопат', 'вирізк', 'корей', 'окіст', 'биток',
-                ]);
             $isPrepared = $this->containsAny($candidateText, [
                 'ковбас', 'шашлик', 'напівфабрикат', 'маринован', 'копчен', 'запечен',
             ]);
 
-            if (! $isRawPorkCut || $isPrepared) {
+            if ($isPrepared) {
                 return false;
             }
         }
@@ -170,23 +166,6 @@ final class CartCandidateSuitability
             && $this->containsAny($productText, ['салат'])
             && ! $this->isLeafySaladCandidate($productText)) {
             return false;
-        }
-
-        if ($this->containsAny($needText, ['стейк']) && $this->containsAny($needText, ['телят', 'теляч'])) {
-            $isVeal = $this->containsAny($candidateText, ['телят', 'теляч']);
-            $isSpeciesFallback = $this->allowsVealSpeciesFallback($need, $candidateText);
-            $isSteakCut = $this->containsAny($candidateText, [
-                'стейк', 'ribeye', 'рібай', 'striploin', 't-bone', 'porterhouse',
-                'вирізк', 'філе', 'медальйон', 'антрекот', 'корейк', 'каре телят', 'биток',
-            ]);
-            $isSlowCookingCut = $this->containsAny($candidateText, [
-                'оссобук', 'гомілк', 'рагу', 'гуляш', 'лопатк', 'котлет', 'бургер',
-                'томлен', 'напівфабрикат', 'мітбол', 'сосиск', 'соус',
-            ]);
-
-            if ((! $isVeal && ! $isSpeciesFallback) || ! $isSteakCut || $isSlowCookingCut) {
-                return false;
-            }
         }
 
         if ($this->containsAny($needText, ['соус'])) {
@@ -243,7 +222,7 @@ final class CartCandidateSuitability
             return false;
         }
 
-        if ($this->containsAny($needText, ['безглютен', 'сертифікован'])
+        if ($this->containsAny($needText, ['безглютен'])
             && array_key_exists('details', $candidate)
             && ! $this->containsAny($candidateEvidenceText, ['безглютен', 'gluten free'])
             && $this->containsAny($candidateEvidenceText, [
@@ -267,14 +246,15 @@ final class CartCandidateSuitability
         array $candidate,
         array $eventContext,
         array $shoppingPlan,
+        ?string $modelSafetyEvidence = null,
+        bool $modelReplacement = false,
     ): array {
         $selectable = $this->allows($need, $candidate, $eventContext, $shoppingPlan);
         $candidateText = $this->text([
             data_get($candidate, 'name'),
             data_get($candidate, 'slug'),
         ]);
-        $isVealSpeciesFallback = $this->allowsVealSpeciesFallback($need, $candidateText);
-        $match = ! $isVealSpeciesFallback && $this->sharesNeedIdentityTerm($need, $candidateText)
+        $match = ! $modelReplacement && $this->sharesNeedIdentityTerm($need, $candidateText)
             ? CartProductEvidence::MATCH_EXACT
             : CartProductEvidence::MATCH_SAME_ROLE;
         $safety = CartProductEvidence::SAFETY_NOT_REQUIRED;
@@ -286,14 +266,18 @@ final class CartCandidateSuitability
                     : CartProductEvidence::SAFETY_UNVERIFIED;
         }
 
+        if ($safety === CartProductEvidence::SAFETY_NOT_REQUIRED
+            && in_array($modelSafetyEvidence, [
+                CartProductEvidence::SAFETY_VERIFIED,
+                CartProductEvidence::SAFETY_UNVERIFIED,
+            ], true)) {
+            $safety = $modelSafetyEvidence;
+        }
+
         $notes = [];
 
         if ($match === CartProductEvidence::MATCH_SAME_ROLE) {
             $notes[] = 'Заміна для «'.data_get($need, 'name').'»: найближчий доступний товар у тій самій ролі.';
-        }
-
-        if ($isVealSpeciesFallback) {
-            $notes[] = '⚠️ Це сирий яловичий стейковий відруб, не телятина: Сільпо не повернуло доступної телятини після точних і категорійних перевірок.';
         }
 
         if ($safety === CartProductEvidence::SAFETY_UNVERIFIED) {
@@ -340,7 +324,11 @@ final class CartCandidateSuitability
      */
     public function requiresInspection(array $need, array $eventContext): bool
     {
-        $needText = $this->text([data_get($need, 'name')]);
+        $needName = $this->text([data_get($need, 'name')]);
+        $needText = $this->text([
+            data_get($need, 'name'),
+            data_get($need, 'note'),
+        ]);
         $constraintText = $this->text([
             data_get($eventContext, 'summary'),
             ...collect(data_get($eventContext, 'restrictions', []))
@@ -350,9 +338,10 @@ final class CartCandidateSuitability
                 ->all(),
         ]);
 
-        return $this->containsAny($needText, ['сертифікован', 'безглютен'])
+        return $this->containsAny($needText, ['безглютен'])
             || $this->containsAny($needText, ['без цукру'])
-            || ($this->containsAny($needText, ['соус'])
+            || $this->containsAny($needText, ['арахіс', 'peanut'])
+            || ($this->containsAny($needName, ['соус'])
                 && $this->containsAny($constraintText, ['арахіс', 'молочн', 'лактоз', 'целіак', 'глютен']));
     }
 
@@ -702,20 +691,6 @@ final class CartCandidateSuitability
         ]);
     }
 
-    /** @param array<string, mixed> $need */
-    private function allowsVealSpeciesFallback(array $need, string $candidateText): bool
-    {
-        $needText = $this->text([data_get($need, 'name'), data_get($need, 'note')]);
-
-        return $this->containsAny($needText, ['стейк'])
-            && $this->containsAny($needText, ['телят', 'теляч'])
-            && ! $this->containsAny($candidateText, ['телят', 'теляч'])
-            && $this->containsAny($candidateText, ['ялов', 'beef'])
-            && count(data_get($need, 'attempts', [])) >= 6
-            && count(data_get($need, 'browse_attempts', [])) >= 1
-            && data_get($need, 'category', 'food') === 'food';
-    }
-
     /** @param array<string, mixed> $need @param array<string, mixed> $candidate */
     private function hasSufficientStock(array $need, array $candidate): bool
     {
@@ -871,9 +846,9 @@ final class CartCandidateSuitability
             $this->structuredText(data_get($candidate, 'details')),
         ]);
 
-        if ($this->containsAny($needText, ['безглютен', 'сертифікован'])) {
+        if ($this->containsAny($needText, ['безглютен'])) {
             return $this->containsAny($evidenceText, [
-                'сертифікован безглютен', 'безглютен', 'gluten free',
+                'безглютен', 'gluten free',
             ]);
         }
 
@@ -881,6 +856,12 @@ final class CartCandidateSuitability
             return $this->containsAny($evidenceText, [
                 'без цукру', 'нуль цукру', '0 цукру', 'цукри 0', 'цукрів 0',
                 'sugar free', 'zero sugar', 'sugar 0',
+            ]);
+        }
+
+        if ($this->containsAny($needText, ['арахіс', 'peanut'])) {
+            return $this->containsAny($evidenceText, [
+                'не містить арахіс', 'без арахіс', 'no peanut', 'peanut free',
             ]);
         }
 

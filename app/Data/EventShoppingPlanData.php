@@ -12,6 +12,16 @@ final readonly class EventShoppingPlanData
     /** @param array<string, mixed> $payload */
     public static function from(array $payload): self
     {
+        $payload['items'] = collect(data_get($payload, 'items', []))
+            ->map(fn (mixed $item): mixed => is_array($item)
+                ? [
+                    ...$item,
+                    'optional' => (bool) ($item['optional'] ?? false),
+                    'minimum_distinct_products' => (int) ($item['minimum_distinct_products'] ?? 1),
+                ]
+                : $item)
+            ->all();
+
         $validated = Validator::make($payload, [
             'summary' => ['required', 'string', 'max:5000'],
             'serves' => ['nullable', 'integer', 'min:1', 'max:10000'],
@@ -21,6 +31,8 @@ final readonly class EventShoppingPlanData
             'items.*.quantity' => ['required', 'numeric', 'gt:0', 'max:100000'],
             'items.*.unit' => ['required', 'string', 'max:100'],
             'items.*.note' => ['present', 'string', 'max:1000'],
+            'items.*.optional' => ['required', 'boolean'],
+            'items.*.minimum_distinct_products' => ['required', 'integer', 'min:1', 'max:3'],
             'warnings' => ['present', 'array'],
             'warnings.*' => ['string', 'max:2000'],
             'unanswered_question_keys' => ['present', 'array'],

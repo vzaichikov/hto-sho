@@ -39,6 +39,21 @@ class CartAgentPreparationDataTest extends TestCase
         $this->assertSame(['n_01', 'n_02'], array_column($preparation->needs, 'key'));
     }
 
+    public function test_it_copies_optional_status_from_the_authoritative_plan(): void
+    {
+        $preparation = CartAgentPreparationData::from([
+            'needs' => [
+                $this->need('water', 0, 'вода'),
+                $this->need('bags', 1, 'пакети для сміття'),
+            ],
+        ], [
+            ['name' => 'вода', 'optional' => false],
+            ['name' => 'пакети для сміття', 'optional' => true],
+        ]);
+
+        $this->assertSame([false, true], array_column($preparation->needs, 'optional'));
+    }
+
     public function test_it_accepts_agent_decomposition_of_a_broad_grill_vegetable_need(): void
     {
         $preparation = CartAgentPreparationData::from([
@@ -49,6 +64,7 @@ class CartAgentPreparationDataTest extends TestCase
         ], [[
             'name' => 'овочі для гриля',
             'note' => 'Суттєва вегетаріанська частина меню.',
+            'minimum_distinct_products' => 2,
         ]]);
 
         $this->assertSame(
@@ -68,6 +84,7 @@ class CartAgentPreparationDataTest extends TestCase
         ], [[
             'name' => 'овочі для гриля',
             'note' => 'Суттєва вегетаріанська частина меню.',
+            'minimum_distinct_products' => 2,
         ]]);
     }
 
@@ -99,36 +116,48 @@ class CartAgentPreparationDataTest extends TestCase
         $this->assertSame('овочі для гриля', data_get($preparation->needs, '1.search_queries.1'));
     }
 
-    public function test_it_deduplicates_an_overlapping_need_emitted_from_another_plan_item(): void
+    public function test_it_rejects_an_exact_duplicate_product_name_across_plan_items(): void
     {
-        $preparation = CartAgentPreparationData::from(['needs' => [
+        $this->expectException(UnexpectedValueException::class);
+
+        CartAgentPreparationData::from(['needs' => [
             $this->need('tomatoes-primary', 0, 'помідори'),
             $this->need('greens', 1, 'зелень'),
-            $this->need('tomatoes-overlap', 1, 'помідори свіжі'),
+            $this->need('tomatoes-overlap', 1, '  ПОМІДОРИ '),
             $this->need('salad-leaves', 1, 'салатні листки'),
         ]], [
             ['name' => 'помідори'],
-            ['name' => 'зелень та салатні листки'],
+            ['name' => 'зелень та салатні листки', 'minimum_distinct_products' => 2],
         ]);
-
-        $this->assertSame(['помідори', 'зелень', 'салатні листки'], array_column($preparation->needs, 'name'));
-        $this->assertSame(['n_01', 'n_02', 'n_03'], array_column($preparation->needs, 'key'));
     }
 
-    public function test_it_identifies_broad_multi_sku_needs_without_product_names(): void
+    public function test_it_preserves_distinct_products_that_share_a_generic_first_word(): void
     {
-        $this->assertTrue(CartAgentPreparationData::requiresMultipleSkuDecomposition([
-            'name' => 'Сезонні овочі на гриль',
-        ]));
-        $this->assertTrue(CartAgentPreparationData::requiresMultipleSkuDecomposition([
-            'name' => 'Овочева суміш для салату',
-        ]));
-        $this->assertTrue(CartAgentPreparationData::requiresMultipleSkuDecomposition([
-            'name' => 'зелень та салатні листки',
-        ]));
-        $this->assertFalse(CartAgentPreparationData::requiresMultipleSkuDecomposition([
-            'name' => 'помідори',
-        ]));
+        $preparation = CartAgentPreparationData::from(['needs' => [
+            $this->need('plates', 0, 'одноразові тарілки'),
+            $this->need('cups', 1, 'одноразові стакани'),
+        ]], [
+            ['name' => 'одноразові тарілки'],
+            ['name' => 'одноразові стакани'],
+        ]);
+
+        $this->assertSame(
+            ['одноразові тарілки', 'одноразові стакани'],
+            array_column($preparation->needs, 'name'),
+        );
+    }
+
+    public function test_it_uses_the_language_agnostic_minimum_distinct_products_contract(): void
+    {
+        $preparation = CartAgentPreparationData::from(['needs' => [
+            $this->need('component-a', 0, 'Component A'),
+            $this->need('component-b', 0, 'Component B'),
+        ]], [[
+            'name' => 'Composite need',
+            'minimum_distinct_products' => 2,
+        ]]);
+
+        $this->assertCount(2, $preparation->needs);
     }
 
     public function test_it_rejects_a_decomposed_group_that_omits_other_plan_items(): void
@@ -140,55 +169,8 @@ class CartAgentPreparationDataTest extends TestCase
             $this->need('vegetable-b', 1, 'овоч Б для гриля'),
         ]], [
             ['name' => 'свинина на шашлик'],
-            ['name' => 'овочі для гриля'],
+            ['name' => 'овочі для гриля', 'minimum_distinct_products' => 2],
         ]);
-    }
-
-    public function test_it_repairs_cross_batch_overlap_from_the_authoritative_plan(): void
-    {
-        $plan = [
-            ['name' => 'овочі для гриля', 'category' => 'food', 'quantity' => 3, 'unit' => 'кг', 'note' => 'Сирі овочі.'],
-            ['name' => 'помідори', 'category' => 'food', 'quantity' => 1.5, 'unit' => 'кг', 'note' => 'Окрема позиція.'],
-            ['name' => 'зелень та салатні листки', 'category' => 'food', 'quantity' => 3, 'unit' => 'пучки', 'note' => 'Свіжа зелень.'],
-        ];
-        $payload = ['needs' => [
-            $this->need('grill-tomato', 0, 'помідори'),
-            $this->need('grill-pepper', 0, 'перець солодкий'),
-            $this->need('tomato', 1, 'помідори'),
-            $this->need('greens-tomato', 2, 'помідори'),
-            $this->need('greens-pepper', 2, 'перець солодкий'),
-        ]];
-
-        $preparation = CartAgentPreparationData::from(
-            CartAgentPreparationData::repairAgainstPlan($payload, $plan),
-            $plan,
-        );
-
-        $this->assertCount(2, collect($preparation->needs)->where('source_index', 0));
-        $this->assertCount(1, collect($preparation->needs)->where('source_index', 1));
-        $this->assertCount(2, collect($preparation->needs)->where('source_index', 2));
-        $this->assertSame(
-            ['зелень', 'салатні листки'],
-            collect($preparation->needs)->where('source_index', 2)->pluck('name')->all(),
-        );
-    }
-
-    public function test_it_repairs_an_omitted_simple_plan_item_without_inventing_a_new_role(): void
-    {
-        $plan = [
-            ['name' => 'свинина на шашлик', 'category' => 'food', 'quantity' => 2, 'unit' => 'кг', 'note' => 'Без маринаду.'],
-            ['name' => 'негазована вода', 'category' => 'water', 'quantity' => 12, 'unit' => 'л', 'note' => 'На всіх.'],
-        ];
-        $payload = ['needs' => [$this->need('pork', 0, 'свинина на шашлик')]];
-
-        $preparation = CartAgentPreparationData::from(
-            CartAgentPreparationData::repairAgainstPlan($payload, $plan),
-            $plan,
-        );
-
-        $this->assertSame([0, 1], array_column($preparation->needs, 'source_index'));
-        $this->assertSame('негазована вода', data_get($preparation->needs, '1.name'));
-        $this->assertSame(12.0, data_get($preparation->needs, '1.quantity'));
     }
 
     public function test_it_normalizes_decomposed_quantities_to_the_authoritative_plan_total(): void
@@ -209,7 +191,7 @@ class CartAgentPreparationDataTest extends TestCase
         $this->assertSame(['пучки', 'пучки'], array_column($preparation->needs, 'unit'));
     }
 
-    public function test_it_starts_with_the_shortest_query_that_preserves_repeated_product_identity(): void
+    public function test_it_starts_with_the_models_best_positive_catalog_query(): void
     {
         $need = [
             ...$this->need('chips', 0, 'Чіпси'),
@@ -230,7 +212,30 @@ class CartAgentPreparationDataTest extends TestCase
             'note' => '',
         ]]);
 
-        $this->assertSame('картопляні чіпси', data_get($preparation->needs, '0.search_query'));
+        $this->assertSame('чіпси', data_get($preparation->needs, '0.search_query'));
+    }
+
+    public function test_it_does_not_replace_a_named_product_query_with_a_broader_family_query(): void
+    {
+        $need = [
+            ...$this->need('sparkling', 0, 'Named sparkling wine family'),
+            'category' => 'alcohol',
+            'unit' => 'bottle',
+            'search_queries' => [
+                'Named Family',
+                'sparkling wine',
+            ],
+        ];
+
+        $preparation = CartAgentPreparationData::from(['needs' => [$need]], [[
+            'name' => 'Named sparkling wine family',
+            'category' => 'alcohol',
+            'quantity' => 1,
+            'unit' => 'bottle',
+            'note' => '',
+        ]]);
+
+        $this->assertSame('Named Family', data_get($preparation->needs, '0.search_query'));
     }
 
     /** @return array<string, mixed> */

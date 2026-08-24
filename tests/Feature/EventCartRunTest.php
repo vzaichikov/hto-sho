@@ -17,6 +17,8 @@ use App\Data\SilpoCartContextData;
 use App\Data\SilpoCartRefreshCandidateData;
 use App\Data\SilpoFulfilmentSnapshotData;
 use App\Data\SilpoRouteIntentData;
+use App\HarnessRunStatus;
+use App\HarnessRunType;
 use App\Jobs\AdvanceEventCartRunJob;
 use App\Jobs\CommitEventCartRunJob;
 use App\Models\Event;
@@ -67,6 +69,33 @@ class EventCartRunTest extends TestCase
 
         $this->assertDatabaseMissing('event_cart_runs', ['event_id' => $event->id]);
         Queue::assertNothingPushed();
+    }
+
+    public function test_terminal_automatic_job_failure_closes_the_cart_harness(): void
+    {
+        [, $event] = $this->eventWithPlan();
+        $harnessRun = HarnessRun::factory()->for($event)->create([
+            'type' => HarnessRunType::SilpoCart,
+            'status' => HarnessRunStatus::Running,
+            'finished_at' => null,
+        ]);
+        $run = EventCartRun::factory()->for($event)->create([
+            'harness_run_id' => $harnessRun->id,
+            'mode' => CartRunMode::Auto,
+            'status' => CartRunStatus::Running,
+            'phase' => CartRunPhase::Preparing,
+        ]);
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->failed(
+            new RuntimeException('Preparation contract failed.'),
+        );
+
+        $run->refresh();
+        $harnessRun->refresh();
+        $this->assertSame(CartRunStatus::Failed, $run->status);
+        $this->assertSame(HarnessRunStatus::Failed, $harnessRun->status);
+        $this->assertSame('Preparation contract failed.', $harnessRun->error);
+        $this->assertNotNull($harnessRun->finished_at);
     }
 
     public function test_expired_slot_requires_an_owner_confirmed_same_route_refresh_and_replay_does_not_write_twice(): void
@@ -970,6 +999,39 @@ class EventCartRunTest extends TestCase
         $this->assertCount(1, $gateway->writes);
     }
 
+    public function test_a_fresh_plan_can_start_after_an_older_confirmation_run_becomes_stale(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $event->update(['state_version' => 2, 'plan_state_version' => 2]);
+        $oldRun = EventCartRun::factory()->for($event)->create([
+            'status' => CartRunStatus::WaitingForConfirmation,
+            'phase' => CartRunPhase::ReadyToCommit,
+            'plan_state_version' => $event->state_version - 1,
+        ]);
+
+        $reviewToken = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk()
+            ->assertJsonMissingPath('active_run_url')
+            ->json('current.review_token');
+
+        $this->actingAs($owner)
+            ->postJson(route('events.cart-runs.store', $event), [
+                'mode' => 'auto',
+                'review_token' => $reviewToken,
+            ])
+            ->assertAccepted();
+
+        $freshRun = $event->cartRuns()->latest('id')->firstOrFail();
+        $this->assertSame(CartRunStatus::Stale, $oldRun->refresh()->status);
+        $this->assertSame(CartRunPhase::Finished, $oldRun->phase);
+        $this->assertSame(CartRunStatus::Running, $freshRun->status);
+        $this->assertSame($event->state_version, $freshRun->plan_state_version);
+    }
+
     public function test_confirmation_rejects_a_stale_plan_without_dispatching_or_writing(): void
     {
         [$owner, $event] = $this->eventWithPlan();
@@ -1125,6 +1187,7 @@ class EventCartRunTest extends TestCase
                 reason: 'Модель просить зайвий повтор після безпечного category fallback.',
                 question: null,
                 audit: $this->audit([], ['zucchini'], false),
+                allowCatalogFallback: true,
             )],
             $this->audit([], ['zucchini'], false),
         );
@@ -1285,7 +1348,9 @@ class EventCartRunTest extends TestCase
             ])
             ->assertAccepted();
 
-        $entry = $harnessRun->entries()->sole();
+        $entry = $harnessRun->entries()
+            ->where('message', 'Пропустити небезпечну позицію.')
+            ->sole();
         $this->assertLessThanOrEqual(255, mb_strlen($entry->title));
         $this->assertSame('Пропустити небезпечну позицію.', $entry->message);
     }
@@ -1312,6 +1377,79 @@ class EventCartRunTest extends TestCase
         $this->assertSame('skipped', data_get($run->state, 'needs.0.status'));
         $this->assertNull($run->blocker);
         $this->assertSame(['Не знайдено: Вода питна.'], $run->warnings);
+    }
+
+    public function test_exhausted_catalog_candidates_get_one_bounded_similarity_adjudication(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $run = $this->exhaustedRun($event, $cart, CartRunMode::Auto);
+        $candidate = [
+            'product_id' => 'water-1',
+            'company_id' => 'company-1',
+            'branch_id' => 'branch-1',
+            'name' => 'Вода негазована 2 л',
+            'slug' => 'water-2l',
+            'price' => 30,
+            'stock' => 20,
+            'available' => true,
+            'weighted' => false,
+            'step' => 1,
+            'display_ratio' => '2 л',
+        ];
+        $state = $run->state;
+        $state['needs'][0]['browse_attempts'] = [[
+            'type' => 'category',
+            'slug' => 'water',
+            'total_found' => 1,
+        ]];
+        $state['needs'][0]['catalog_candidates'] = [$candidate];
+        $state['last_candidates'] = [$candidate];
+        $run->update([
+            'phase' => CartRunPhase::Deciding,
+            'state' => $state,
+        ]);
+        $decision = new CartAgentDecisionData(
+            action: 'skip',
+            selectedProductId: null,
+            query: null,
+            quantity: null,
+            reason: 'Звичайний пошук вичерпано.',
+            question: null,
+            audit: $this->audit([], ['water'], false),
+        );
+        $agent = new FakeCartAgent(
+            new CartAgentPreparationData([]),
+            [$decision, $decision],
+            $this->audit([], ['water'], false),
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            $agent,
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Deciding, $run->phase);
+        $this->assertTrue(data_get($run->state, 'needs.0.similarity_adjudication'));
+        $this->assertTrue(data_get($run->state, 'needs.0.similarity_adjudication_done'));
+        $this->assertSame('water-1', data_get($run->state, 'last_candidates.0.product_id'));
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+            $agent,
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Auditing, $run->phase);
+        $this->assertSame('skipped', data_get($run->state, 'needs.0.status'));
     }
 
     public function test_high_risk_need_stages_the_best_candidate_after_three_inconclusive_inspections(): void
@@ -1376,6 +1514,152 @@ class EventCartRunTest extends TestCase
         $this->assertSame('sauce-4', data_get($run->staged_items, '0.product_id'));
         $this->assertSame('unverified', data_get($run->staged_items, '0.safety_evidence'));
         $this->assertStringContainsString('❓', (string) data_get($run->staged_items, '0.review_note'));
+    }
+
+    public function test_repeated_product_inspection_does_not_synthesize_an_unproven_selection(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $candidate = [
+            ...$this->waterProduct(),
+            'product_id' => 'sauce-1',
+            'name' => 'Соус томатний',
+            'slug' => 'sous-tomatnyi',
+        ];
+        $details = [
+            'product_id' => 'sauce-1',
+            'name' => 'Соус томатний',
+            'attributes' => ['Склад' => 'Томати, вода, сіль.'],
+            'description' => null,
+            'nutrition' => null,
+        ];
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'sauce',
+            'name' => 'безглютеновий соус без арахісу',
+            'category' => 'food',
+            'quantity' => 1,
+            'unit' => 'упаковка',
+            'inspected_products' => ['sauce-1'],
+            'inspected_details' => [$details],
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Deciding,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => ['summary' => 'Сильна алергія на арахіс.'],
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+                'last_candidates' => [$candidate],
+                'last_details' => null,
+            ],
+            'staged_items' => [],
+        ]);
+        $decision = new CartAgentDecisionData(
+            action: 'inspect',
+            selectedProductId: 'sauce-1',
+            query: null,
+            quantity: null,
+            reason: 'Перевірити склад ще раз.',
+            question: null,
+            audit: $this->audit([], ['sauce'], false),
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(new CartAgentPreparationData([]), [$decision], $this->audit([], ['sauce'], false)),
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Auditing, $run->phase);
+        $this->assertSame([], $run->staged_items);
+        $this->assertSame('skipped', data_get($run->state, 'needs.0.status'));
+        $this->assertStringContainsString('Не знайдено', (string) data_get($run->warnings, 0));
+    }
+
+    public function test_model_selected_category_candidate_is_not_replaced_for_better_package_fit(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = $this->waterNeed();
+        $candidate = [
+            'product_id' => 'water-model-choice',
+            'company_id' => 'company-1',
+            'branch_id' => 'branch-1',
+            'name' => 'Вода негазована 1,5 л',
+            'slug' => 'water-1-5l',
+            'price' => 20.0,
+            'stock' => 20.0,
+            'available' => true,
+            'weighted' => false,
+            'step' => 1.0,
+            'display_ratio' => '1,5 л',
+            'catalog_scope' => [
+                'type' => 'category',
+                'slug' => 'voda-5087',
+                'matched' => true,
+            ],
+        ];
+        $betterPackageFit = [
+            ...$candidate,
+            'product_id' => 'water-package-fit',
+            'name' => 'Вода питна 2 л',
+            'slug' => 'water-2l',
+            'price' => 25.0,
+            'display_ratio' => '2 л',
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Deciding,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+                'last_candidates' => [$betterPackageFit, $candidate],
+                'last_details' => null,
+            ],
+            'staged_items' => [],
+        ]);
+        $decision = new CartAgentDecisionData(
+            action: 'select',
+            selectedProductId: 'water-model-choice',
+            query: null,
+            quantity: 3,
+            reason: 'Цей кандидат має потрібну семантичну роль.',
+            question: null,
+            audit: $this->audit([], ['water'], false),
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(new CartAgentPreparationData([]), [$decision], $this->audit([], ['water'], false)),
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Auditing, $run->phase);
+        $this->assertSame('water-model-choice', data_get($run->staged_items, '0.product_id'));
     }
 
     public function test_selection_outside_filtered_candidates_is_retried_without_throwing(): void
@@ -1498,6 +1782,115 @@ class EventCartRunTest extends TestCase
         $this->assertNull($run->blocker);
     }
 
+    public function test_model_rejected_catalog_candidate_is_not_silently_selected(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $queries = collect(range(1, 6))->map(fn (int $attempt): string => "prepared query {$attempt}")->all();
+        $need = [
+            ...$this->waterNeed(),
+            'search_queries' => $queries,
+            'attempts' => collect($queries)
+                ->map(fn (string $query): array => ['query' => $query, 'total_found' => 0])
+                ->all(),
+            'browse_attempts' => [[
+                'type' => 'category',
+                'slug' => 'broad-category',
+                'total_found' => 1,
+            ]],
+        ];
+        $candidate = [
+            ...$this->waterProduct(),
+            'catalog_scope' => [
+                'type' => 'category',
+                'slug' => 'broad-category',
+                'matched' => true,
+            ],
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Deciding,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'catalog_scopes' => ['categories' => [], 'sets' => []],
+                'current_need_index' => 0,
+                'last_candidates' => [$candidate],
+            ],
+            'staged_items' => [],
+        ]);
+        $firstRetry = new CartAgentDecisionData(
+            action: 'retry',
+            selectedProductId: null,
+            query: 'model exact query',
+            quantity: null,
+            reason: 'The current candidates do not preserve the required product family.',
+            question: null,
+            audit: $this->audit([], ['water'], false),
+        );
+        $secondRetry = new CartAgentDecisionData(
+            action: 'retry',
+            selectedProductId: null,
+            query: 'another model query',
+            quantity: null,
+            reason: 'The bounded exact query was also insufficient.',
+            question: null,
+            audit: $this->audit([], ['water'], false),
+        );
+        $agent = new FakeCartAgent(
+            new CartAgentPreparationData([]),
+            [$firstRetry, $secondRetry],
+            $this->audit([], ['water'], false),
+        );
+        $gateway = new FakeCartGateway($cart);
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Searching, $run->phase);
+        $this->assertSame([], $run->staged_items);
+        $this->assertSame('model exact query', data_get($run->state, 'needs.0.search_query'));
+        $this->assertTrue((bool) data_get($run->state, 'needs.0.agent_search_pending'));
+        $this->assertSame(1, data_get($run->state, 'needs.0.agent_retry_count'));
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+        $run->refresh();
+        $this->assertSame(['model exact query'], $gateway->searchQueries);
+        $this->assertSame(CartRunPhase::Deciding, $run->phase);
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+        $run->refresh();
+        $this->assertSame([], $run->staged_items);
+        $this->assertSame('skipped', data_get($run->state, 'needs.0.status'));
+        $this->assertSame(CartRunPhase::Auditing, $run->phase);
+    }
+
     public function test_repeated_invalid_selection_uses_the_first_vetted_low_risk_catalog_candidate(): void
     {
         [$owner, $event] = $this->eventWithPlan();
@@ -1548,6 +1941,7 @@ class EventCartRunTest extends TestCase
             reason: 'Застарілий ідентифікатор.',
             question: null,
             audit: $this->audit([], ['water'], false),
+            allowCatalogFallback: true,
         );
         $agent = new FakeCartAgent(
             new CartAgentPreparationData([]),
@@ -1571,7 +1965,7 @@ class EventCartRunTest extends TestCase
         $this->assertNull($run->blocker);
     }
 
-    public function test_category_selection_prefers_a_better_package_fit_over_a_worse_valid_model_choice(): void
+    public function test_category_selection_keeps_a_valid_model_choice_despite_a_worse_package_fit(): void
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
@@ -1662,8 +2056,8 @@ class EventCartRunTest extends TestCase
         );
         $run->refresh();
 
-        $this->assertSame('tomato-1', data_get($run->staged_items, '0.product_id'));
-        $this->assertSame(1.0, (float) data_get($run->staged_items, '0.quantity'));
+        $this->assertSame('pumpkin-1', data_get($run->staged_items, '0.product_id'));
+        $this->assertSame(2.5, (float) data_get($run->staged_items, '0.quantity'));
     }
 
     public function test_search_filters_a_ready_marinade_for_an_event_that_forbids_it(): void
@@ -1931,6 +2325,130 @@ class EventCartRunTest extends TestCase
         Queue::assertNotPushed(CommitEventCartRunJob::class);
     }
 
+    public function test_final_audit_preserves_review_warnings_when_every_need_is_selected(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = $this->waterNeed();
+        $need['status'] = 'selected';
+        $need['selected_item'] = [
+            'need_key' => 'water',
+            'product_id' => 'water-1',
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Auditing,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 1,
+            ],
+            'staged_items' => [[
+                'need_key' => 'water',
+                'product_id' => 'water-1',
+                'estimated_total' => 60,
+            ]],
+        ]);
+        $warning = 'Окремому учаснику не подавати цей товар через його особисте обмеження.';
+        $audit = new CartAgentAuditData(
+            complete: true,
+            coveredNeedKeys: ['water'],
+            remainingNeedKeys: [],
+            enoughForPeople: true,
+            warnings: [$warning],
+            revisitNeedKey: null,
+            revisitQuery: null,
+            question: null,
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(new CartAgentPreparationData([]), [], $audit),
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunStatus::WaitingForConfirmation, $run->status);
+        $this->assertSame([$warning], data_get($run->state, 'final_audit.warnings'));
+        $this->assertContains($warning, $run->warnings);
+        Queue::assertNotPushed(CommitEventCartRunJob::class);
+    }
+
+    public function test_an_unavailable_optional_suggestion_does_not_make_the_cart_partial(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $requiredNeed = [
+            ...$this->waterNeed(),
+            'status' => 'selected',
+            'optional' => false,
+            'selected_item' => ['product_id' => 'water-1'],
+        ];
+        $optionalNeed = [
+            ...$this->waterNeed(),
+            'key' => 'cutlery',
+            'name' => 'одноразові столові прибори',
+            'status' => 'skipped',
+            'optional' => true,
+            'selected_item' => null,
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Auditing,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$requiredNeed, $optionalNeed],
+                'current_need_index' => 2,
+            ],
+            'staged_items' => [[
+                'need_key' => 'water',
+                'product_id' => 'water-1',
+                'estimated_total' => 60,
+            ]],
+            'warnings' => ['Не знайдено: одноразові столові прибори.'],
+        ]);
+        $audit = new CartAgentAuditData(
+            complete: true,
+            coveredNeedKeys: ['water'],
+            remainingNeedKeys: ['cutlery'],
+            enoughForPeople: true,
+            warnings: ['Опційні прибори не знайдено.'],
+            revisitNeedKey: null,
+            revisitQuery: null,
+            question: null,
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(new CartAgentPreparationData([]), [], $audit),
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunStatus::WaitingForConfirmation, $run->status);
+        $this->assertFalse(data_get($run->state, 'has_unmet_needs'));
+        $this->assertContains('Не знайдено: одноразові столові прибори.', $run->warnings);
+        $this->assertContains('Опційні прибори не знайдено.', $run->warnings);
+    }
+
     public function test_commit_refuses_to_write_when_the_silpo_delivery_route_changed(): void
     {
         [$owner, $event] = $this->eventWithPlan();
@@ -1978,11 +2496,16 @@ class EventCartRunTest extends TestCase
         $this->assertSame([], $gateway->writes);
     }
 
-    public function test_commit_groups_one_reused_sku_into_one_absolute_cart_line(): void
+    public function test_commit_groups_one_reused_sku_into_one_absolute_cart_line_and_closes_the_harness(): void
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
         $cart = $this->readyCart();
+        $harnessRun = HarnessRun::factory()->for($event)->create([
+            'type' => HarnessRunType::SilpoCart,
+            'status' => HarnessRunStatus::Running,
+            'finished_at' => null,
+        ]);
         $item = [
             'product_id' => 'shared-produce',
             'company_id' => 'company-1',
@@ -1993,6 +2516,7 @@ class EventCartRunTest extends TestCase
             'stock' => 10,
         ];
         $run = EventCartRun::factory()->for($event)->create([
+            'harness_run_id' => $harnessRun->id,
             'phase' => CartRunPhase::ReadyToCommit,
             'status' => CartRunStatus::Committing,
             'cursor' => 0,
@@ -2008,15 +2532,60 @@ class EventCartRunTest extends TestCase
         ]);
         $gateway = new FakeCartGateway($cart);
 
-        (new CommitEventCartRunJob($run->id, 0))->handle($gateway, new GooseCartStatusService);
+        (new CommitEventCartRunJob($run->id, 0))->handle(
+            $gateway,
+            app(GooseCartStatusService::class),
+        );
 
         $run->refresh();
+        $harnessRun->refresh();
         $this->assertSame(CartRunStatus::Synced, $run->status);
+        $this->assertSame(HarnessRunStatus::Completed, $harnessRun->status);
+        $this->assertNotNull($harnessRun->finished_at);
         $this->assertCount(1, $gateway->writes);
         $this->assertCount(1, $gateway->writes[0]);
         $this->assertSame('shared-produce', $gateway->writes[0][0]['productId']);
         $this->assertSame(2.5, $gateway->writes[0][0]['quantity']);
         $this->assertFalse($gateway->writes[0][0]['addQuantity']);
+    }
+
+    public function test_unavailable_catalog_need_stays_a_warning_without_downgrading_verified_sync(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $warning = 'Не знайдено: Сирі стейки або відруби з телятини.';
+        $run = EventCartRun::factory()->for($event)->create([
+            'phase' => CartRunPhase::ReadyToCommit,
+            'status' => CartRunStatus::Committing,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => ['has_unmet_needs' => true],
+            'warnings' => [$warning],
+            'staged_items' => [[
+                'need_key' => 'water',
+                'product_id' => 'water-1',
+                'company_id' => 'company-1',
+                'branch_id' => 'branch-1',
+                'name' => 'Вода негазована 2 л',
+                'quantity' => 2,
+                'price' => 30,
+                'step' => 1,
+                'stock' => 20,
+            ]],
+        ]);
+        $gateway = new FakeCartGateway($cart);
+
+        (new CommitEventCartRunJob($run->id, 0))->handle($gateway, new GooseCartStatusService);
+
+        $run->refresh();
+        $this->assertSame(CartRunStatus::Synced, $run->status);
+        $this->assertSame(CartSyncStatus::Synced, $event->refresh()->cart_sync_status);
+        $this->assertContains($warning, $run->warnings);
+        $this->assertCount(1, $gateway->writes);
     }
 
     public function test_minimum_order_validation_does_not_block_writing_products_to_an_empty_cart(): void
