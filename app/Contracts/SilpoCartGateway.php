@@ -78,6 +78,7 @@ interface SilpoCartGateway
         string $slotEnd,
         array $address,
         array $shipments,
+        ?string $targetBranchId = null,
         ?HarnessRun $harnessRun = null,
     ): ?SilpoFulfilmentSnapshotData;
 

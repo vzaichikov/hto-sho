@@ -229,24 +229,32 @@ final class DiscoverSilpoFulfilmentAction
                     return null;
                 }
 
-                $writable = Arr::get($addressPayload, 'writable') === true;
+                $homeWritable = Arr::get(
+                    $addressPayload,
+                    'home_writable',
+                    Arr::get($addressPayload, 'writable'),
+                ) === true;
                 $route = [
                     'cart_id' => $snapshot->cartId,
                     'address' => $address,
                     'address_label' => (string) Arr::get($addressPayload, 'label'),
+                    'address_source' => (string) Arr::get($addressPayload, 'address_source', 'found_coordinates'),
                     'delivery_type' => (string) Arr::get($option, 'deliveryType'),
                     'delivery_label' => $this->deliveryLabel((string) Arr::get($option, 'deliveryType')),
+                    'target_branch_id' => (string) Arr::get($branch, 'branchId'),
                     'shipments' => [[
                         'companyId' => (string) Arr::get($branch, 'companyId'),
                         'branchId' => (string) Arr::get($branch, 'branchId'),
                     ]],
                     'branch_labels' => [$this->branchLabel($branch)],
-                    'writable' => $writable,
+                    'writable' => $homeWritable,
+                    'message' => Arr::get($addressPayload, 'home_message'),
+                    'unavailable_message' => Arr::get($addressPayload, 'home_unavailable_message'),
                     'delivery_preference' => $deliveryPreference,
                     'time_preference' => $timePreference,
                 ];
 
-                return $this->routeOption($user, $event, $route, $writable);
+                return $this->routeOption($user, $event, $route, $homeWritable);
             })
             ->filter()
             ->values();
@@ -265,6 +273,7 @@ final class DiscoverSilpoFulfilmentAction
                         'cart_id' => $snapshot->cartId,
                         'address' => $this->pickupAddress($branch),
                         'address_label' => $this->branchLabel($branch),
+                        'address_source' => 'self_pickup',
                         'delivery_type' => 'SelfPickup',
                         'delivery_label' => 'Самовивіз',
                         'shipments' => [[
@@ -416,6 +425,7 @@ final class DiscoverSilpoFulfilmentAction
                     'cart_id' => $snapshot->cartId,
                     'address' => $address,
                     'address_label' => (string) Arr::get($office, 'title', Arr::get($office, 'address')),
+                    'address_source' => 'nova_poshta',
                     'delivery_type' => 'NovaPoshta',
                     'delivery_label' => 'Нова пошта',
                     'shipments' => [[
@@ -509,11 +519,26 @@ final class DiscoverSilpoFulfilmentAction
 
         $snapshot = $this->snapshot($accessToken, $harnessRun);
         $this->guardCart($snapshot, (string) Arr::get($route, 'cart_id'));
+
+        $homeAddress = Arr::get($route, 'address');
+        $homeAddressSource = Arr::get($route, 'address_source');
+        $homeRouteIsValid = $homeAddressSource === 'current_cart'
+            ? $homeAddress === $snapshot->address()
+            : $homeAddressSource === 'found_coordinates_flat'
+                && is_array($homeAddress)
+                && SilpoFulfilmentSnapshotData::hasMvpHomeAddressShape($homeAddress);
+
+        if (in_array($deliveryType, ['DeliveryHome', 'WideAssortDelivery'], true) && ! $homeRouteIsValid) {
+            throw new RuntimeException('Домашня адреса в кошику вже інша. Гусь просить звірити маршрут ще раз.');
+        }
+
         $selection = [
             'cart_id' => $snapshot->cartId,
             'delivery_type' => $deliveryType,
             'address' => Arr::get($route, 'address'),
             'shipments' => Arr::get($route, 'shipments'),
+            'address_source' => Arr::get($route, 'address_source'),
+            'target_branch_id' => Arr::get($route, 'target_branch_id'),
             'slot_start' => $input['slot_start'],
             'slot_end' => $input['slot_end'],
         ];
@@ -568,17 +593,34 @@ final class DiscoverSilpoFulfilmentAction
         return collect($addresses)
             ->filter(fn (array $address): bool => $this->hasCoordinates($address))
             ->take(8)
-            ->map(fn (array $address): array => [
-                'label' => $this->addressLabel($address),
-                'writable' => false,
-                'token' => $this->tokens->issue('fulfilment_address', $user, $event, [
-                    'cart_id' => $snapshot->cartId,
-                    'address' => $address,
+            ->map(function (array $address) use ($event, $metadata, $snapshot, $user): array {
+                $matchesCurrentHome = $snapshot->hasReusableHomeAddress()
+                    && $this->sameHomeAddress($address, $snapshot->address());
+                $mvpHomeAddress = $matchesCurrentHome ? null : $this->mvpHomeAddress($address);
+                $homeWritable = $matchesCurrentHome || $mvpHomeAddress !== null;
+                $resolvedAddress = $matchesCurrentHome ? $snapshot->address() : ($mvpHomeAddress ?? $address);
+
+                return [
                     'label' => $this->addressLabel($address),
-                    'writable' => false,
-                    ...$metadata,
-                ]),
-            ])
+                    'writable' => $homeWritable,
+                    'token' => $this->tokens->issue('fulfilment_address', $user, $event, [
+                        'cart_id' => $snapshot->cartId,
+                        'address' => $resolvedAddress,
+                        'label' => $this->addressLabel($address),
+                        'home_writable' => $homeWritable,
+                        'address_source' => $matchesCurrentHome
+                            ? 'current_cart'
+                            : ($mvpHomeAddress !== null ? 'found_coordinates_flat' : 'found_coordinates'),
+                        'home_message' => $mvpHomeAddress !== null
+                            ? 'Гусь передасть Сільпо точну знайдену адресу як квартиру. Перед польотом ще раз звірте будинок і час.'
+                            : null,
+                        'home_unavailable_message' => $homeWritable
+                            ? null
+                            : 'Сільпо підтвердило точку, але не дало міста, вулиці або будинку. Гусь не буде домальовувати їх навмання.',
+                        ...$metadata,
+                    ]),
+                ];
+            })
             ->values()
             ->all();
     }
@@ -677,13 +719,18 @@ final class DiscoverSilpoFulfilmentAction
 
         return [
             'kind' => 'route',
+            'delivery_type' => $route['delivery_type'],
             'delivery_label' => $route['delivery_label'],
             'address_label' => $route['address_label'],
             'branch_label' => data_get($route, 'branch_labels.0'),
             'writable' => $writable,
             'message' => $writable
-                ? null
-                : 'Нову домашню адресу Сільпо поки не дає Гусю безпечно записати. Можна лишити поточну чи збережену адресу, забрати кошик поруч або відправити Новою поштою.',
+                ? $this->nullableString(Arr::get($route, 'message'))
+                : (string) Arr::get(
+                    $route,
+                    'unavailable_message',
+                    'Сільпо не дало всіх даних для домашнього запису. Гусь може лишити поточний маршрут, знайти самовивіз або Нову пошту.',
+                ),
             'preferred' => $preferredDeliveryType !== null
                 && Arr::get($route, 'delivery_type') === $preferredDeliveryType,
             'route_token' => $writable
@@ -722,6 +769,43 @@ final class DiscoverSilpoFulfilmentAction
             + cos(deg2rad($latitude)) * cos(deg2rad($otherLatitude)) * sin($longitudeDelta / 2) ** 2;
 
         return 6371 * 2 * atan2(sqrt($a), sqrt(1 - $a));
+    }
+
+    /** @param array<string, mixed> $candidate @param array<string, mixed> $current */
+    private function sameHomeAddress(array $candidate, array $current): bool
+    {
+        return SilpoFulfilmentSnapshotData::representsSameHomeAddress($candidate, $current);
+    }
+
+    /** @param array<string, mixed> $address @return array<string, mixed>|null */
+    private function mvpHomeAddress(array $address): ?array
+    {
+        $city = Arr::get($address, 'city');
+        $street = Arr::get($address, 'street');
+        $house = Arr::get($address, 'houseNumber', Arr::get($address, 'house'));
+
+        if (! is_string($city) || $city === ''
+            || ! is_string($street) || $street === ''
+            || ! is_string($house) || $house === ''
+            || ! $this->hasCoordinates($address)) {
+            return null;
+        }
+
+        $resolved = [
+            'addressType' => 'flat',
+            'city' => $city,
+            'street' => $street,
+            'house' => $house,
+            'latitude' => (string) Arr::get($address, 'latitude'),
+            'longitude' => (string) Arr::get($address, 'longitude'),
+        ];
+        $district = Arr::get($address, 'district');
+
+        if (is_string($district) && $district !== '') {
+            $resolved['district'] = $district;
+        }
+
+        return $resolved;
     }
 
     /** @param array<string, mixed> $branch @return array<string, mixed> */

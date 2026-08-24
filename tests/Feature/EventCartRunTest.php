@@ -160,12 +160,30 @@ class EventCartRunTest extends TestCase
         );
     }
 
-    public function test_owner_can_review_a_saved_route_and_searched_home_address_stays_read_only(): void
+    public function test_owner_can_review_the_current_route_and_confirm_a_found_flat_home_address(): void
     {
         [$owner, $event] = $this->eventWithPlan();
         $stranger = User::factory()->create();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
         $gateway = new FakeCartGateway($this->readyCart());
+        $gateway->foundAddresses = [[
+            'address' => 'Київ, вул. Саксаганського, 57-Б',
+            'city' => 'Київ',
+            'street' => 'вул. Саксаганського',
+            'houseNumber' => '57-Б',
+            'latitude' => 50.4406,
+            'longitude' => 30.5072,
+        ]];
+        $gateway->fulfilmentReadbackAddress = [
+            'addressType' => 'flat',
+            'city' => 'Київ',
+            'street' => 'вулиця Саксаганського',
+            'house' => '57-Б',
+            'latitude' => '50.4406',
+            'longitude' => '30.5072',
+            'postCode' => '01033',
+            'polygonId' => 'polygon-1',
+        ];
         $this->app->instance(SilpoCartGateway::class, $gateway);
         $preflight = $this->actingAs($owner)
             ->getJson(route('events.silpo.cart-preflight', $event))
@@ -211,7 +229,79 @@ class EventCartRunTest extends TestCase
         $found = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
                 'stage' => 'address_search',
-                'query' => 'Київ, Хрещатик, 1',
+                'query' => 'Київ, вул. Саксаганського, 57-Б',
+            ])
+            ->assertOk()
+            ->assertJsonPath('addresses.0.writable', true);
+
+        $foundRoutes = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'address_options',
+                'token' => $found->json('addresses.0.token'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('options.0.address_label', 'Київ, вул. Саксаганського, 57-Б')
+            ->assertJsonPath('options.0.branch_label', 'Київ, вул. Хрещатик, 1')
+            ->assertJsonPath('options.0.writable', true)
+            ->assertJsonPath('options.0.message', 'Гусь передасть Сільпо точну знайдену адресу як квартиру. Перед польотом ще раз звірте будинок і час.')
+            ->assertJsonStructure(['options' => [['route_token']]]);
+        $foundSlots = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'slots',
+                'token' => $foundRoutes->json('options.0.route_token'),
+            ])
+            ->assertOk();
+        $foundReview = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'review',
+                'token' => $foundRoutes->json('options.0.route_token'),
+                'slot_start' => $foundSlots->json('slots.0.start'),
+                'slot_end' => $foundSlots->json('slots.0.end'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('review.address_label', 'Київ, вул. Саксаганського, 57-Б');
+
+        $this->actingAs($owner)
+            ->postJson(route('events.cart-runs.store', $event), [
+                'mode' => 'assisted',
+                'review_token' => $foundReview->json('review_token'),
+            ])
+            ->assertAccepted();
+
+        $this->assertSame(1, $gateway->fulfilmentWrites);
+        $this->assertSame([
+            'addressType' => 'flat',
+            'city' => 'Київ',
+            'street' => 'вул. Саксаганського',
+            'house' => '57-Б',
+            'latitude' => '50.4406',
+            'longitude' => '30.5072',
+        ], $gateway->lastFulfilmentAddress);
+        $this->assertSame(
+            [['companyId' => 'company-1', 'branchId' => 'branch-1']],
+            $gateway->lastFulfilmentShipments,
+        );
+        $this->assertSame(['existing-1'], collect($gateway->cart->items)->pluck('product_id')->all());
+    }
+
+    public function test_found_home_address_without_a_house_stays_read_only(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $gateway->foundAddresses = [[
+            'address' => 'Київ, вул. Саксаганського',
+            'city' => 'Київ',
+            'street' => 'вул. Саксаганського',
+            'latitude' => 50.4406,
+            'longitude' => 30.5072,
+        ]];
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $found = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'address_search',
+                'query' => 'Київ, вул. Саксаганського',
             ])
             ->assertOk()
             ->assertJsonPath('addresses.0.writable', false);
@@ -223,9 +313,88 @@ class EventCartRunTest extends TestCase
             ])
             ->assertOk()
             ->assertJsonPath('options.0.writable', false)
+            ->assertJsonPath('options.0.route_token', null)
+            ->assertJsonPath('options.0.message', 'Сільпо підтвердило точку, але не дало міста, вулиці або будинку. Гусь не буде домальовувати їх навмання.');
+
+        $this->assertSame(0, $gateway->fulfilmentWrites);
+    }
+
+    public function test_searched_current_home_address_reuses_the_exact_cart_address(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $found = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'address_search',
+                'query' => 'Київ, вул. Хрещатик, 1',
+            ])
+            ->assertOk()
+            ->assertJsonPath('addresses.0.writable', true);
+
+        $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'address_options',
+                'token' => $found->json('addresses.0.token'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('options.0.address_label', 'Київ, вул. Хрещатик, 1')
+            ->assertJsonPath('options.0.writable', true)
+            ->assertJsonStructure(['options' => [['route_token']]]);
+
+        $this->assertSame(0, $gateway->fulfilmentWrites);
+    }
+
+    public function test_saved_home_address_is_visible_but_not_offered_for_an_unsupported_cart_write(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $gateway->savedDeliveryAddresses = [[
+            'addressType' => 'flat',
+            'city' => 'Київ',
+            'street' => 'Саксаганського',
+            'house' => '57-Б',
+            'latitude' => '50.4406',
+            'longitude' => '30.5072',
+        ]];
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk()
+            ->assertJsonCount(2, 'addresses')
+            ->assertJsonPath('addresses.1.label', 'Київ, Саксаганського, 57-Б')
+            ->assertJsonPath('addresses.1.writable', false);
+
+        $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'address_options',
+                'token' => $preflight->json('addresses.1.token'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('options.0.writable', false)
             ->assertJsonPath('options.0.route_token', null);
 
         $this->assertSame(0, $gateway->fulfilmentWrites);
+    }
+
+    public function test_non_home_cart_address_is_not_reused_as_a_home_delivery_address(): void
+    {
+        $snapshot = new SilpoFulfilmentSnapshotData('cart-1', [
+            'deliveryType' => 'SelfPickup',
+            'address' => [
+                'addressType' => 'self-pickup',
+                'city' => 'Київ',
+                'street' => 'вул. Басейна, 6',
+                'latitude' => '50.4420',
+                'longitude' => '30.5228',
+            ],
+        ]);
+
+        $this->assertFalse($snapshot->hasReusableHomeAddress());
     }
 
     public function test_incomplete_or_rejected_route_intent_returns_manual_fallback_without_any_mcp_read(): void
@@ -322,8 +491,8 @@ class EventCartRunTest extends TestCase
                 'token' => $intent->json('addresses.0.token'),
             ])
             ->assertOk()
-            ->assertJsonPath('options.0.writable', false)
-            ->assertJsonPath('options.0.route_token', null);
+            ->assertJsonPath('options.0.writable', true)
+            ->assertJsonStructure(['options' => [['route_token']]]);
 
         $this->assertSame(1, $gateway->deliveryTypeReads);
         $this->assertSame(0, $gateway->fulfilmentWrites);
@@ -466,6 +635,72 @@ class EventCartRunTest extends TestCase
         $this->assertStringNotContainsString('promotion.available', $encoded);
         $this->assertStringNotContainsString('timeslot.not_available', $encoded);
         $this->assertStringNotContainsString('mystery.code', $encoded);
+    }
+
+    public function test_home_route_change_preserves_the_cart_address_and_shipments_while_sending_target_branch(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $originalAddress = $gateway->fulfilmentAddress;
+        $gateway->availableDeliveryTypes = [[
+            'deliveryType' => 'WideAssortDelivery',
+            'branchId' => 'branch-2',
+        ]];
+        $gateway->fulfilmentBranches = [[
+            'branchId' => 'branch-2',
+            'companyId' => 'company-1',
+            'city' => 'Київ',
+            'address' => 'дор. Кільцева, 1',
+            'latitude' => '50.4070',
+            'longitude' => '30.3920',
+            'open' => true,
+        ]];
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk();
+        $routes = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'address_options',
+                'token' => $preflight->json('addresses.0.token'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('options.0.delivery_type', 'WideAssortDelivery')
+            ->assertJsonPath('options.0.address_label', 'Київ, Хрещатик, 1')
+            ->assertJsonPath('options.0.branch_label', 'Київ, дор. Кільцева, 1');
+        $slots = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'slots',
+                'token' => $routes->json('options.0.route_token'),
+            ])
+            ->assertOk();
+        $review = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                'stage' => 'review',
+                'token' => $routes->json('options.0.route_token'),
+                'slot_start' => $slots->json('slots.0.start'),
+                'slot_end' => $slots->json('slots.0.end'),
+            ])
+            ->assertOk();
+
+        $this->actingAs($owner)
+            ->postJson(route('events.cart-runs.store', $event), [
+                'mode' => 'assisted',
+                'review_token' => $review->json('review_token'),
+            ])
+            ->assertAccepted();
+
+        $this->assertSame(1, $gateway->fulfilmentWrites);
+        $this->assertSame('branch-2', $gateway->lastTargetBranchId);
+        $this->assertSame($originalAddress, $gateway->lastFulfilmentAddress);
+        $this->assertSame(
+            [['companyId' => 'company-1', 'branchId' => 'branch-1']],
+            $gateway->lastFulfilmentShipments,
+        );
+        $this->assertSame('branch-2', $gateway->cart->branchId);
+        $this->assertSame(['existing-1'], collect($gateway->cart->items)->pluck('product_id')->all());
     }
 
     public function test_final_route_confirmation_updates_once_preserves_lines_and_replay_opens_the_same_run(): void
@@ -1788,9 +2023,14 @@ class EventCartRunTest extends TestCase
         $this->actingAs($owner)
             ->get(route('events.show', ['event' => $event, 'tab' => 'plan']))
             ->assertOk()
-            ->assertSee('Куди Гусю йти по кошик?')
+            ->assertSee('Скажіть Гусю, куди й як доставити')
+            ->assertSee('Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.')
             ->assertSee('data-silpo-dialog', false)
-            ->assertSee('Крок перед справжнім кошиком')
+            ->assertSee('Перед походом у Сільпо')
+            ->assertSee('Куди Гусю йти по кошик?')
+            ->assertDontSee('Крок перед справжнім кошиком')
+            ->assertDontSee('Спершу посадимо Гуся на правильний маршрут')
+            ->assertDontSee('Маршрут людською мовою')
             ->assertSee('Гусю, маршрут є — лети збирати кошик')
             ->assertSee('data-silpo-steps', false)
             ->assertSee('data-silpo-confirm', false)
@@ -1799,6 +2039,62 @@ class EventCartRunTest extends TestCase
             ->assertSee('рольові заміни')
             ->assertSee('Підтверджую товари — додати в кошик')
             ->assertSee('Повний автопілот');
+    }
+
+    public function test_silpo_tab_shows_verified_products_from_the_completed_cart(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        EventCartRun::factory()->for($event)->create([
+            'status' => CartRunStatus::Synced,
+            'phase' => CartRunPhase::Finished,
+            'state' => [
+                'verified_cart' => [
+                    'items' => [[
+                        'product_id' => 'water-1',
+                        'name' => 'Вода Моршинська негазована',
+                        'image' => 'https://images.silpo.ua/v2/products/water.png',
+                        'quantity' => 2,
+                        'price' => 28.50,
+                        'total' => 57,
+                    ], [
+                        'product_id' => 'personal-1',
+                        'name' => 'Шоколад з особистого кошика',
+                        'quantity' => 1,
+                        'price' => 90,
+                        'total' => 90,
+                    ]],
+                ],
+            ],
+            'staged_items' => [[
+                'product_id' => 'water-1',
+                'name' => 'Вода Моршинська негазована',
+                'quantity' => 1,
+                'price' => 28.50,
+                'estimated_total' => 28.50,
+            ], [
+                'product_id' => 'water-1',
+                'name' => 'Вода Моршинська негазована',
+                'quantity' => 1,
+                'price' => 28.50,
+                'estimated_total' => 28.50,
+            ]],
+            'estimated_total' => 57,
+            'actual_total' => 57,
+            'finished_at' => now(),
+        ]);
+
+        $this->actingAs($owner)
+            ->get(route('events.show', ['event' => $event, 'tab' => 'silpo']))
+            ->assertOk()
+            ->assertSee('Що Гусь додав')
+            ->assertSee('Товарів у кошику: 1')
+            ->assertSee('Вода Моршинська негазована')
+            ->assertSee('https://images.silpo.ua/v2/products/water.png', escape: false)
+            ->assertSee('2 × 28,50 ₴')
+            ->assertSee('57,00 ₴')
+            ->assertSee('Зібрати кошик наново')
+            ->assertDontSee('Шоколад з особистого кошика')
+            ->assertDontSee('2 позицій від Гуся');
     }
 
     public function test_cart_run_endpoints_are_owner_scoped_and_runs_cannot_cross_events(): void
@@ -1859,6 +2155,9 @@ class EventCartRunTest extends TestCase
         $address = [
             'addressType' => 'delivery',
             'address' => 'Київ, Хрещатик, 1',
+            'city' => 'Київ',
+            'street' => 'Хрещатик',
+            'house' => '1',
             'latitude' => '50.4501',
             'longitude' => '30.5234',
         ];
@@ -2082,6 +2381,14 @@ final class FakeCartGateway implements SilpoCartGateway
 
     public int $fulfilmentWrites = 0;
 
+    /** @var array<string, mixed>|null */
+    public ?array $lastFulfilmentAddress = null;
+
+    /** @var array<int, array{companyId: string, branchId: string}>|null */
+    public ?array $lastFulfilmentShipments = null;
+
+    public ?string $lastTargetBranchId = null;
+
     public int $snapshotReads = 0;
 
     public int $deliveryTypeReads = 0;
@@ -2110,9 +2417,21 @@ final class FakeCartGateway implements SilpoCartGateway
     public array $fulfilmentAddress = [
         'addressType' => 'delivery',
         'address' => 'Київ, Хрещатик, 1',
+        'city' => 'Київ',
+        'street' => 'Хрещатик',
+        'house' => '1',
         'latitude' => '50.4501',
         'longitude' => '30.5234',
     ];
+
+    /** @var array<string, mixed>|null */
+    public ?array $fulfilmentReadbackAddress = null;
+
+    /** @var array<int, array<string, mixed>>|null */
+    public ?array $fulfilmentBranches = null;
+
+    /** @var array<int, array<string, mixed>>|null */
+    public ?array $savedDeliveryAddresses = null;
 
     public function __construct(public ?SilpoCartContextData $cart) {}
 
@@ -2154,7 +2473,7 @@ final class FakeCartGateway implements SilpoCartGateway
         string $accessToken,
         ?HarnessRun $harnessRun = null,
     ): array {
-        return [$this->fulfilmentAddress];
+        return $this->savedDeliveryAddresses ?? [$this->fulfilmentAddress];
     }
 
     public function findDeliveryAddresses(
@@ -2203,6 +2522,10 @@ final class FakeCartGateway implements SilpoCartGateway
         bool $novaPoshta,
         ?HarnessRun $harnessRun = null,
     ): array {
+        if ($this->fulfilmentBranches !== null) {
+            return $this->fulfilmentBranches;
+        }
+
         return [[
             'branchId' => 'branch-1',
             'companyId' => 'company-1',
@@ -2274,6 +2597,7 @@ final class FakeCartGateway implements SilpoCartGateway
         string $slotEnd,
         array $address,
         array $shipments,
+        ?string $targetBranchId = null,
         ?HarnessRun $harnessRun = null,
     ): ?SilpoFulfilmentSnapshotData {
         if ($this->cart === null || $this->cart->cartId !== $cartId) {
@@ -2281,8 +2605,18 @@ final class FakeCartGateway implements SilpoCartGateway
         }
 
         $this->fulfilmentWrites++;
-        $this->fulfilmentAddress = $address;
+        $this->lastFulfilmentAddress = $address;
+        $this->lastFulfilmentShipments = $shipments;
+        $this->lastTargetBranchId = $targetBranchId;
+        $effectiveAddress = $this->fulfilmentReadbackAddress ?? $address;
+        $this->fulfilmentAddress = $effectiveAddress;
         $shipment = $shipments[0];
+
+        if ($targetBranchId !== null) {
+            $shipment['branchId'] = $targetBranchId;
+        }
+
+        $effectiveShipments = [$shipment];
         $this->cart = new SilpoCartContextData(
             cartId: $cartId,
             deliveryType: $deliveryType,
@@ -2297,8 +2631,8 @@ final class FakeCartGateway implements SilpoCartGateway
             verifiedFulfilmentFingerprint: SilpoFulfilmentSnapshotData::selectionFingerprint([
                 'cart_id' => $cartId,
                 'delivery_type' => $deliveryType,
-                'address' => $address,
-                'shipments' => $shipments,
+                'address' => $effectiveAddress,
+                'shipments' => $effectiveShipments,
                 'slot_start' => $slotStart,
                 'slot_end' => $slotEnd,
             ]),

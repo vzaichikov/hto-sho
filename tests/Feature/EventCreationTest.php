@@ -5,8 +5,11 @@ namespace Tests\Feature;
 use App\CartSyncStatus;
 use App\EventAnalysisStage;
 use App\EventStatus;
+use App\HarnessRunStatus;
+use App\HarnessRunType;
 use App\Jobs\SummarizeEventContextJob;
 use App\Models\Event;
+use App\Models\HarnessRun;
 use App\Models\User;
 use App\Services\ContextAnalysisService;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
@@ -110,6 +113,13 @@ class EventCreationTest extends TestCase
         $this->assertSame(EventAnalysisStage::WaitingForQuiet, $event->analysis_stage);
         $this->assertNotNull($event->analysis_task_id);
         $this->assertSame(0, $event->sources()->count());
+        $descriptionReviewRun = $event->harnessRuns()->with('entries')->sole();
+        $descriptionReviewEntry = $descriptionReviewRun->entries->sole();
+        $this->assertSame(HarnessRunType::DescriptionReview, $descriptionReviewRun->type);
+        $this->assertSame(HarnessRunStatus::Completed, $descriptionReviewRun->status);
+        $this->assertSame('Перевірка опису події', $descriptionReviewEntry->title);
+        $this->assertNotNull($descriptionReviewEntry->request_payload);
+        $this->assertNotNull($descriptionReviewEntry->response_payload);
         Queue::assertPushed(SummarizeEventContextJob::class, 1);
         Http::assertSent(function (Request $request) use ($description): bool {
             $prompt = $request['input'][0]['content'][0]['text'];
@@ -158,6 +168,7 @@ class EventCreationTest extends TestCase
             ->assertJsonPath('errors.description.0', 'Гусь покрутив задум дзьобом і не знайшов тут їжі, напоїв чи самої гулянки. Додайте, що за подія і який у неї смак.');
 
         $this->assertSame(0, Event::query()->whereBelongsTo($user)->count());
+        $this->assertSame(0, HarnessRun::query()->whereNull('event_id')->count());
         Queue::assertNothingPushed();
     }
 
@@ -178,6 +189,7 @@ class EventCreationTest extends TestCase
             ->assertJsonPath('message', 'Гусь завис над задумом. Нічого не зберегли — спробуйте ще раз.');
 
         $this->assertSame(0, Event::query()->whereBelongsTo($user)->count());
+        $this->assertSame(0, HarnessRun::query()->whereNull('event_id')->count());
         Queue::assertNothingPushed();
     }
 

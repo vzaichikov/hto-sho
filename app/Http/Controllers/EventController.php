@@ -46,25 +46,44 @@ class EventController extends Controller
     public function store(
         StoreEventRequest $request,
         ContextAnalysisService $analysis,
+        HarnessRecorder $harnessRecorder,
         CreateEventAction $createEvent,
     ): JsonResponse|RedirectResponse|Response {
         $attributes = $request->validated();
+        $harnessRun = $harnessRecorder->start(
+            event: null,
+            type: HarnessRunType::DescriptionReview,
+            correlationId: (string) Str::ulid(),
+        );
 
         try {
-            $review = $analysis->reviewEventDescription($attributes['description']);
+            $review = $analysis->reviewEventDescription($attributes['description'], $harnessRun);
         } catch (Throwable $throwable) {
+            $harnessRecorder->fail($harnessRun, $throwable);
+            $harnessRun->delete();
             report($throwable);
 
             return $this->aiUnavailableResponse($request, creating: true);
         }
 
         if (! $review->accepted) {
+            $harnessRun->delete();
+
             throw ValidationException::withMessages([
                 'description' => $review->reason->message(),
             ]);
         }
 
-        $event = $createEvent->execute($request->user(), $attributes);
+        try {
+            $event = $createEvent->execute($request->user(), $attributes);
+        } catch (Throwable $throwable) {
+            $harnessRun->delete();
+
+            throw $throwable;
+        }
+
+        $harnessRecorder->attach($harnessRun, $event);
+        $harnessRecorder->finish($harnessRun);
 
         if ($request->expectsJson()) {
             return response()->json([

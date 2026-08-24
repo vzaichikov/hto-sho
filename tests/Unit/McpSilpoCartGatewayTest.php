@@ -495,6 +495,119 @@ class McpSilpoCartGatewayTest extends TestCase
         }
     }
 
+    public function test_home_fulfilment_update_sends_target_branch_without_rewriting_cart_address_or_shipments(): void
+    {
+        $updateArguments = null;
+        $address = [
+            'addressType' => 'flat',
+            'city' => 'Київ',
+            'street' => 'Олександра Довженка',
+            'house' => '4-А',
+            'latitude' => '50.456',
+            'longitude' => '30.445',
+        ];
+        $currentShipments = [['companyId' => 'company-1', 'branchId' => 'branch-1']];
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) use ($address, $currentShipments, &$updateArguments) {
+            $payload = $request->data();
+            $method = $payload['method'] ?? null;
+
+            if ($method === 'notifications/initialized') {
+                return Http::response('', 202);
+            }
+
+            if ($method === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'protocolVersion' => ProtocolVersion::LATEST->value,
+                        'capabilities' => [],
+                        'serverInfo' => ['name' => 'silpo-test', 'version' => '1.0.0'],
+                    ],
+                ]);
+            }
+
+            if ($method === 'tools/list') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => ['tools' => [[
+                        'name' => 'silpo_get_shopping_cart_by_id',
+                        'inputSchema' => ['type' => 'object', 'properties' => (object) []],
+                    ], [
+                        'name' => 'silpo_update_shopping_cart',
+                        'inputSchema' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'shoppingCartId' => ['type' => 'string'],
+                                'deliveryType' => ['type' => 'string'],
+                                'timeslot' => ['type' => 'object'],
+                                'address' => ['type' => 'object'],
+                                'shipments' => ['type' => 'array'],
+                                'branchId' => ['type' => 'string'],
+                            ],
+                            'required' => [
+                                'shoppingCartId',
+                                'deliveryType',
+                                'timeslot',
+                                'address',
+                                'shipments',
+                            ],
+                        ],
+                    ]]],
+                ]);
+            }
+
+            $toolName = data_get($payload, 'params.name');
+
+            if ($toolName === 'silpo_update_shopping_cart') {
+                $updateArguments = data_get($payload, 'params.arguments');
+                $structuredContent = ['updated' => true];
+            } else {
+                $structuredContent = ['cart' => [
+                    'deliveryType' => 'WideAssortDelivery',
+                    'timeslot' => [
+                        'start' => '2026-08-25T10:00:00Z',
+                        'end' => '2026-08-25T11:00:00Z',
+                    ],
+                    'address' => $address,
+                    'shipments' => [[...$currentShipments[0], 'branchId' => 'branch-2']],
+                    'calculation' => ['validations' => [], 'totalAfterDiscounts' => 50],
+                ]];
+            }
+
+            return Http::response([
+                'jsonrpc' => '2.0',
+                'id' => $payload['id'],
+                'result' => [
+                    'content' => [],
+                    'isError' => false,
+                    'structuredContent' => $structuredContent,
+                ],
+            ]);
+        });
+
+        $snapshot = $this->app->make(McpSilpoCartGateway::class)->updateFulfilment(
+            accessToken: 'secret-token',
+            cartId: 'cart-1',
+            deliveryType: 'WideAssortDelivery',
+            slotStart: '2026-08-25T10:00:00Z',
+            slotEnd: '2026-08-25T11:00:00Z',
+            address: $address,
+            shipments: $currentShipments,
+            targetBranchId: 'branch-2',
+        );
+
+        $this->assertNotNull($snapshot);
+        $this->assertSame('branch-2', data_get($snapshot->routeShipments(), '0.branchId'));
+        $this->assertSame($address, data_get($updateArguments, 'address'));
+        $this->assertSame($currentShipments, data_get($updateArguments, 'shipments'));
+        $this->assertSame('branch-2', data_get($updateArguments, 'branchId'));
+    }
+
     public function test_fulfilment_update_stops_before_writing_when_the_live_schema_gains_a_required_field(): void
     {
         Http::swap(new Factory);

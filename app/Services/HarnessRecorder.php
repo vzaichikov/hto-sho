@@ -17,13 +17,13 @@ class HarnessRecorder
 
     /** @param array<string, mixed> $metadata */
     public function start(
-        Event $event,
+        ?Event $event,
         HarnessRunType $type,
         string $correlationId,
         array $metadata = [],
     ): HarnessRun {
         $run = HarnessRun::query()->firstOrCreate([
-            'event_id' => $event->id,
+            'event_id' => $event?->id,
             'type' => $type,
             'correlation_id' => $correlationId,
         ], [
@@ -41,6 +41,11 @@ class HarnessRecorder
         }
 
         return $run;
+    }
+
+    public function attach(HarnessRun $run, Event $event): void
+    {
+        $run->update(['event_id' => $event->id]);
     }
 
     /**

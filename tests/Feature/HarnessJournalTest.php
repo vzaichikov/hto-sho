@@ -5,9 +5,12 @@ namespace Tests\Feature;
 use App\HarnessEntryKind;
 use App\HarnessRunStatus;
 use App\HarnessRunType;
+use App\ImageExtractionStatus;
 use App\Models\Event;
+use App\Models\EventSource;
 use App\Models\HarnessEntry;
 use App\Models\HarnessRun;
+use App\Models\ImageExtraction;
 use App\Models\User;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Tests\TestCase;
@@ -80,5 +83,40 @@ class HarnessJournalTest extends TestCase
             ->assertOk()
             ->assertSee('run-11')
             ->assertDontSee('run-10');
+    }
+
+    public function test_image_filter_includes_the_exact_extraction_run_reused_by_the_event(): void
+    {
+        $owner = User::factory()->create();
+        $originalEvent = Event::factory()->for($owner)->create();
+        $currentEvent = Event::factory()->for($owner)->create();
+        $extraction = ImageExtraction::factory()->for($owner)->create([
+            'status' => ImageExtractionStatus::Processed,
+        ]);
+        EventSource::factory()->for($currentEvent)->create([
+            'image_extraction_id' => $extraction->id,
+            'used_cached_extraction' => true,
+        ]);
+        $reusedRun = HarnessRun::factory()->for($originalEvent)->create([
+            'type' => HarnessRunType::ImageExtraction,
+            'correlation_id' => 'image-'.$extraction->id,
+        ]);
+        HarnessEntry::factory()->for($reusedRun, 'run')->create([
+            'title' => 'OCR та класифікація зображення',
+        ]);
+        HarnessRun::factory()->for($originalEvent)->create([
+            'type' => HarnessRunType::ImageExtraction,
+            'correlation_id' => 'image-unrelated',
+        ]);
+
+        $this->actingAs($owner)
+            ->get(route('events.journal.index', [
+                'event' => $currentEvent,
+                'type' => HarnessRunType::ImageExtraction->value,
+            ]))
+            ->assertOk()
+            ->assertSee('image-'.$extraction->id)
+            ->assertSee('OCR та класифікація зображення')
+            ->assertDontSee('image-unrelated');
     }
 }

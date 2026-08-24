@@ -100,14 +100,35 @@ final class ConfirmSilpoFulfilmentAction
                 throw new RuntimeException('Обраний час уже вислизнув. Гусь нічого не змінював — оберіть інший.');
             }
 
-            $expectedFulfilmentFingerprint = SilpoFulfilmentSnapshotData::selectionFingerprint($selection);
-
-            if (! hash_equals($snapshot->fulfilmentFingerprint(), $expectedFulfilmentFingerprint)) {
+            if (! $this->snapshotMatchesSelection($snapshot, $selection)) {
                 $baseCartFingerprint = Arr::get($payload, 'base_cart_fingerprint');
 
                 if (! is_string($baseCartFingerprint)
                     || ! hash_equals($baseCartFingerprint, $snapshot->cartFingerprint())) {
                     throw new RuntimeException('Маршрут кошика вже змінився. Гусь не буде перетирати його навмання.');
+                }
+
+                $usesCurrentHomeAddress = in_array(
+                    Arr::get($selection, 'delivery_type'),
+                    ['DeliveryHome', 'WideAssortDelivery'],
+                    true,
+                );
+                $targetBranchId = $usesCurrentHomeAddress
+                    ? Arr::get($selection, 'target_branch_id')
+                    : null;
+                $addressSource = Arr::get($selection, 'address_source');
+                $selectedAddress = Arr::get($selection, 'address');
+                $usesCurrentCartAddress = $addressSource === 'current_cart';
+                $usesMvpHomeAddress = $addressSource === 'found_coordinates_flat'
+                    && is_array($selectedAddress)
+                    && SilpoFulfilmentSnapshotData::hasMvpHomeAddressShape($selectedAddress);
+
+                if ($usesCurrentHomeAddress
+                    && ((! $usesCurrentCartAddress && ! $usesMvpHomeAddress)
+                        || ($usesCurrentCartAddress && $selectedAddress !== $snapshot->address())
+                        || ! is_string($targetBranchId)
+                        || $targetBranchId === '')) {
+                    throw new RuntimeException('Домашня адреса вже не збігається з кошиком. Гусь нічого не записував.');
                 }
 
                 $snapshot = $this->silpo->updateFulfilment(
@@ -116,21 +137,26 @@ final class ConfirmSilpoFulfilmentAction
                     deliveryType: (string) $selection['delivery_type'],
                     slotStart: (string) $selection['slot_start'],
                     slotEnd: (string) $selection['slot_end'],
-                    address: $selection['address'],
-                    shipments: $selection['shipments'],
+                    address: $usesCurrentHomeAddress && $usesCurrentCartAddress
+                        ? $snapshot->address()
+                        : $selection['address'],
+                    shipments: $usesCurrentHomeAddress ? $snapshot->routeShipments() : $selection['shipments'],
+                    targetBranchId: $targetBranchId,
                     harnessRun: $harnessRun,
                 );
             }
 
             if ($snapshot === null
-                || ! hash_equals($snapshot->fulfilmentFingerprint(), $expectedFulfilmentFingerprint)
+                || ! $this->snapshotMatchesSelection($snapshot, $selection)
                 || ! hash_equals($snapshot->productFingerprint(), $expectedProductFingerprint)) {
                 throw new RuntimeException('Сільпо не підтвердило обраний маршрут. Гусь нічого далі не чіпає.');
             }
 
+            $confirmedFulfilmentFingerprint = $snapshot->fulfilmentFingerprint();
+
             $cart = $this->silpo->getReadyCart($accessToken, $harnessRun);
 
-            if ($cart === null || ! hash_equals($cart->fingerprint(), $expectedFulfilmentFingerprint)) {
+            if ($cart === null || ! hash_equals($cart->fingerprint(), $confirmedFulfilmentFingerprint)) {
                 throw new RuntimeException('Маршрут уже не готовий до походу. Гусь просить перевірити його ще раз.');
             }
 
@@ -167,5 +193,28 @@ final class ConfirmSilpoFulfilmentAction
             || ! filled(Arr::get($selection, 'slot_end'))) {
             throw new RuntimeException('Гусь не зміг прочитати обраний маршрут. Перевірте його ще раз.');
         }
+    }
+
+    /** @param array<string, mixed> $selection */
+    private function snapshotMatchesSelection(SilpoFulfilmentSnapshotData $snapshot, array $selection): bool
+    {
+        if (Arr::get($selection, 'address_source') !== 'found_coordinates_flat') {
+            return hash_equals(
+                $snapshot->fulfilmentFingerprint(),
+                SilpoFulfilmentSnapshotData::selectionFingerprint($selection),
+            );
+        }
+
+        $selectedAddress = Arr::get($selection, 'address');
+
+        return is_array($selectedAddress)
+            && SilpoFulfilmentSnapshotData::hasMvpHomeAddressShape($selectedAddress)
+            && Arr::get($snapshot->address(), 'addressType') === 'flat'
+            && SilpoFulfilmentSnapshotData::representsSameHomeAddress($selectedAddress, $snapshot->address())
+            && hash_equals($snapshot->cartId, (string) Arr::get($selection, 'cart_id'))
+            && $snapshot->deliveryType() === Arr::get($selection, 'delivery_type')
+            && $snapshot->routeShipments() === Arr::get($selection, 'shipments')
+            && $snapshot->slotStart() === Arr::get($selection, 'slot_start')
+            && $snapshot->slotEnd() === Arr::get($selection, 'slot_end');
     }
 }

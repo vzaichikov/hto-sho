@@ -33,6 +33,31 @@
     $sourceById = $event->sources->keyBy('id');
     $correctionPanelOpen = $errors->has('correction') || $errors->has('plan_state_version');
     $latestCartRun = $event->latestCartRun;
+    $stagedCartProducts = collect($latestCartRun?->staged_items ?? []);
+    $stagedCartProductIds = $stagedCartProducts->pluck('product_id')->filter()->unique();
+    $hasCompletedCart = $latestCartRun && in_array($latestCartRun->status, [
+        \App\CartRunStatus::Synced,
+        \App\CartRunStatus::Partial,
+    ], true);
+    $completedCartProducts = $hasCompletedCart
+        ? collect(data_get($latestCartRun->state, 'verified_cart.items', []))
+            ->filter(fn (mixed $product): bool => is_array($product)
+                && $stagedCartProductIds->containsStrict(data_get($product, 'product_id')))
+            ->values()
+        : collect();
+
+    if ($hasCompletedCart && $completedCartProducts->isEmpty()) {
+        $completedCartProducts = $stagedCartProducts
+            ->groupBy('product_id')
+            ->map(function ($products): array {
+                $product = $products->first();
+                $product['quantity'] = $products->sum(fn (array $item): float => (float) data_get($item, 'quantity', 0));
+                $product['total'] = $products->sum(fn (array $item): float => (float) data_get($item, 'estimated_total', 0));
+
+                return $product;
+            })
+            ->values();
+    }
 @endphp
 
 <x-layouts.app :title="$event->title">
@@ -557,13 +582,74 @@
                         <div class="flex flex-wrap items-center justify-between gap-3">
                             <div>
                                 <p class="font-display text-2xl">{{ $latestCartRun->status->label() }}</p>
-                                <p class="mt-1 text-sm text-muted">{{ $latestCartRun->mode->label() }} · {{ $latestCartRun->staged_items ? count($latestCartRun->staged_items) : 0 }} позицій від Гуся</p>
+                                <p class="mt-1 text-sm text-muted">
+                                    {{ $latestCartRun->mode->label() }} ·
+                                    @if ($completedCartProducts->isNotEmpty())
+                                        Товарів у кошику: {{ $completedCartProducts->count() }}
+                                    @else
+                                        {{ $stagedCartProducts->count() }} позицій від Гуся
+                                    @endif
+                                </p>
                             </div>
                             @if ($latestCartRun->actual_total !== null)
                                 <p class="rounded-full bg-yellow px-4 py-2 font-extrabold">{{ number_format((float) $latestCartRun->actual_total, 2, ',', ' ') }} ₴</p>
                             @endif
                         </div>
                     </div>
+
+                    @if ($completedCartProducts->isNotEmpty())
+                        <section class="mt-6" aria-labelledby="completed-cart-products-title">
+                            <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+                                <div>
+                                    <h3 class="font-display text-3xl leading-[1.1]" id="completed-cart-products-title">Що Гусь додав</h3>
+                                    <p class="mt-1 text-sm leading-6 text-muted">Реальні товари з останнього підтвердженого кошика Сільпо.</p>
+                                </div>
+                                <p class="shrink-0 text-sm font-extrabold text-green-dark">Товарів у кошику: {{ $completedCartProducts->count() }}</p>
+                            </div>
+
+                            <div class="mt-4 grid gap-3 md:grid-cols-2">
+                                @foreach ($completedCartProducts as $product)
+                                    @php
+                                        $productImage = data_get($product, 'image');
+                                        $productQuantity = (float) data_get($product, 'quantity', 0);
+                                        $productPrice = (float) data_get($product, 'price', 0);
+                                        $productTotal = (float) data_get(
+                                            $product,
+                                            'total',
+                                            data_get($product, 'estimated_total', $productQuantity * $productPrice),
+                                        );
+                                    @endphp
+                                    <article class="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-4 rounded-[22px] border-2 border-ink/10 bg-canvas p-3 sm:p-4">
+                                        <div class="grid size-[4.5rem] place-items-center overflow-hidden rounded-2xl bg-white text-2xl">
+                                            @if (is_string($productImage) && \Illuminate\Support\Str::startsWith($productImage, 'https://'))
+                                                <img class="size-full object-contain" src="{{ $productImage }}" alt="" loading="lazy">
+                                            @else
+                                                <span aria-hidden="true">🧺</span>
+                                            @endif
+                                        </div>
+                                        <div class="min-w-0 self-center">
+                                            <p class="text-sm font-extrabold leading-5">{{ data_get($product, 'name', 'Товар Сільпо') }}</p>
+                                            <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-sm">
+                                                <p class="text-muted">{{ rtrim(rtrim(number_format($productQuantity, 3, ',', ''), '0'), ',') }} × {{ number_format($productPrice, 2, ',', ' ') }} ₴</p>
+                                                <p class="font-extrabold">{{ number_format($productTotal, 2, ',', ' ') }} ₴</p>
+                                            </div>
+                                        </div>
+                                    </article>
+                                @endforeach
+                            </div>
+
+                            @if (collect($latestCartRun->warnings)->isNotEmpty())
+                                <div class="mt-4 rounded-[22px] border border-orange/30 bg-yellow/30 p-4">
+                                    <p class="font-extrabold">Що варто перевірити на пакованні</p>
+                                    <ul class="mt-2 space-y-2 text-sm leading-6">
+                                        @foreach ($latestCartRun->warnings as $warning)
+                                            <li>→ {{ $warning }}</li>
+                                        @endforeach
+                                    </ul>
+                                </div>
+                            @endif
+                        </section>
+                    @endif
                 @else
                     <p class="mt-4 text-base leading-7 text-muted">Гусь ще не ходив між прилавками для цієї події.</p>
                 @endif
@@ -574,7 +660,7 @@
                         type="button"
                         data-silpo-dialog-open
                         @disabled(! $planIsCurrent || $hasBlockingQuestion)
-                    >{{ $latestCartRun?->isActive() ? 'Повернутися до Гуся' : 'Відправити Гуся в Сільпо' }}</button>
+                    >{{ $latestCartRun?->isActive() ? 'Повернутися до Гуся' : ($completedCartProducts->isNotEmpty() ? 'Зібрати кошик наново' : 'Відправити Гуся в Сільпо') }}</button>
                 @endif
             </section>
         @endif
@@ -620,16 +706,14 @@
                         </section>
 
                         <section class="hidden" data-silpo-fulfilment>
-                            <div class="flex flex-wrap items-start justify-between gap-3">
-                                <div>
-                                    <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark">Крок перед справжнім кошиком</p>
-                                    <h4 class="mt-1 font-display text-3xl">Спершу посадимо Гуся на правильний маршрут</h4>
-                                    <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">Тут лише адреса, магазин, спосіб отримання і час. Товари Гусь почне підбирати вже після вашого остаточного «лети».</p>
-                                </div>
-                                <button class="hidden rounded-xl border-2 border-ink bg-paper px-4 py-2 text-sm font-extrabold transition hover:bg-yellow/35" type="button" data-silpo-route-home>До розмови з Гусем</button>
-                            </div>
+                            <button class="mb-4 hidden rounded-xl border-2 border-ink bg-paper px-4 py-2 text-sm font-extrabold transition hover:bg-yellow/35" type="button" data-silpo-route-home>До розмови з Гусем</button>
 
-                            <div class="mt-5" data-silpo-fulfilment-content aria-live="polite"></div>
+                            <div data-silpo-fulfilment-content aria-live="polite">
+                                <div class="mb-4">
+                                    <h5 class="font-display text-3xl leading-[1.1]">Скажіть Гусю, куди й як доставити</h5>
+                                    <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.</p>
+                                </div>
+                            </div>
 
                             <section class="mt-5 hidden rounded-[24px] border-2 border-green bg-green-soft/20 p-4 sm:p-5" data-silpo-route-review>
                                 <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark">Гусь усе занотував</p>

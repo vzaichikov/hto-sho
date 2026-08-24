@@ -16,6 +16,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | {resources/css/**,resources/views/components/**,resources/views/events/**} | .ai/rules/events.md |
 | tests/{Feature,Live,Fixtures,Support}/**/*AiProductLogic* | .ai/rules/feature-live-fixtures-support.md |
 | .agents/skills/hto-sho-local-qa/** | .ai/rules/hto-sho-local-qa.md |
+| app/Http/Controllers/EventJournalController.php | .ai/rules/http-controllers.md |
 | app/Jobs/** | .ai/rules/jobs.md |
 | {vite.config.js,resources/views/components/layouts/**} | .ai/rules/layouts.md |
 | app/{Models,Services}/Harness*.php | .ai/rules/models-services.md |

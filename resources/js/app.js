@@ -443,10 +443,12 @@ if (silpoDialog instanceof HTMLDialogElement) {
         routeHomeButton.classList.toggle('hidden', fulfilmentInitial === null || title === 'Скажіть Гусю, куди й як доставити');
         fulfilmentContent.replaceChildren();
         const intro = element('div', 'mb-4');
-        intro.append(
-            element('p', 'text-xs font-extrabold uppercase tracking-[0.14em] text-green-dark', eyebrow),
-            element('h5', 'mt-1 font-display text-3xl', title),
-        );
+
+        if (eyebrow) {
+            intro.append(element('p', 'text-xs font-extrabold uppercase tracking-[0.14em] text-green-dark', eyebrow));
+        }
+
+        intro.append(element('h5', `${eyebrow ? 'mt-1 ' : ''}font-display text-3xl leading-[1.1]`, title));
 
         if (description) {
             intro.append(element('p', 'mt-2 max-w-3xl text-sm leading-6 text-muted', description));
@@ -478,8 +480,8 @@ if (silpoDialog instanceof HTMLDialogElement) {
         fulfilmentReview.querySelector('[data-silpo-review-validations]')?.remove();
         summary.replaceChildren(
             detail('Отримання', review.delivery_label),
-            detail('Адреса', review.address_label),
-            detail('Магазин', (review.branch_labels ?? []).join(' + ')),
+            detail('Куди', review.address_label),
+            detail('Звідки збирає Сільпо', (review.branch_labels ?? []).join(' + ')),
             detail('Час', review.timeslot),
             detail('У кошику вже є', `${review.items_count ?? 0} позицій`),
             detail('Поточна сума', money(review.total)),
@@ -549,7 +551,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
     };
 
     const renderRouteOptions = (options) => {
-        setFulfilmentBody('Оберіть, як Гусь дістанеться кошика', 'Маршрути від Сільпо', 'Домашня доставка привʼязана до точної збереженої адреси. Самовивіз і Нова пошта мають свій магазин та свій час.');
+        setFulfilmentBody('Оберіть, як Гусь дістанеться кошика', 'Маршрути від Сільпо', 'Адреса отримання й магазин, який збирає кошик, — різні речі. Гусь покаже обидві, щоб ніякої телепортації будинків.');
         const list = element('div', 'grid gap-3 lg:grid-cols-2');
 
         (options ?? []).forEach((option) => {
@@ -577,18 +579,34 @@ if (silpoDialog instanceof HTMLDialogElement) {
                 card.classList.add('ring-3', 'ring-yellow/70');
                 card.append(element('span', 'mb-2 inline-flex rounded-full bg-yellow px-2.5 py-1 text-xs font-extrabold', 'Гусь почув цей спосіб'));
             }
+            const destinationLabel = option.delivery_type === 'SelfPickup'
+                ? 'Де забрати'
+                : 'Куди доставити';
             card.append(
                 element('p', 'font-display text-2xl', option.delivery_label),
-                element('p', 'mt-1 font-extrabold', option.branch_label || option.address_label),
-                element('p', 'mt-1 text-sm leading-6 text-muted', option.message || option.address_label),
+                element('p', 'mt-2 text-xs font-extrabold uppercase tracking-[0.12em] text-green-dark', destinationLabel),
+                element('p', 'mt-1 font-extrabold', option.address_label),
             );
+
+            if (option.branch_label && option.branch_label !== option.address_label) {
+                card.append(
+                    element('p', 'mt-3 text-xs font-extrabold uppercase tracking-[0.12em] text-muted', 'Звідки збирає Сільпо'),
+                    element('p', 'mt-1 text-sm font-bold leading-6', option.branch_label),
+                );
+            }
+
+            if (option.message) {
+                card.append(element('p', 'mt-3 text-sm leading-6 text-muted', option.message));
+            }
 
             if (option.route_token) {
                 const choose = actionButton('Цим шляхом — показати час', () => renderSlots(option.route_token));
                 choose.classList.add('mt-3', 'w-full');
                 card.append(choose);
             } else {
-                card.append(element('p', 'mt-3 text-xs font-extrabold text-orange-dark', 'Гусь покаже адресу, але не стане вигадувати дані для запису. Сільпо таке любить приблизно ніколи.'));
+                const fallback = actionButton('До поточного маршруту й знайомих адрес', renderManualFulfilment, false);
+                fallback.classList.add('mt-3', 'w-full');
+                card.append(fallback);
             }
 
             list.append(card);
@@ -626,7 +644,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
     };
 
     const renderAddressSearch = () => {
-        setFulfilmentBody('Куди саме?', 'Нова точка на карті', 'Напишіть місто, вулицю й будинок. Гусь знайде точку для самовивозу або Нової пошти. Нову домашню адресу без повних даних Сільпо він нишком не вигадуватиме.');
+        setFulfilmentBody('Куди саме?', 'Нова точка на карті', 'Напишіть місто, вулицю й будинок. Гусь покаже доставку, магазин-збирач і найближчий самовивіз окремо. Якщо Сільпо не дасть усіх даних для домашнього запису, будинок нікуди не переїде — просто оберемо інший шлях.');
         const form = element('form', 'flex flex-col gap-3 rounded-[22px] bg-canvas p-4 sm:flex-row');
         const input = element('input', 'min-w-0 flex-1 rounded-2xl border-2 border-ink/15 bg-paper px-4 py-3 outline-none focus:border-green focus:ring-3 focus:ring-green/15');
         input.type = 'search';
@@ -754,8 +772,8 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const details = element('dl', 'mt-3 grid gap-3 sm:grid-cols-2');
         details.append(
             detail('Отримання', currentRoute.delivery_label),
-            detail('Адреса', currentRoute.address_label),
-            detail('Магазин', (currentRoute.branch_labels ?? []).join(' + ')),
+            detail('Куди', currentRoute.address_label),
+            detail('Звідки збирає Сільпо', (currentRoute.branch_labels ?? []).join(' + ')),
             detail('Час', currentRoute.timeslot),
             detail('У кошику вже є', `${currentRoute.items_count ?? 0} позицій`),
             detail('Поточна сума', money(currentRoute.total)),
@@ -836,7 +854,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
     };
 
     const renderIntentPrompt = (question = null, previousSentence = '') => {
-        setFulfilmentBody('Скажіть Гусю, куди й як доставити', 'Маршрут людською мовою', 'Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.');
+        setFulfilmentBody('Скажіть Гусю, куди й як доставити', '', 'Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.');
         const layout = element('div', 'grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(18rem,0.9fr)]');
         const prompt = element('section', 'rounded-[24px] border-2 border-ink bg-yellow/25 p-4 shadow-[4px_4px_0_#20201D] sm:p-5');
 
@@ -854,7 +872,8 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const example = element('p', 'text-sm leading-6 text-muted', 'Наприклад: Доставка додому: Київ, вул. Саксаганського, 57-Б. Завтра після 18:00');
         const submit = actionButton('Гусю, розбери маршрут', () => {});
         submit.type = 'submit';
-        submit.classList.add('w-full', 'sm:w-auto');
+        submit.classList.remove('text-left');
+        submit.classList.add('w-full', 'text-center', 'sm:w-auto');
         form.append(input, example, submit);
         form.addEventListener('submit', async (event) => {
             event.preventDefault();

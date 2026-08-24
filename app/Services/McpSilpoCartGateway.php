@@ -266,6 +266,7 @@ final class McpSilpoCartGateway implements SilpoCartGateway
         string $slotEnd,
         array $address,
         array $shipments,
+        ?string $targetBranchId = null,
         ?HarnessRun $harnessRun = null,
     ): ?SilpoFulfilmentSnapshotData {
         $client = $this->client($accessToken);
@@ -284,13 +285,29 @@ final class McpSilpoCartGateway implements SilpoCartGateway
                 throw new RuntimeException('Сільпо змінило правила маршруту. Гусь зупинився, щоб нічого не вигадувати.');
             }
 
-            $this->payload($this->callTool($client, 'silpo_update_shopping_cart', [
+            if ($targetBranchId !== null
+                && data_get($tools->get('silpo_update_shopping_cart')?->inputSchema, 'properties.branchId') === null) {
+                throw new RuntimeException('Сільпо не підтвердило зміну магазину. Гусь нічого не записував.');
+            }
+
+            $arguments = [
                 'shoppingCartId' => $cartId,
                 'deliveryType' => $deliveryType,
                 'timeslot' => ['start' => $slotStart, 'end' => $slotEnd],
                 'address' => $address,
                 'shipments' => $shipments,
-            ], $harnessRun), 'оновлення маршруту отримання');
+            ];
+
+            if ($targetBranchId !== null) {
+                $arguments['branchId'] = $targetBranchId;
+            }
+
+            $this->payload($this->callTool(
+                $client,
+                'silpo_update_shopping_cart',
+                $arguments,
+                $harnessRun,
+            ), 'оновлення маршруту отримання');
 
             return $this->readFulfilmentSnapshotById($client, $cartId, $harnessRun);
         } finally {

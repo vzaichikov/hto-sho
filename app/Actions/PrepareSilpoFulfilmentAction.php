@@ -111,7 +111,19 @@ final class PrepareSilpoFulfilmentAction
         $addresses = collect();
 
         if ($snapshot->address() !== []) {
-            $addresses->push($this->addressOption($user, $event, $snapshot, $snapshot->address(), true, 'Поточна адреса'));
+            $homeWritable = $snapshot->hasReusableHomeAddress();
+            $addresses->push($this->addressOption(
+                $user,
+                $event,
+                $snapshot,
+                $snapshot->address(),
+                $homeWritable,
+                'Поточна адреса',
+                'current_cart',
+                $homeWritable
+                    ? null
+                    : 'Ця точка належить нинішньому способу отримання, а не домашній доставці. Гусь може лишити маршрут як є або знайти від неї самовивіз.',
+            ));
         }
 
         collect($savedAddresses)
@@ -123,8 +135,10 @@ final class PrepareSilpoFulfilmentAction
                     $event,
                     $snapshot,
                     $address,
-                    $this->isWritableAddress($address),
+                    false,
                     'Збережена адреса',
+                    'saved_address',
+                    'Сільпо показало цю збережену адресу, але не дозволило перенести її в поточний кошик. Гусь може знайти від неї самовивіз або Нову пошту.',
                 ));
             });
 
@@ -150,6 +164,8 @@ final class PrepareSilpoFulfilmentAction
                 'shipments' => $snapshot->routeShipments(),
                 'branch_labels' => $branchLabels,
                 'writable' => true,
+                'address_source' => 'current_cart',
+                'target_branch_id' => data_get($snapshot->routeShipments(), '0.branchId'),
             ];
             $slots = in_array($snapshot->deliveryType(), [
                 'DeliveryHome',
@@ -201,18 +217,22 @@ final class PrepareSilpoFulfilmentAction
         Event $event,
         SilpoFulfilmentSnapshotData $snapshot,
         array $address,
-        bool $writable,
+        bool $homeWritable,
         string $eyebrow,
+        string $addressSource,
+        ?string $homeUnavailableMessage,
     ): array {
         return [
             'eyebrow' => $eyebrow,
             'label' => $this->addressLabel($address),
-            'writable' => $writable,
+            'writable' => $homeWritable,
             'token' => $this->tokens->issue('fulfilment_address', $user, $event, [
                 'cart_id' => $snapshot->cartId,
                 'address' => $address,
                 'label' => $this->addressLabel($address),
-                'writable' => $writable,
+                'home_writable' => $homeWritable,
+                'address_source' => $addressSource,
+                'home_unavailable_message' => $homeUnavailableMessage,
             ]),
         ];
     }
@@ -239,15 +259,6 @@ final class PrepareSilpoFulfilmentAction
     private function hasCoordinates(array $address): bool
     {
         return is_numeric(Arr::get($address, 'latitude')) && is_numeric(Arr::get($address, 'longitude'));
-    }
-
-    /** @param array<string, mixed> $address */
-    private function isWritableAddress(array $address): bool
-    {
-        return filled(Arr::get($address, 'addressType'))
-            && is_string(Arr::get($address, 'latitude'))
-            && is_string(Arr::get($address, 'longitude'))
-            && $this->hasCoordinates($address);
     }
 
     /** @param array<string, mixed> $address */

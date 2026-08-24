@@ -3,6 +3,7 @@
 namespace App\Data;
 
 use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 final readonly class SilpoFulfilmentSnapshotData
@@ -32,6 +33,54 @@ final readonly class SilpoFulfilmentSnapshotData
             && $this->routeShipments() !== []
             && filled($this->slotStart())
             && filled($this->slotEnd());
+    }
+
+    public function hasReusableHomeAddress(): bool
+    {
+        return in_array($this->deliveryType(), ['DeliveryHome', 'WideAssortDelivery'], true)
+            && filled(Arr::get($this->address(), 'addressType'))
+            && is_string(Arr::get($this->address(), 'latitude'))
+            && is_string(Arr::get($this->address(), 'longitude'))
+            && is_numeric(Arr::get($this->address(), 'latitude'))
+            && is_numeric(Arr::get($this->address(), 'longitude'));
+    }
+
+    /** @param array<string, mixed> $address */
+    public static function hasMvpHomeAddressShape(array $address): bool
+    {
+        return Arr::get($address, 'addressType') === 'flat'
+            && filled(Arr::get($address, 'city'))
+            && filled(Arr::get($address, 'street'))
+            && filled(Arr::get($address, 'house'))
+            && is_string(Arr::get($address, 'latitude'))
+            && is_string(Arr::get($address, 'longitude'))
+            && is_numeric(Arr::get($address, 'latitude'))
+            && is_numeric(Arr::get($address, 'longitude'));
+    }
+
+    /** @param array<string, mixed> $first @param array<string, mixed> $second */
+    public static function representsSameHomeAddress(array $first, array $second): bool
+    {
+        $firstIdentity = self::homeAddressIdentity($first);
+        $secondIdentity = self::homeAddressIdentity($second);
+
+        if (in_array('', $firstIdentity, true)
+            || $firstIdentity !== $secondIdentity
+            || ! is_numeric(Arr::get($first, 'latitude'))
+            || ! is_numeric(Arr::get($first, 'longitude'))
+            || ! is_numeric(Arr::get($second, 'latitude'))
+            || ! is_numeric(Arr::get($second, 'longitude'))) {
+            return false;
+        }
+
+        $latitudeDelta = deg2rad((float) Arr::get($second, 'latitude') - (float) Arr::get($first, 'latitude'));
+        $longitudeDelta = deg2rad((float) Arr::get($second, 'longitude') - (float) Arr::get($first, 'longitude'));
+        $a = sin($latitudeDelta / 2) ** 2
+            + cos(deg2rad((float) Arr::get($first, 'latitude')))
+            * cos(deg2rad((float) Arr::get($second, 'latitude')))
+            * sin($longitudeDelta / 2) ** 2;
+
+        return 6371 * 2 * atan2(sqrt($a), sqrt(1 - $a)) <= 0.2;
     }
 
     public function deliveryType(): ?string
@@ -163,6 +212,34 @@ final readonly class SilpoFulfilmentSnapshotData
                 ->values()
                 ->all(),
         );
+    }
+
+    /** @param array<string, mixed> $address @return array{city: string, street: string, house: string} */
+    private static function homeAddressIdentity(array $address): array
+    {
+        return [
+            'city' => self::normalizeAddressPart(Arr::get($address, 'city')),
+            'street' => self::normalizeAddressPart(Arr::get($address, 'street'), stripStreetType: true),
+            'house' => self::normalizeAddressPart(Arr::get($address, 'houseNumber', Arr::get($address, 'house'))),
+        ];
+    }
+
+    private static function normalizeAddressPart(mixed $value, bool $stripStreetType = false): string
+    {
+        if (! is_string($value) || $value === '') {
+            return '';
+        }
+
+        $normalized = Str::of($value)->lower();
+
+        if ($stripStreetType) {
+            $normalized = $normalized->replaceMatches(
+                '/\b(?:вулиця|вул|проспект|просп|провулок|пров|площа|пл|дорога|дор)\.?\s*/u',
+                '',
+            );
+        }
+
+        return $normalized->replaceMatches('/[^\pL\pN]+/u', '')->toString();
     }
 
     public function fulfilmentFingerprint(): string
