@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Data\CartAgentPreparationData;
+use App\Data\CartAgentSearchIntentData;
 use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 use UnexpectedValueException;
@@ -191,7 +192,7 @@ class CartAgentPreparationDataTest extends TestCase
         $this->assertSame(['пучки', 'пучки'], array_column($preparation->needs, 'unit'));
     }
 
-    public function test_it_starts_with_the_models_best_positive_catalog_query(): void
+    public function test_it_starts_with_the_full_human_need_before_catalog_fallbacks(): void
     {
         $need = [
             ...$this->need('chips', 0, 'Чіпси'),
@@ -212,10 +213,10 @@ class CartAgentPreparationDataTest extends TestCase
             'note' => '',
         ]]);
 
-        $this->assertSame('чіпси', data_get($preparation->needs, '0.search_query'));
+        $this->assertSame('Чіпси', data_get($preparation->needs, '0.search_query'));
     }
 
-    public function test_it_does_not_replace_a_named_product_query_with_a_broader_family_query(): void
+    public function test_it_does_not_replace_the_direct_human_need_with_a_short_fallback_query(): void
     {
         $need = [
             ...$this->need('sparkling', 0, 'Named sparkling wine family'),
@@ -235,7 +236,31 @@ class CartAgentPreparationDataTest extends TestCase
             'note' => '',
         ]]);
 
-        $this->assertSame('Named Family', data_get($preparation->needs, '0.search_query'));
+        $this->assertSame('Named sparkling wine family', data_get($preparation->needs, '0.search_query'));
+    }
+
+    public function test_it_preserves_the_full_pepper_need_as_the_direct_query(): void
+    {
+        $need = $this->need('pepper', 0, 'перець для гриля');
+        $need['search_queries'] = ['перець', 'перець солодкий'];
+
+        $preparation = CartAgentPreparationData::from(['needs' => [$need]], [[
+            'name' => 'перець для гриля',
+        ]]);
+
+        $this->assertSame('перець для гриля', data_get($preparation->needs, '0.search_query'));
+        $this->assertSame(['перець', 'перець солодкий'], data_get($preparation->needs, '0.search_queries'));
+    }
+
+    public function test_search_intent_requires_a_product_name_and_preserves_purpose(): void
+    {
+        $intent = CartAgentSearchIntentData::from([
+            'product_name' => '  перець  ',
+            'purpose' => '  для гриля  ',
+        ]);
+
+        $this->assertSame('перець', $intent->productName);
+        $this->assertSame('для гриля', $intent->purpose);
     }
 
     /** @return array<string, mixed> */

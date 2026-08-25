@@ -12,6 +12,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | {app,config,database,resources,routes,tests}/** | .ai/rules/appconfigdatabaseresourcesroutestests.md |
 | {vite.config.js,resources/css/**,resources/fonts/**,resources/views/components/layouts/**} | .ai/rules/components-layouts.md |
 | resources/views/{components,events}/** | .ai/rules/componentsevents.md |
+| app/{Contracts,Data,Jobs,Services}/**/*Cart*.php | .ai/rules/contracts-data-jobs-services.md |
 | app/{Actions,Jobs,Services,Http/Controllers}/**/*Cart*.php | .ai/rules/controllers.md |
 | app/{Data,Jobs,Services}/**, app/{Data,Jobs,Services}/**/*Cart*.php, app/{Data,Jobs,Services}/**/*.php | .ai/rules/data-jobs-services.md |
 | {resources/css/**,resources/views/components/**,resources/views/events/**} | .ai/rules/events.md |

@@ -74,7 +74,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
 
         match ($run->phase) {
             CartRunPhase::Preparing => $this->prepare($run, $agent, $statuses),
-            CartRunPhase::Searching => $this->search($run, $silpo, $quantities, $statuses, $candidateSuitability),
+            CartRunPhase::Searching => $this->search($run, $agent, $silpo, $quantities, $statuses, $candidateSuitability),
             CartRunPhase::Inspecting => $this->inspect($run, $silpo, $statuses),
             CartRunPhase::Deciding => $this->decide($run, $agent, $quantities, $statuses, $candidateSuitability),
             CartRunPhase::Auditing => $this->audit($run, $agent, $quantities, $statuses),
@@ -152,6 +152,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
 
     private function search(
         EventCartRun $run,
+        CartProductAgent $agent,
         SilpoCartGateway $silpo,
         CartQuantityCalculator $quantities,
         GooseCartStatusService $statuses,
@@ -200,10 +201,14 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             $query = $quantities->normalizeSearchQuery((string) data_get($need, 'name'));
         }
 
+        $isInitialDirectSearch = data_get($need, 'attempts', []) === []
+            && data_get($need, 'search_diversified') !== true;
+
         $products = $silpo->searchProducts(
             $this->accessToken($run),
             SilpoCartContextData::fromRunContext($run->cart_context),
             $query,
+            30,
             harnessRun: $run->harnessRun,
         );
         $candidates = collect($products)
@@ -227,12 +232,16 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ->reject(fn (array $product): bool => collect($run->staged_items ?? [])
                 ->contains('product_id', $product['product_id'])
                 && ! $candidateSuitability->allowsProductReuseForNeed($need, $product))
-            ->sortBy(fn (array $product): array => $this->packageFitSortKey($need, $product, $quantities))
+            ->sortBy(fn (array $product): array => [
+                $candidateSuitability->isExactIdentityCandidate($need, $product) ? 0 : 1,
+                ...$this->packageFitSortKey($need, $product, $quantities),
+            ])
             ->values()
             ->all();
         $state['needs'][$currentIndex]['attempts'][] = [
             'query' => $query,
             'total_found' => count($candidates),
+            'raw_total_found' => count($products),
         ];
         $state['last_candidates'] = $candidates;
         $state['last_details'] = null;
@@ -243,6 +252,37 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             'product' => (string) data_get($need, 'name'),
             'query' => $query,
         ]];
+
+        if ($isInitialDirectSearch && $products === []) {
+            $searchIntent = $agent->diversifySearch($need, $run->harnessRun);
+            $fallbackQueries = collect([
+                $searchIntent->productName,
+                ...data_get($need, 'search_queries', []),
+            ])
+                ->filter(fn (mixed $fallbackQuery): bool => is_string($fallbackQuery) && filled($fallbackQuery))
+                ->unique(fn (string $fallbackQuery): string => Str::lower($fallbackQuery))
+                ->take(6)
+                ->values()
+                ->all();
+            $state['needs'][$currentIndex]['product_name'] = $searchIntent->productName;
+            $state['needs'][$currentIndex]['purpose'] = $searchIntent->purpose;
+            $state['needs'][$currentIndex]['search_queries'] = $fallbackQueries;
+            $state['needs'][$currentIndex]['search_query'] = $searchIntent->productName;
+            $state['needs'][$currentIndex]['search_diversified'] = true;
+            $state['needs'][$currentIndex]['direct_search_query'] = $query;
+
+            $this->transition(
+                $run,
+                ['phase' => CartRunPhase::Searching, 'state' => $state],
+                [...$stepDefinitions, [
+                    'kind' => 'retry',
+                    'product' => (string) data_get($need, 'name'),
+                    'query' => $searchIntent->productName,
+                ]],
+            );
+
+            return;
+        }
 
         if ($candidates === [] && count($state['needs'][$currentIndex]['attempts']) < 6) {
             $fallbackQuery = $candidateSuitability->nextSearchQuery($state['needs'][$currentIndex]);
@@ -527,7 +567,22 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             'all_needs' => collect(data_get($state, 'needs', []))->map(fn (array $item): array => Arr::only($item, [
                 'key', 'name', 'quantity', 'unit', 'status', 'selected_item',
             ]))->all(),
-            'candidates' => data_get($state, 'last_candidates', []),
+            'candidates' => collect(data_get($state, 'last_candidates', []))
+                ->map(fn (array $candidate): array => Arr::only($candidate, [
+                    'product_id',
+                    'name',
+                    'slug',
+                    'price',
+                    'old_price',
+                    'stock',
+                    'available',
+                    'weighted',
+                    'step',
+                    'display_ratio',
+                    'catalog_scope',
+                ]))
+                ->values()
+                ->all(),
             'inspected_details' => $this->inspectedDetails($state, $need),
             'staged_items' => $run->staged_items ?? [],
         ], $run->harnessRun);
@@ -818,6 +873,25 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        if (! $candidateSuitability->isExactIdentityCandidate($need, $candidate)
+            && $candidateSuitability->hasExactIdentityCandidate(
+                $need,
+                data_get($state, 'last_candidates', []),
+            )) {
+            $state['last_candidates'] = collect(data_get($state, 'last_candidates', []))
+                ->reject(fn (array $item): bool => data_get($item, 'product_id') === $decision->selectedProductId)
+                ->values()
+                ->all();
+            $state['last_details'] = null;
+            $this->transition(
+                $run,
+                ['phase' => CartRunPhase::Deciding, 'state' => $state],
+                [['kind' => 'warning', 'product' => (string) data_get($candidate, 'name')]],
+            );
+
+            return;
+        }
+
         $candidateForValidation = $candidate;
 
         $inspectedDetails = $this->inspectedDetailsForProduct(
@@ -836,7 +910,8 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             data_get($state, 'event_context', []),
             data_get($state, 'plan_snapshot', []),
             $decision->safetyEvidence,
-            $decision->isReplacement,
+            $decision->isReplacement
+                && ! $candidateSuitability->isExactIdentityCandidate($need, $candidate),
         );
 
         if (! $evidence['selectable']) {

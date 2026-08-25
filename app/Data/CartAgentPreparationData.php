@@ -64,7 +64,7 @@ final readonly class CartAgentPreparationData
                     ((int) $need['source_index']).'.optional',
                     false,
                 ),
-                'search_query' => (string) $need['search_queries'][0],
+                'search_query' => Str::squish((string) $need['name']),
                 'status' => 'pending',
                 'attempts' => [],
                 'inspected_products' => [],

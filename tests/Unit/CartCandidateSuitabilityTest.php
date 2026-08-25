@@ -327,6 +327,27 @@ class CartCandidateSuitabilityTest extends TestCase
         ));
     }
 
+    public function test_grill_pepper_identity_prefers_a_suitable_pepper_over_chilli_and_carrot(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'перець для гриля',
+            'product_name' => 'перець',
+            'purpose' => 'для гриля',
+            'search_queries' => ['перець', 'овочі'],
+        ];
+        $sweetPepper = ['name' => 'Перець червоний солодкий'];
+
+        $this->assertTrue($suitability->allows($need, $sweetPepper, [], []));
+        $this->assertFalse($suitability->allows($need, ['name' => 'Перець чилі зелений'], [], []));
+        $this->assertTrue($suitability->isExactIdentityCandidate($need, $sweetPepper));
+        $this->assertFalse($suitability->isExactIdentityCandidate($need, ['name' => 'Морква молода']));
+        $this->assertTrue($suitability->hasExactIdentityCandidate($need, [
+            ['name' => 'Морква молода'],
+            $sweetPepper,
+        ]));
+    }
+
     public function test_catalog_noise_must_match_a_meaningful_need_or_synonym_root(): void
     {
         $suitability = new CartCandidateSuitability;
@@ -941,10 +962,11 @@ class CartCandidateSuitabilityTest extends TestCase
         ], [], []));
     }
 
-    public function test_model_can_promote_contextual_missing_safety_disclosure_to_a_visible_warning(): void
+    public function test_simple_raw_foods_ignore_an_absurd_unrelated_allergen_warning(): void
     {
-        $evidence = (new CartCandidateSuitability)->evidence(
-            ['name' => 'raw pork'],
+        $suitability = new CartCandidateSuitability;
+        $rawPork = $suitability->evidence(
+            ['name' => 'raw pork', 'note' => 'no peanuts'],
             [
                 'name' => 'Chilled pork chunks',
                 'details' => ['attributes' => ['Country' => 'Ukraine']],
@@ -953,9 +975,54 @@ class CartCandidateSuitabilityTest extends TestCase
             [],
             CartProductEvidence::SAFETY_UNVERIFIED,
         );
+        $wholePepper = $suitability->evidence(
+            ['name' => 'перець для гриля', 'note' => 'без арахісу'],
+            ['name' => 'Перець червоний'],
+            [],
+            [],
+            CartProductEvidence::SAFETY_UNVERIFIED,
+        );
+        $plainWater = $suitability->evidence(
+            ['name' => 'вода негазована', 'category' => 'water', 'note' => 'без арахісу'],
+            ['name' => 'Вода питна негазована'],
+            [],
+            [],
+            CartProductEvidence::SAFETY_UNVERIFIED,
+        );
 
-        $this->assertTrue($evidence['selectable']);
-        $this->assertSame(CartProductEvidence::SAFETY_UNVERIFIED, $evidence['safety']);
-        $this->assertStringContainsString('❓', (string) $evidence['review_note']);
+        foreach ([$rawPork, $wholePepper, $plainWater] as $evidence) {
+            $this->assertTrue($evidence['selectable']);
+            $this->assertSame(CartProductEvidence::SAFETY_NOT_REQUIRED, $evidence['safety']);
+            $this->assertNull($evidence['review_note']);
+        }
+
+        $this->assertFalse($suitability->requiresInspection(
+            ['name' => 'свинина сира', 'note' => 'без арахісу'],
+            ['summary' => 'Сильна алергія на арахіс'],
+        ));
+    }
+
+    public function test_composite_foods_keep_missing_allergen_disclosure_visible(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $pairs = [
+            [['name' => 'ковбаса'], ['name' => 'Ковбаса домашня']],
+            [['name' => 'свинина маринована'], ['name' => 'Свинина маринована']],
+            [['name' => 'картопляні чіпси'], ['name' => 'Чипси картопляні']],
+            [['name' => 'соус до гриля'], ['name' => 'Соус томатний']],
+        ];
+
+        foreach ($pairs as [$need, $candidate]) {
+            $evidence = $suitability->evidence(
+                $need,
+                $candidate,
+                [],
+                [],
+                CartProductEvidence::SAFETY_UNVERIFIED,
+            );
+
+            $this->assertSame(CartProductEvidence::SAFETY_UNVERIFIED, $evidence['safety']);
+            $this->assertStringContainsString('❓', (string) $evidence['review_note']);
+        }
     }
 }

@@ -36,6 +36,92 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertSame(['type' => 'boolean'], data_get($schema, 'properties.is_replacement'));
     }
 
+    public function test_zero_result_search_intent_splits_product_name_and_purpose_in_one_llm_request(): void
+    {
+        config([
+            'services.ai.provider' => 'openai',
+            'services.ai.api_key' => 'test-key',
+            'services.ai.model' => 'test-model',
+        ]);
+        Http::fake([
+            '*' => Http::response([
+                'output' => [[
+                    'content' => [[
+                        'type' => 'output_text',
+                        'text' => json_encode([
+                            'product_name' => 'перець',
+                            'purpose' => 'для гриля',
+                        ], JSON_THROW_ON_ERROR),
+                    ]],
+                ]],
+            ]),
+        ]);
+
+        $intent = app(CartProductDecisionService::class)->diversifySearch([
+            'name' => 'перець для гриля',
+            'note' => 'untrusted-user-data-sentinel',
+            'attempts' => [['query' => 'перець для гриля', 'raw_total_found' => 0]],
+        ]);
+
+        $this->assertSame('перець', $intent->productName);
+        $this->assertSame('для гриля', $intent->purpose);
+        Http::assertSentCount(1);
+        Http::assertSent(function ($request): bool {
+            $payload = $request->data();
+
+            return data_get($payload, 'text.format.name') === 'cart_agent_search_intent'
+                && data_get($payload, 'text.format.schema.required') === ['product_name', 'purpose']
+                && str_contains(
+                    (string) data_get($payload, 'instructions'),
+                    'повернув рівно нуль товарів',
+                )
+                && str_contains(
+                    (string) data_get($payload, 'input.0.content.0.text'),
+                    'untrusted-user-data-sentinel',
+                )
+                && ! str_contains(
+                    (string) data_get($payload, 'instructions'),
+                    'untrusted-user-data-sentinel',
+                );
+        });
+    }
+
+    public function test_ollama_receives_system_instructions_and_separate_user_data(): void
+    {
+        config([
+            'services.ai.provider' => 'ollama',
+            'services.ai.providers.ollama.base_url' => 'https://ollama.test/v1',
+            'services.ai.api_key' => 'test-key',
+            'services.ai.model' => 'test-model',
+        ]);
+        Http::fake([
+            '*' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => json_encode([
+                        'product_name' => 'перець',
+                        'purpose' => 'для гриля',
+                    ], JSON_THROW_ON_ERROR)],
+                ]],
+            ]),
+        ]);
+
+        app(CartProductDecisionService::class)->diversifySearch([
+            'name' => 'untrusted-user-data-sentinel',
+        ]);
+
+        Http::assertSent(function ($request): bool {
+            $payload = $request->data();
+            $systemText = (string) data_get($payload, 'messages.0.content.0.text');
+            $userText = (string) data_get($payload, 'messages.1.content.0.text');
+
+            return data_get($payload, 'messages.0.role') === 'system'
+                && data_get($payload, 'messages.1.role') === 'user'
+                && str_contains($systemText, 'Прямий пошук Сільпо')
+                && ! str_contains($systemText, 'untrusted-user-data-sentinel')
+                && str_contains($userText, 'untrusted-user-data-sentinel');
+        });
+    }
+
     public function test_preparation_batches_large_plans_without_renumbering_source_indexes(): void
     {
         config([
@@ -67,7 +153,10 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertStringContainsString('"active_source_indexes": [', $secondPrompt);
         $this->assertStringContainsString('"name": "яблука"', $secondPrompt);
         $this->assertStringContainsString('"name": "серветки"', $secondPrompt);
-        $this->assertStringContainsString('повертай needs ЛИШЕ для active_source_indexes', $secondPrompt);
+        $this->assertStringContainsString(
+            'повертай needs ЛИШЕ для active_source_indexes',
+            (string) data_get(Http::recorded()[1][0]->data(), 'instructions'),
+        );
     }
 
     public function test_preparation_ignores_items_emitted_outside_the_active_batch(): void
@@ -195,70 +284,34 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertStringContainsString('найближчу альтернативу з тією самою роллю', $preparationPrompt);
         $this->assertStringContainsString('декомпозуй її на конкретні товарні сімʼї', $preparationPrompt);
         $this->assertStringContainsString('не перетворюй бажану властивість на жорстку', $preparationPrompt);
-        Http::assertSent(fn ($request): bool => str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+        Http::assertSent(fn ($request): bool => collect([
             'retailer-specific-query-marker',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'retailer-specific-safety-marker',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'рольова заміна',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'паковання треба перевірити людині',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'не змінюй candidate_matches_required_product з false на true',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'не вимагай, щоб назва товару дослівно повторювала майбутній рецепт',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'не відкидай придатне сире мʼясо лише тому',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'фізична форма мусить бути сумісною зі способом приготування',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'назва або атрибути прямо й позитивно заявляють потрібну безглютенову',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'Сам текст current_need не є доказом властивостей candidate',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'Назва порції або нарізки, яку також уживають як назву іншої страви',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'не називай такий кандидат готовим без позитивної ознаки обробки',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'назва одного звичного способу не робить їх несумісними з іншим',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'точною категорією свіжих фруктів чи овочів є позитивним доказом',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'Не поширюй особисте обмеження одного учасника механічно на кожен спільний товар',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'не може самостійно покривати велику вагову потребу загального продукту',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'Не обирай SKU поза явним діапазоном',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'ширше модельне міркування про роль потреби',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'Модель, а не PHP, має визначити її',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'Товар, який каталог прямо називає безалкогольним',
-        ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
             'selected_product_id обовʼязково має бути точним ID',
-        ));
+            'Оціни весь масив candidates одним рішенням',
+            'очевидно однокомпонентного сирого мʼяса',
+        ])->every(fn (string $needle): bool => str_contains(
+            (string) data_get($request->data(), 'instructions'),
+            $needle,
+        )));
     }
 
     public function test_similarity_adjudication_is_a_bounded_final_candidate_review(): void
@@ -286,13 +339,13 @@ class CartProductDecisionServiceTest extends TestCase
         ]);
 
         Http::assertSent(fn ($request): bool => str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'ФІНАЛЬНА ПЕРЕВІРКА ЗА ПОДІБНІСТЮ',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'не повертай retry',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'можна select найближчий',
         ));
     }
@@ -329,10 +382,14 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertSame('inspect', $decision->action);
         $this->assertSame('sauce-1', $decision->selectedProductId);
         Http::assertSentCount(2);
-        $repairPrompt = (string) data_get(Http::recorded()[1][0]->data(), 'input.0.content.0.text');
-        $this->assertStringContainsString('одна і єдина спроба ремонту', $repairPrompt);
-        $this->assertStringContainsString('Agent selected no catalog product.', $repairPrompt);
-        $this->assertStringContainsString('sauce-1', $repairPrompt);
+        $repairRequest = Http::recorded()[1][0]->data();
+        $this->assertStringContainsString(
+            'одна і єдина спроба ремонту',
+            (string) data_get($repairRequest, 'instructions'),
+        );
+        $repairData = (string) data_get($repairRequest, 'input.0.content.0.text');
+        $this->assertStringContainsString('Agent selected no catalog product.', $repairData);
+        $this->assertStringContainsString('sauce-1', $repairData);
     }
 
     public function test_final_audit_scopes_personal_restrictions_to_the_intended_consumer(): void
@@ -367,28 +424,28 @@ class CartProductDecisionServiceTest extends TestCase
         ]);
 
         Http::assertSent(fn ($request): bool => str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'Не поширюй особисте обмеження одного учасника механічно на весь кошик',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'цій людині товар не можна споживати',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'staged-товар поза ним не вважай покриттям',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'Слово «приблизно», практична оцінка або орієнтовний розмір не є точним діапазоном',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'не залишай прийняті staged optional-позиції у remaining_need_keys',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'warning каже, що позиція покрита чи достатня',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'Каталожне маркування «безалкогольний» приймай як безалкогольний статус',
         ) && str_contains(
-            (string) data_get($request->data(), 'input.0.content.0.text'),
+            (string) data_get($request->data(), 'instructions'),
             'Вичерпання пошуків не робить несумісну фізичну форму сумісною',
         ));
     }

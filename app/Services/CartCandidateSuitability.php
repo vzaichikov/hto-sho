@@ -24,6 +24,8 @@ final class CartCandidateSuitability
     ): bool {
         $needText = $this->text([
             data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
             data_get($need, 'note'),
         ]);
         $productText = $this->text([
@@ -130,6 +132,12 @@ final class CartCandidateSuitability
         }
 
         if ($this->containsAny($needText, ['солодк', 'болгар'])
+            && $this->containsAny($candidateText, ['чилі', 'гостр', 'пекуч', 'халапень'])) {
+            return false;
+        }
+
+        if ($this->containsAny($needText, ['для грил', 'на грил', 'для мангал', 'на мангал'])
+            && ! $this->containsAny($needText, ['чилі', 'гостр', 'пекуч', 'халапень'])
             && $this->containsAny($candidateText, ['чилі', 'гостр', 'пекуч', 'халапень'])) {
             return false;
         }
@@ -267,6 +275,7 @@ final class CartCandidateSuitability
         }
 
         if ($safety === CartProductEvidence::SAFETY_NOT_REQUIRED
+            && ! $this->isClearlySimpleFood($need, $candidate)
             && in_array($modelSafetyEvidence, [
                 CartProductEvidence::SAFETY_VERIFIED,
                 CartProductEvidence::SAFETY_UNVERIFIED,
@@ -293,9 +302,31 @@ final class CartCandidateSuitability
     }
 
     /** @param array<string, mixed> $need @param array<string, mixed> $candidate */
+    public function isExactIdentityCandidate(array $need, array $candidate): bool
+    {
+        return $this->sharesNeedIdentityTerm($need, $this->text([
+            data_get($candidate, 'name'),
+            data_get($candidate, 'slug'),
+        ]));
+    }
+
+    /** @param array<string, mixed> $need @param array<int, array<string, mixed>> $candidates */
+    public function hasExactIdentityCandidate(array $need, array $candidates): bool
+    {
+        return collect($candidates)->contains(
+            fn (array $candidate): bool => $this->isExactIdentityCandidate($need, $candidate),
+        );
+    }
+
+    /** @param array<string, mixed> $need @param array<string, mixed> $candidate */
     public function allowsProductReuseForNeed(array $need, array $candidate): bool
     {
-        $needText = $this->text([data_get($need, 'name'), data_get($need, 'note')]);
+        $needText = $this->text([
+            data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
+            data_get($need, 'note'),
+        ]);
         $candidateText = $this->text([
             data_get($candidate, 'name'),
             data_get($candidate, 'slug'),
@@ -327,6 +358,8 @@ final class CartCandidateSuitability
         $needName = $this->text([data_get($need, 'name')]);
         $needText = $this->text([
             data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
             data_get($need, 'note'),
         ]);
         $constraintText = $this->text([
@@ -337,6 +370,10 @@ final class CartCandidateSuitability
                     : $restriction)
                 ->all(),
         ]);
+
+        if ($this->isClearlySimpleNeed($need)) {
+            return false;
+        }
 
         return $this->containsAny($needText, ['безглютен'])
             || $this->containsAny($needText, ['без цукру'])
@@ -368,6 +405,7 @@ final class CartCandidateSuitability
     public function nextCatalogScope(array $need, array $catalogScopes): ?array
     {
         $identityRootWeights = $this->scopeRootWeights([
+            data_get($need, 'product_name'),
             data_get($need, 'name'),
             data_get($need, 'search_query'),
             ...data_get($need, 'search_queries', []),
@@ -487,6 +525,8 @@ final class CartCandidateSuitability
     {
         $needText = $this->text([
             data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
             data_get($need, 'note'),
         ]);
         $scopeText = $this->catalogScopePathText($scope, $scopeIndex);
@@ -523,6 +563,8 @@ final class CartCandidateSuitability
     {
         $needText = $this->text([
             data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
             data_get($need, 'note'),
         ]);
 
@@ -584,6 +626,7 @@ final class CartCandidateSuitability
     {
         $declaredQueries = collect([
             data_get($need, 'search_query'),
+            data_get($need, 'product_name'),
             data_get($need, 'name'),
             ...data_get($need, 'search_queries', []),
         ])
@@ -647,6 +690,8 @@ final class CartCandidateSuitability
     {
         $needText = $this->text([
             data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
             data_get($need, 'note'),
         ]);
         $latestAttempt = collect(data_get($need, 'attempts', []))->last();
@@ -671,6 +716,86 @@ final class CartCandidateSuitability
         return $this->containsAny($needText, [
             'овоч', 'гриб', 'печериц', 'шампіньйон', 'салат', 'зелень', 'фрукт', 'томат', 'помід', 'огір', 'перець',
             'кабач', 'цукіні', 'баклаж', 'капуст', 'моркв', 'буряк', 'картоп', 'цибул', 'часник',
+        ]);
+    }
+
+    /** @param array<string, mixed> $need */
+    private function isClearlySimpleNeed(array $need): bool
+    {
+        $needText = $this->text([
+            data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
+        ]);
+
+        if ($this->hasCompositeFoodMarkers($needText)) {
+            return false;
+        }
+
+        return $this->isPlainWater($needText, data_get($need, 'category') === 'water')
+            || $this->isProduceNeed($needText)
+            || $this->isRawMeat($needText);
+    }
+
+    /** @param array<string, mixed> $need @param array<string, mixed> $candidate */
+    private function isClearlySimpleFood(array $need, array $candidate): bool
+    {
+        if (! $this->isClearlySimpleNeed($need)) {
+            return false;
+        }
+
+        $needText = $this->text([
+            data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
+        ]);
+        $candidateText = $this->text([
+            data_get($candidate, 'name'),
+            data_get($candidate, 'slug'),
+        ]);
+
+        if ($this->hasCompositeFoodMarkers($candidateText)) {
+            return false;
+        }
+
+        if ($this->isPlainWater($needText, data_get($need, 'category') === 'water')) {
+            return $this->isPlainWater($candidateText);
+        }
+
+        if ($this->isProduceNeed($needText)) {
+            return $this->isProduceNeed($candidateText);
+        }
+
+        return $this->isRawMeat($needText) && $this->isRawMeat($candidateText);
+    }
+
+    private function isPlainWater(string $text, bool $waterCategory = false): bool
+    {
+        if (! $waterCategory && ! $this->containsAny($text, ['вода', 'water'])) {
+            return false;
+        }
+
+        return ! $this->containsAny($text, [
+            'зі смак', 'зi смак', 'смаком', 'ароматиз', 'лимон', 'апельс', 'ягід',
+            'сік', 'juice', 'ізотон', 'енергет', 'вітамін', 'сироп', 'коктейл',
+        ]);
+    }
+
+    private function isRawMeat(string $text): bool
+    {
+        return $this->containsAny($text, [
+            'свин', 'pork', 'ялов', 'beef', 'теля', 'veal', 'курят', 'курин', 'chicken',
+            'індич', 'turkey', 'баранин', 'lamb', 'мʼяс', "м'яс", 'meat',
+        ]);
+    }
+
+    private function hasCompositeFoodMarkers(string $text): bool
+    {
+        return $this->containsAny($text, [
+            'ковбас', 'сосиск', 'sausage', 'маринован', 'маринад', 'seasoned', 'приправлен',
+            'панірован', 'breaded', 'coated', 'фарширован', 'начин', 'filled', 'фарш', 'minced',
+            'копчен', 'smoked', 'варен', 'cooked', 'запечен', 'смажен', 'готов', 'напівфабрикат',
+            'чіпс', 'чипс', 'chips', 'соус', 'sauce', 'суміш', 'mix', 'приправа', 'спеці',
         ]);
     }
 
@@ -803,6 +928,7 @@ final class CartCandidateSuitability
     private function sharesCatalogTerm(array $need, string $candidateText): bool
     {
         $needText = $this->text([
+            data_get($need, 'product_name'),
             data_get($need, 'name'),
             data_get($need, 'search_query'),
             ...data_get($need, 'search_queries', []),
@@ -820,7 +946,10 @@ final class CartCandidateSuitability
     /** @param array<string, mixed> $need */
     private function sharesNeedIdentityTerm(array $need, string $candidateText): bool
     {
-        $needRoots = $this->catalogRoots($this->text([data_get($need, 'name')]));
+        $identity = filled(data_get($need, 'product_name'))
+            ? data_get($need, 'product_name')
+            : data_get($need, 'name');
+        $needRoots = $this->catalogRoots($this->text([$identity]));
 
         return $needRoots === []
             || array_intersect($needRoots, $this->catalogRoots($candidateText)) !== [];

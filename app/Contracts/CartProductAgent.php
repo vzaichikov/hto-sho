@@ -5,6 +5,7 @@ namespace App\Contracts;
 use App\Data\CartAgentAuditData;
 use App\Data\CartAgentDecisionData;
 use App\Data\CartAgentPreparationData;
+use App\Data\CartAgentSearchIntentData;
 use App\Models\HarnessRun;
 
 interface CartProductAgent
@@ -18,6 +19,12 @@ interface CartProductAgent
         array $shoppingPlan,
         ?HarnessRun $harnessRun = null,
     ): CartAgentPreparationData;
+
+    /** @param array<string, mixed> $need */
+    public function diversifySearch(
+        array $need,
+        ?HarnessRun $harnessRun = null,
+    ): CartAgentSearchIntentData;
 
     /** @param array<string, mixed> $context */
     public function decide(array $context, ?HarnessRun $harnessRun = null): CartAgentDecisionData;

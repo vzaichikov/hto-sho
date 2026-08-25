@@ -530,7 +530,7 @@ final class McpSilpoCartGateway implements SilpoCartGateway
         string $accessToken,
         SilpoCartContextData $cart,
         string $query,
-        int $limit = 8,
+        int $limit = 30,
         ?HarnessRun $harnessRun = null,
     ): array {
         $client = $this->client($accessToken);
@@ -542,7 +542,7 @@ final class McpSilpoCartGateway implements SilpoCartGateway
                 'timeslotStart' => $cart->slotStart,
                 'timeslotEnd' => $cart->slotEnd,
                 'products' => [$query],
-                'limit' => min(max($limit, 1), 20),
+                'limit' => min(max($limit, 1), 30),
             ], $harnessRun), 'пошук товару');
 
             return collect(data_get($payload, 'queries.0.products', []))

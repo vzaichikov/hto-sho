@@ -13,6 +13,7 @@ use App\Contracts\SilpoRouteIntentInterpreter;
 use App\Data\CartAgentAuditData;
 use App\Data\CartAgentDecisionData;
 use App\Data\CartAgentPreparationData;
+use App\Data\CartAgentSearchIntentData;
 use App\Data\SilpoCartContextData;
 use App\Data\SilpoCartRefreshCandidateData;
 use App\Data\SilpoFulfilmentSnapshotData;
@@ -2456,6 +2457,266 @@ class EventCartRunTest extends TestCase
         $this->assertSame(2.5, (float) data_get($run->staged_items, '0.quantity'));
     }
 
+    public function test_zero_result_direct_search_diversifies_once_then_sends_thirty_candidates_to_one_decision(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'pepper',
+            'name' => 'перець для гриля',
+            'category' => 'food',
+            'quantity' => 1.0,
+            'unit' => 'кг',
+            'note' => 'Сирий овоч на мангал.',
+            'search_query' => 'перець для гриля',
+            'search_queries' => ['перець', 'овочі'],
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'phase' => CartRunPhase::Searching,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+            ],
+            'staged_items' => [],
+        ]);
+        $gateway = new FakeCartGateway($cart);
+        $fallbackProducts = collect(range(1, 30))->map(function (int $position): array {
+            if ($position === 15) {
+                return [
+                    ...$this->waterProduct(),
+                    'id' => 'sweet-pepper',
+                    'name' => 'Перець червоний солодкий',
+                    'slug' => 'perets-chervonyi-solodkyi',
+                    'weighted' => true,
+                    'displayRatio' => '1 кг',
+                ];
+            }
+
+            return [
+                ...$this->waterProduct(),
+                'id' => "vegetable-{$position}",
+                'name' => "Овоч морква {$position}",
+                'slug' => "ovoch-morkva-{$position}",
+                'weighted' => true,
+                'displayRatio' => '1 кг',
+            ];
+        })->all();
+        $gateway->searchResults['перець'] = $fallbackProducts;
+        $decision = new CartAgentDecisionData(
+            action: 'select',
+            selectedProductId: 'sweet-pepper',
+            query: null,
+            quantity: 1,
+            reason: 'Exact pepper suitable for grilling.',
+            question: null,
+            audit: $this->audit(['pepper'], [], true),
+        );
+        $agent = new FakeCartAgent(
+            new CartAgentPreparationData([]),
+            [$decision],
+            $this->audit(['pepper'], [], true),
+        );
+        $agent->searchIntents[] = new CartAgentSearchIntentData('перець', 'для гриля');
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(['перець для гриля'], $gateway->searchQueries);
+        $this->assertSame([30], $gateway->searchLimits);
+        $this->assertCount(1, $agent->diversifiedNeeds);
+        $this->assertSame('перець', data_get($run->state, 'needs.0.product_name'));
+        $this->assertSame('для гриля', data_get($run->state, 'needs.0.purpose'));
+        $this->assertSame(0, data_get($run->state, 'needs.0.attempts.0.raw_total_found'));
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(['перець для гриля', 'перець'], $gateway->searchQueries);
+        $this->assertSame([30, 30], $gateway->searchLimits);
+        $this->assertSame(30, data_get($run->state, 'needs.0.attempts.1.raw_total_found'));
+        $this->assertSame('sweet-pepper', data_get($run->state, 'last_candidates.0.product_id'));
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertCount(1, $agent->decisionContexts);
+        $this->assertCount(30, data_get($agent->decisionContexts, '0.candidates'));
+        $this->assertArrayNotHasKey('company_id', data_get($agent->decisionContexts, '0.candidates.0'));
+        $this->assertArrayNotHasKey('image', data_get($agent->decisionContexts, '0.candidates.0'));
+        $this->assertSame('sweet-pepper', data_get($run->staged_items, '0.product_id'));
+    }
+
+    public function test_filtered_empty_but_raw_nonempty_direct_search_does_not_diversify(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'pepper',
+            'name' => 'перець для гриля',
+            'category' => 'food',
+            'quantity' => 1.0,
+            'unit' => 'кг',
+            'search_query' => 'перець для гриля',
+            'search_queries' => ['перець', 'овочі'],
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'phase' => CartRunPhase::Searching,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+            ],
+            'staged_items' => [],
+        ]);
+        $gateway = new FakeCartGateway($cart);
+        $gateway->searchResults['перець для гриля'] = [[
+            ...$this->waterProduct(),
+            'id' => 'grill-rack',
+            'name' => 'Решітка для гриля',
+            'slug' => 'reshitka-dlia-hrylia',
+            'weighted' => false,
+            'displayRatio' => '1 шт',
+        ]];
+        $agent = new FakeCartAgent(
+            new CartAgentPreparationData([]),
+            [],
+            $this->audit([], ['pepper'], false),
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(['перець для гриля'], $gateway->searchQueries);
+        $this->assertSame([], $agent->diversifiedNeeds);
+        $this->assertSame(CartRunPhase::Searching, $run->phase);
+        $this->assertSame(1, data_get($run->state, 'needs.0.attempts.0.raw_total_found'));
+        $this->assertSame(0, data_get($run->state, 'needs.0.attempts.0.total_found'));
+        $this->assertSame('перець', data_get($run->state, 'needs.0.search_query'));
+        $this->assertNull(data_get($run->state, 'needs.0.product_name'));
+    }
+
+    public function test_role_replacement_cannot_bypass_an_available_exact_identity_candidate(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'pepper',
+            'name' => 'перець для гриля',
+            'product_name' => 'перець',
+            'purpose' => 'для гриля',
+            'category' => 'food',
+            'quantity' => 1.0,
+            'unit' => 'кг',
+        ];
+        $pepper = [
+            'product_id' => 'sweet-pepper',
+            'name' => 'Перець червоний солодкий',
+            'slug' => 'perets-chervonyi-solodkyi',
+            'price' => 140.0,
+            'stock' => 10.0,
+            'available' => true,
+            'weighted' => true,
+            'step' => 0.1,
+            'display_ratio' => '1 кг',
+        ];
+        $carrot = [
+            ...$pepper,
+            'product_id' => 'carrot',
+            'name' => 'Морква молода',
+            'slug' => 'morkva-moloda',
+            'price' => 40.0,
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'phase' => CartRunPhase::Deciding,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+                'last_candidates' => [$carrot, $pepper],
+            ],
+            'staged_items' => [],
+        ]);
+        $decision = new CartAgentDecisionData(
+            action: 'select',
+            selectedProductId: 'carrot',
+            query: null,
+            quantity: 1,
+            reason: 'Cheaper role replacement.',
+            question: null,
+            audit: $this->audit(['pepper'], [], true),
+            isReplacement: true,
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(
+                new CartAgentPreparationData([]),
+                [$decision],
+                $this->audit(['pepper'], [], true),
+            ),
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame([], $run->staged_items);
+        $this->assertSame(CartRunPhase::Deciding, $run->phase);
+        $this->assertSame(['sweet-pepper'], collect(data_get($run->state, 'last_candidates'))->pluck('product_id')->all());
+    }
+
     public function test_search_filters_a_ready_marinade_for_an_event_that_forbids_it(): void
     {
         [$owner, $event] = $this->eventWithPlan();
@@ -3441,6 +3702,15 @@ class EventCartRunTest extends TestCase
 
 final class FakeCartAgent implements CartProductAgent
 {
+    /** @var array<int, CartAgentSearchIntentData> */
+    public array $searchIntents = [];
+
+    /** @var array<int, array<string, mixed>> */
+    public array $diversifiedNeeds = [];
+
+    /** @var array<int, array<string, mixed>> */
+    public array $decisionContexts = [];
+
     /** @param array<int, CartAgentDecisionData> $decisions */
     public function __construct(
         private readonly CartAgentPreparationData $preparation,
@@ -3456,8 +3726,22 @@ final class FakeCartAgent implements CartProductAgent
         return $this->preparation;
     }
 
+    public function diversifySearch(
+        array $need,
+        ?HarnessRun $harnessRun = null,
+    ): CartAgentSearchIntentData {
+        $this->diversifiedNeeds[] = $need;
+
+        return array_shift($this->searchIntents) ?? new CartAgentSearchIntentData(
+            productName: (string) data_get($need, 'search_queries.0', data_get($need, 'name')),
+            purpose: '',
+        );
+    }
+
     public function decide(array $context, ?HarnessRun $harnessRun = null): CartAgentDecisionData
     {
+        $this->decisionContexts[] = $context;
+
         return array_shift($this->decisions);
     }
 
@@ -3495,6 +3779,9 @@ final class FakeCartGateway implements SilpoCartGateway
 
     /** @var array<int, string> */
     public array $searchQueries = [];
+
+    /** @var array<int, int> */
+    public array $searchLimits = [];
 
     /** @var array{categories: array<int, array<string, mixed>>, sets: array<int, array<string, mixed>>} */
     public array $catalogScopes = ['categories' => [], 'sets' => []];
@@ -3878,10 +4165,11 @@ final class FakeCartGateway implements SilpoCartGateway
         string $accessToken,
         SilpoCartContextData $cart,
         string $query,
-        int $limit = 8,
+        int $limit = 30,
         ?HarnessRun $harnessRun = null,
     ): array {
         $this->searchQueries[] = $query;
+        $this->searchLimits[] = $limit;
 
         return $this->searchResults[$query] ?? [];
     }

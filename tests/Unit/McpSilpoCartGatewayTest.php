@@ -161,6 +161,24 @@ class McpSilpoCartGatewayTest extends TestCase
         $this->assertSame(4, $commitArguments['products'][0]['quantity']);
     }
 
+    public function test_text_search_defaults_to_and_caps_results_at_thirty(): void
+    {
+        $gateway = $this->app->make(McpSilpoCartGateway::class);
+        $cart = $this->cart();
+
+        $gateway->searchProducts('secret-token', $cart, 'перець');
+        $gateway->searchProducts('secret-token', $cart, 'вода', 100);
+
+        $limits = Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'params.name') === 'silpo_find_products_batch',
+        )->map(fn (array $record): int => (int) data_get(
+            $record[0]->data(),
+            'params.arguments.limit',
+        ))->values()->all();
+
+        $this->assertSame([30, 30], $limits);
+    }
+
     public function test_cart_reset_requires_the_live_clear_schema_and_calls_snapshot_clear_then_immediate_readback(): void
     {
         $cleared = false;

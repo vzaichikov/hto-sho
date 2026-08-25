@@ -109,7 +109,7 @@ interface SilpoCartGateway
         string $accessToken,
         SilpoCartContextData $cart,
         string $query,
-        int $limit = 8,
+        int $limit = 30,
         ?HarnessRun $harnessRun = null,
     ): array;
 

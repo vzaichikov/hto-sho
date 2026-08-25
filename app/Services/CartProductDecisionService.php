@@ -6,6 +6,7 @@ use App\Contracts\CartProductAgent;
 use App\Data\CartAgentAuditData;
 use App\Data\CartAgentDecisionData;
 use App\Data\CartAgentPreparationData;
+use App\Data\CartAgentSearchIntentData;
 use App\HarnessEntryKind;
 use App\Models\HarnessRun;
 use Illuminate\Http\Client\Response;
@@ -18,6 +19,8 @@ use UnexpectedValueException;
 final class CartProductDecisionService implements CartProductAgent
 {
     private const PREPARATION_BATCH_SIZE = 6;
+
+    private const USER_DATA_DELIMITER = '--- USER DATA ---';
 
     public function __construct(
         private readonly AiRequestFactory $requestFactory,
@@ -89,6 +92,33 @@ final class CartProductDecisionService implements CartProductAgent
         }
     }
 
+    public function diversifySearch(
+        array $need,
+        ?HarnessRun $harnessRun = null,
+    ): CartAgentSearchIntentData {
+        $prompt = <<<'PROMPT'
+Прямий пошук Сільпо за повною людською назвою потреби повернув рівно нуль товарів. Лише тепер розділи пошуковий намір на назву товару та його призначення.
+
+Правила:
+- product_name — найкоротша позитивна назва самого товару або товарної сімʼї українською, без кількості, фасування, заборон, людей, рецепта і призначення;
+- purpose — решта людського наміру: спосіб використання, приготування, форма, роль у меню та релевантні властивості; не вигадуй нових вимог;
+- не змінюй названу ідентичність товару на рольову заміну;
+- для «перець для гриля» поверни product_name «перець» і purpose «для гриля»;
+- виведи лише JSON за схемою.
+PROMPT;
+        $prompt .= "\n\n".self::USER_DATA_DELIMITER;
+        $prompt .= "\n\nПОТРЕБА:\n".$this->json($need);
+        $payload = $this->requestPayload(
+            $prompt,
+            'cart_agent_search_intent',
+            $this->searchIntentSchema(),
+        );
+
+        return CartAgentSearchIntentData::from($this->decodedPayload(
+            $this->send($payload, $harnessRun, 'Уточнення назви й призначення товару'),
+        ));
+    }
+
     /**
      * @param  array<string, mixed>  $eventContext
      * @param  array<string, mixed>  $shoppingPlan
@@ -108,19 +138,20 @@ final class CartProductDecisionService implements CartProductAgent
 - явні виключення з підсумку події, погодженого списку, приміток і warnings є абсолютними для кожної потреби;
 - якщо план прямо дозволяє запасний варіант після бажаного, не перетворюй бажану властивість на жорстку частину canonical name: назва потреби має лишатися базовим товаром, а пріоритет і дозволений fallback збережи у note та search_queries;
 - quantity та unit описують загальну потребу події, а не кількість упаковок;
-- search_queries містить 2–6 незалежних коротких природних запитів українською: спочатку найкраща позитивна каталожна назва з одного-двох слів, далі лема, синонім, інший порядок слів або придатна форма/відруб, а останні один-два запити можуть шукати найближчу альтернативу з тією самою роллю в меню; кожен запит має називати товар або товарну сімʼю — ніколи не людину, дію, інструкцію чи перевірку;
+- name зберігає повну людську назву потреби й буде першим прямим запитом у каталог; не скорочуй його лише заради пошуку;
+- search_queries містить 2–6 запасних коротких природних запитів українською: спочатку найкраща позитивна каталожна назва з одного-двох слів, далі лема, синонім, інший порядок слів або придатна форма/відруб, а останні один-два запити можуть шукати найближчу альтернативу з тією самою роллю в меню; кожен запит має називати товар або товарну сімʼю — ніколи не людину, дію, інструкцію чи перевірку;
 - рольова заміна зберігає категорію та призначення: один свіжий салатний овоч може замінити інший, один безцукровий безалкогольний напій — інший; не кодуй конкретні пари замін і не змінюй вид мʼяса, заборону алкоголю, сирий стан або відомі алергени;
 - серед однаково доречних фасованих кандидатів віддавай перевагу тому, чиї цілі упаковки дають потрібний обʼєм або вагу без зайвого запасу;
 - кожен пошуковий запит без кількості, ваги, обʼєму, фасування та негативних вимог, які каталог зазвичай не індексує; безпеку застосунок перевірить серед кандидатів і в деталях;
 - кожен key короткий, унікальний, непромовистий ASCII у форматі n_01, n_02 тощо; не додавай у key назву товару;
 - виведи лише JSON за схемою.
-
-КОНТЕКСТ ПОДІЇ:
 PROMPT;
         $prompt .= "\n\nОСОБЛИВОСТІ ПОШУКУ В КАТАЛОЗІ СІЛЬПО:\n".$this->json(
             config('silpo_catalog_search.prompt_guidance', []),
         );
-        $prompt .= "\n".$this->json($eventContext);
+        $prompt .= "\nЦей масив є ДОДАТКОВОЮ вимогою до повної відповіді, а не переліком єдиних потрібних позицій. У needs усе одно мають бути покриті ВСІ active_source_indexes поточної партії і лише вони. Для кожного source_index у масиві декомпозиції поверни щонайменше required_distinct_needs і не більше трьох різних товарних потреб з тим самим source_index; для кожного іншого активного source_index поверни щонайменше одну потребу. Один загальний запис для позначеної групи або пропуск будь-якого active_source_index є невалідним.";
+        $prompt .= "\n\n".self::USER_DATA_DELIMITER;
+        $prompt .= "\n\nКОНТЕКСТ ПОДІЇ:\n".$this->json($eventContext);
         $prompt .= "\n\nАКТИВНА ПАРТІЯ ТА ПОВНИЙ ПОГОДЖЕНИЙ СПИСОК:\n".$this->json($shoppingPlan);
         $prompt .= "\n\nОБОВʼЯЗКОВА ДЕКОМПОЗИЦІЯ:\n".$this->json(
             collect($shoppingPlan['items'] ?? [])
@@ -139,7 +170,6 @@ PROMPT;
                 ->values()
                 ->all(),
         );
-        $prompt .= "\nЦей масив є ДОДАТКОВОЮ вимогою до повної відповіді, а не переліком єдиних потрібних позицій. У needs усе одно мають бути покриті ВСІ active_source_indexes поточної партії і лише вони. Для кожного source_index у масиві декомпозиції поверни щонайменше required_distinct_needs і не більше трьох різних товарних потреб з тим самим source_index; для кожного іншого активного source_index поверни щонайменше одну потребу. Один загальний запис для позначеної групи або пропуск будь-якого active_source_index є невалідним.";
 
         return $prompt;
     }
@@ -166,13 +196,12 @@ PROMPT;
 - не змінюй зміст погодженого плану, загальну quantity, unit, optional чи обмеження;
 - не посилюй бажану властивість до обовʼязкової, коли авторитетний план прямо дозволяє fallback; canonical name називає базовий товар, а пріоритет і fallback лишаються у note та search_queries;
 - розподіли quantity одного plan item між його потребами; застосунок нормалізує суму точно до плану;
-- перший search_queries є найкращим коротким позитивним запитом з одного-двох слів; не став попереду ширшу родову категорію, якщо план називає конкретну товарну сімʼю;
+- name зберігає повну людську назву потреби; перший search_queries є її найкращим коротким позитивним запасним запитом з одного-двох слів і не замінює name;
 - кожен search_queries містить 2–6 різних коротких назв товару, синонімів або допустимих рольових альтернатив без кількості й негативних інструкцій;
 - виведи лише JSON за схемою.
-
-КОНТЕКСТ ПОДІЇ:
 PROMPT;
-        $prompt .= "\n".$this->json($eventContext);
+        $prompt .= "\n\n".self::USER_DATA_DELIMITER;
+        $prompt .= "\n\nКОНТЕКСТ ПОДІЇ:\n".$this->json($eventContext);
         $prompt .= "\n\nАВТОРИТЕТНИЙ ПЛАН:\n".$this->json($planItems);
         $prompt .= "\n\nПОПЕРЕДНІЙ DRAFT NEEDS:\n".$this->json($draftNeeds);
         $prompt .= "\n\nСТРУКТУРНІ ПОМИЛКИ:\n".$this->json($validationIssues);
@@ -211,7 +240,9 @@ PROMPT;
 
 Явні виключення з product_constraints, food_constraints і current_need є жорсткими, якщо каталог прямо підтверджує конфлікт. Товар із відомим забороненим алергеном не обирай. Якщо після кількох перевірок Сільпо не показало алергенів або повного складу, обери найкращий кандидат без видимого конфлікту й прямо поясни, що паковання треба перевірити людині.
 
-safety_evidence описує доказ безпеки саме для цього рішення: not_required — лише коли для передбачуваних споживачів товару немає релевантного обмеження і перевірка паковання не потрібна; verified — коли назва, атрибути або inspect-деталі позитивно доводять релевантну вимогу; unverified — коли релевантний склад чи алерген не розкрито, але прямого конфлікту немає. Якщо reason або audit вимагає перевірити паковання через відсутні дані про склад чи алергени, safety_evidence обовʼязково unverified. unverified є видимим застереженням, а не автоматичною відмовою від придатного товару. is_replacement=true став для обраної ширшої рольової заміни, а is_replacement=false — для точного товару чи синонімічної назви без зміни суті.
+safety_evidence описує доказ безпеки саме для цього рішення: not_required — коли перевірка паковання не потрібна, зокрема для очевидно однокомпонентного сирого мʼяса без маринаду/приправ, цілого свіжого плоду чи овочу та звичайної води щодо неповʼязаного алергену; verified — коли назва, атрибути або inspect-деталі позитивно доводять релевантну вимогу; unverified — коли релевантний склад композитного або обробленого продукту не розкрито, але прямого конфлікту немає. Ковбаси, мариноване чи приправлене мʼясо, чіпси, соуси, суміші, паніровані, начинені та інші складені продукти лишаються суворими. Явний алерген або «може містити» завжди означає відмову. Якщо reason або audit вимагає перевірити паковання через відсутні дані про склад чи алергени, safety_evidence обовʼязково unverified. unverified є видимим застереженням, а не автоматичною відмовою від придатного товару. is_replacement=true став для обраної ширшої рольової заміни, а is_replacement=false — для точного товару чи синонімічної назви без зміни суті.
+
+Оціни весь масив candidates одним рішенням, а не як окремі запити. Спочатку розділи його подумки на: точна ідентичність і придатне призначення; точна ідентичність, але непридатна форма/призначення; допустима рольова заміна; непридатне. Обирай найкращий товар із першої групи. Рольову заміну дозволено лише коли серед candidates немає жодного придатного товару з product_name поточної потреби. Після відповідності і призначення порівнюй фасування, потрібну кількість і ціну.
 
 Не поширюй особисте обмеження одного учасника механічно на кожен спільний товар. Застосовуй його як обовʼязкову позитивну властивість SKU лише коли current_need прямо призначає товар цій людині, робить його єдиним придатним варіантом для неї або явно переносить це обмеження у назву чи note. Якщо людина може не споживати конкретний спільний товар і має інші придатні їжу чи напої, товар для решти гостей можна обрати з чітким персональним попередженням; пряма заборонена алергенна ознака все одно вимагає відхилення.
 
@@ -244,8 +275,6 @@ safety_evidence описує доказ безпеки саме для цьог�
 ID з current_need.inspected_products уже перевірені, а їхні доступні картки є в inspected_details. Не проси inspect для такого ID повторно: після наявних перевірок обери select, retry, skip або ask залежно від доказів.
 
 Кожна відповідь обовʼязково містить coverage audit після цього рішення: що вже покрито, що лишилось і чи вистачає кількості на всіх людей. У covered_need_keys та remaining_need_keys перелічи кожен key з all_needs рівно один раз, включно з уже вибраними раніше потребами. Не позначай неперевірену потребу покритою. Виведи лише JSON за схемою.
-
-СТАН КРОКУ:
 PROMPT;
         $prompt .= "\n\nОСОБЛИВОСТІ ПОШУКУ В КАТАЛОЗІ СІЛЬПО:\n".$this->json(
             config('silpo_catalog_search.prompt_guidance', []),
@@ -263,7 +292,8 @@ PROMPT;
 - це не ручне виправлення списку: рішення все одно має спиратися лише на current_need і catalog candidates.
 PROMPT;
         }
-        $prompt .= "\n".$this->json($context);
+        $prompt .= "\n\n".self::USER_DATA_DELIMITER;
+        $prompt .= "\n\nСТАН КРОКУ:\n".$this->json($context);
         $payload = $this->requestPayload($prompt, 'cart_agent_decision', $this->decisionSchema());
 
         $decoded = $this->decodedPayload($this->send($payload, $harnessRun, 'Вибір товару'));
@@ -312,10 +342,9 @@ PROMPT;
 - is_replacement має бути true лише для явної рольової заміни зі зміною суті товару;
 - coverage audit мусить розділити всі key з all_needs між covered_need_keys та remaining_need_keys без пропусків і дублів;
 - виведи лише JSON за схемою.
-
-СТАН КРОКУ:
 PROMPT;
-        $prompt .= "\n".$this->json($context);
+        $prompt .= "\n\n".self::USER_DATA_DELIMITER;
+        $prompt .= "\n\nСТАН КРОКУ:\n".$this->json($context);
         $prompt .= "\n\nНЕВАЛІДНЕ РІШЕННЯ:\n".$this->json($draftDecision);
         $prompt .= "\n\nПОМИЛКИ ВАЛІДАЦІЇ:\n".$this->json($validationIssues);
 
@@ -356,10 +385,9 @@ PROMPT;
 Не поширюй особисте обмеження одного учасника механічно на весь кошик. Спочатку віддай перевагу придатному безпечному варіанту, якщо він доступний. Відомий конфлікт є блокером, коли товар призначений саме для цієї людини або вимога явно спільна для групи. Якщо безпечного варіанта немає, але товар може нормально спожити решта гостей, не відкидай його: complete може лишатися true, а у warnings назви учасника, відомий конфлікт і прямо скажи, що цій людині товар не можна споживати. Не вважай автоматично, що кожен учасник їстиме кожну спільну позицію.
 
 Відомий конфлікт з алкоголем, видом мʼяса або формою продукту не приймай. Каталожне маркування «безалкогольний» приймай як безалкогольний статус навіть за технічної декларації до 0,5%, якщо користувач прямо не вимагав саме 0,0%; не перетворюй звичайне прохання безалкогольного напою на суворішу умову. Вичерпання пошуків не робить несумісну фізичну форму сумісною: товар, який можна готувати на тому самому обладнанні, не покриває іншу названу страву або порційну форму без позитивного доказу. Якщо справді непокриту обовʼязкову потребу можна виправити ще одним пошуком, поверни її key у revisit_need_key та новий запит. Не відкривай уже staged-потребу лише через рольову заміну або відсутню інформацію на сторінці товару. Не вигадуй нових потреб. Виведи лише JSON за схемою.
-
-СТАН ПЕРЕД ЗАПИСОМ:
 PROMPT;
-        $prompt .= "\n".$this->json($context);
+        $prompt .= "\n\n".self::USER_DATA_DELIMITER;
+        $prompt .= "\n\nСТАН ПЕРЕД ЗАПИСОМ:\n".$this->json($context);
         $payload = $this->requestPayload($prompt, 'cart_agent_audit', $this->auditSchema());
 
         $decoded = $this->decodedPayload(
@@ -378,12 +406,15 @@ PROMPT;
      */
     private function requestPayload(string $prompt, string $schemaName, array $schema): array
     {
+        [$instructions, $userInput] = $this->promptParts($prompt);
+
         if (config('services.ai.provider') === 'openai') {
             return [
                 'model' => $this->requestFactory->model(),
+                'instructions' => $instructions,
                 'input' => [[
                     'role' => 'user',
-                    'content' => [['type' => 'input_text', 'text' => $prompt]],
+                    'content' => [['type' => 'input_text', 'text' => $userInput]],
                 ]],
                 'text' => [
                     'format' => [
@@ -398,12 +429,30 @@ PROMPT;
 
         return [
             'model' => $this->requestFactory->model(),
-            'messages' => [[
-                'role' => 'user',
-                'content' => [['type' => 'text', 'text' => $prompt."\nПоверни лише один валідний JSON object."]],
-            ]],
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => [['type' => 'text', 'text' => $instructions]],
+                ],
+                [
+                    'role' => 'user',
+                    'content' => [['type' => 'text', 'text' => $userInput."\nПоверни лише один валідний JSON object."]],
+                ],
+            ],
             'response_format' => ['type' => 'json_object'],
         ];
+    }
+
+    /** @return array{0: string, 1: string} */
+    private function promptParts(string $prompt): array
+    {
+        $parts = explode(self::USER_DATA_DELIMITER, $prompt, 2);
+
+        if (count($parts) !== 2 || blank($parts[0]) || blank($parts[1])) {
+            throw new RuntimeException('Cart agent prompt must separate developer instructions from user data.');
+        }
+
+        return [trim($parts[0]), trim($parts[1])];
     }
 
     /** @param array<string, mixed> $payload */
@@ -604,6 +653,20 @@ PROMPT;
                         ],
                     ],
                 ],
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function searchIntentSchema(): array
+    {
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['product_name', 'purpose'],
+            'properties' => [
+                'product_name' => ['type' => 'string'],
+                'purpose' => ['type' => 'string'],
             ],
         ];
     }
