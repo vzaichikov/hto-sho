@@ -2,6 +2,8 @@
 
 namespace App;
 
+use DateTimeInterface;
+
 enum EventAnalysisStage: string
 {
     case WaitingForQuiet = 'waiting_for_quiet';
@@ -21,7 +23,23 @@ enum EventAnalysisStage: string
         };
     }
 
-    public function message(): string
+    public function message(?string $taskId = null, ?DateTimeInterface $startedAt = null): string
+    {
+        $phrases = config("goose_analysis_phrases.{$this->value}");
+
+        if (! is_array($phrases) || $phrases === []) {
+            return $this->fallbackMessage();
+        }
+
+        $sequence = $startedAt === null
+            ? 0
+            : intdiv(max(0, now()->getTimestamp() - $startedAt->getTimestamp()), 4);
+        $offset = abs(crc32(($taskId ?: 'goose-analysis').":{$this->value}")) % count($phrases);
+
+        return $phrases[($offset + $sequence) % count($phrases)];
+    }
+
+    private function fallbackMessage(): string
     {
         return match ($this) {
             self::WaitingForQuiet => 'Ніфіга собі ви тут понаписували. Гусь рахує до пʼяти.',

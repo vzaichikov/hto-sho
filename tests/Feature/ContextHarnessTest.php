@@ -221,6 +221,12 @@ class ContextHarnessTest extends TestCase
             ->assertOk()
             ->assertSeeInOrder(['Потім перенесли на неділю.', 'Спочатку домовились про суботу.'])
             ->assertSee('data-analysis-overlay', escape: false)
+            ->assertSee('data-analysis-minimize', escape: false)
+            ->assertSee('data-analysis-minimized', escape: false)
+            ->assertSee('data-analysis-restore', escape: false)
+            ->assertSee('data-analysis-steps', escape: false)
+            ->assertSee('Гусь розгрібає контекст')
+            ->assertSee('Не заважайте, він красивий')
             ->assertSee('data-source-card', escape: false)
             ->assertSee('Що Гусь уже бачив')
             ->assertSeeInOrder(['Контекст', 'Питання', 'Список', 'Сільпо'])
@@ -229,8 +235,11 @@ class ContextHarnessTest extends TestCase
         $javascript = file_get_contents(resource_path('js/app.js'));
         $css = file_get_contents(resource_path('css/app.css'));
         $this->assertStringContainsString('setInterval(pollStatus, 2000)', $javascript);
+        $this->assertStringContainsString('window.sessionStorage', $javascript);
+        $this->assertStringContainsString('overlay.showModal()', $javascript);
         $this->assertStringContainsString('prefers-reduced-motion: reduce', $css);
         $this->assertStringContainsString('.goose-working', $css);
+        $this->assertStringContainsString('.analysis-step-arrival', $css);
     }
 
     private function fakePng(string $name): UploadedFile

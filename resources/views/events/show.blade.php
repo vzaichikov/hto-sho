@@ -10,6 +10,10 @@
     $hasBlockingQuestion = $needsQuestionRefresh || collect($questions)->contains('blocking', true);
     $analysisActive = $event->hasActiveAnalysis();
     $analysisProgress = $event->analysis_stage?->progress() ?? 0;
+    $analysisMessage = $event->analysis_stage?->message(
+        $event->analysis_task_id,
+        $event->analysis_started_at,
+    ) ?? '';
     $participantStatusLabels = [
         'confirmed' => 'Буде',
         'declined' => 'Не буде',
@@ -823,19 +827,71 @@
         @endif
     </div>
 
-    <aside class="fixed left-1/2 top-1/2 z-50 {{ $analysisActive ? '' : 'hidden' }} w-[min(24rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[24px] border-2 border-ink bg-paper p-4 shadow-[6px_7px_0_#20201D]" data-analysis-overlay data-minimized="false" aria-live="polite">
+    <dialog
+        class="m-auto h-[min(58rem,calc(100dvh-1rem))] w-[min(72rem,calc(100vw-1rem))] overflow-hidden rounded-[30px] border-2 border-ink bg-paper p-0 text-ink shadow-[9px_10px_0_#20201D] backdrop:bg-ink/60"
+        data-analysis-overlay
+        data-analysis-id="{{ $event->analysis_task_id }}"
+        data-analysis-stage="{{ $event->analysis_stage?->value }}"
+        data-analysis-progress-value="{{ $analysisProgress }}"
+        data-analysis-message-value="{{ $analysisMessage }}"
+        data-analysis-error-value="{{ $event->analysis_error }}"
+        aria-labelledby="analysis-dialog-title"
+    >
+        <div class="flex h-full min-h-0 flex-col">
+            <header class="flex items-start justify-between gap-4 border-b-2 border-ink/10 bg-yellow/35 px-5 py-4 sm:px-7">
+                <div>
+                    <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Новий матеріал уже під крилом</p>
+                    <h3 class="mt-1 font-display text-3xl leading-[1.1] sm:text-4xl" id="analysis-dialog-title">Гусь розгрібає контекст</h3>
+                </div>
+                <form method="dialog">
+                    <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-translate-y-0.5 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-analysis-minimize aria-label="Згорнути вікно контексту">−</button>
+                </form>
+            </header>
+
+            <div class="grid min-h-0 flex-1 grid-cols-[minmax(7.5rem,0.72fr)_minmax(0,1.28fr)] gap-3 p-3 sm:grid-cols-[minmax(15rem,0.85fr)_minmax(0,1.15fr)] sm:gap-6 sm:p-6">
+                <section class="relative flex min-h-0 items-center justify-center overflow-hidden rounded-[24px] bg-yellow/30 px-2 py-4 sm:px-5">
+                    <span class="absolute left-3 top-3 -rotate-2 rounded-sm bg-paper px-3 py-1 font-display text-base leading-[1.15] shadow-[2px_2px_0_#F7C84B] sm:left-5 sm:top-5 sm:text-xl">Не заважайте, він красивий</span>
+                    <img class="goose-working h-[min(23rem,54dvh)] w-full max-w-[21rem] object-contain sm:h-[min(34rem,68dvh)]" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо працює з новим контекстом">
+                </section>
+
+                <section class="flex min-h-0 flex-col rounded-[24px] bg-ink p-4 text-paper sm:p-6">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-soft">Що там відбувається</p>
+                            <h4 class="mt-1 font-display text-2xl leading-[1.15] text-yellow sm:text-3xl" data-analysis-status-title>Гусь працює</h4>
+                        </div>
+                        <span class="mt-2 size-2.5 animate-pulse rounded-full bg-green-soft" aria-hidden="true" data-analysis-live-dot></span>
+                    </div>
+
+                    <ol class="mt-5 min-h-0 flex-1 space-y-3 overflow-y-auto pr-2 text-sm leading-6 sm:text-base" data-analysis-steps aria-live="polite"></ol>
+
+                    <div class="mt-5 h-3 shrink-0 overflow-hidden rounded-full bg-paper/15">
+                        <div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: {{ $analysisProgress }}%" data-analysis-progress></div>
+                    </div>
+                    <span class="sr-only" data-analysis-progress-label>{{ $analysisProgress }}%</span>
+                </section>
+            </div>
+        </div>
+    </dialog>
+
+    <aside
+        class="fixed inset-x-4 bottom-4 z-50 hidden rounded-[24px] border-2 border-ink bg-paper p-4 shadow-[6px_7px_0_#20201D] sm:inset-x-auto sm:right-5 sm:w-[min(22rem,calc(100vw-2.5rem))]"
+        data-analysis-minimized
+        aria-live="polite"
+        aria-atomic="true"
+    >
         <div class="flex items-start gap-3">
-            <img class="goose-working -ml-1 size-16 shrink-0 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо працює">
-            <div class="min-w-0 flex-1" data-analysis-details>
+            <img class="goose-working -ml-1 size-16 shrink-0 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="">
+            <div class="min-w-0 flex-1">
                 <div class="flex items-start justify-between gap-2">
-                    <p class="font-display text-xl leading-tight">Гусь працює</p>
-                    <button class="rounded-full bg-canvas px-2.5 py-1 text-xs font-bold" type="button" data-analysis-minimize aria-label="Згорнути повідомлення">−</button>
+                    <p class="font-display text-xl leading-[1.15]" data-analysis-minimized-title>Гусь працює</p>
+                    <button class="grid size-8 shrink-0 place-items-center rounded-full bg-canvas text-base font-extrabold transition hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-green" type="button" data-analysis-restore aria-label="Розгорнути вікно контексту">+</button>
                 </div>
-                <p class="mt-1 text-sm leading-5 text-muted" data-analysis-message>{{ $event->analysis_stage?->message() }}</p>
+                <p class="mt-1 text-sm leading-5 text-muted" data-analysis-minimized-status>{{ $analysisMessage }}</p>
                 <div class="mt-3 h-2 overflow-hidden rounded-full bg-ink/10">
-                    <div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: {{ $analysisProgress }}%" data-analysis-progress></div>
+                    <div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: {{ $analysisProgress }}%" data-analysis-minimized-progress></div>
+                    <span class="sr-only" data-analysis-minimized-progress-label>{{ $analysisProgress }}%</span>
                 </div>
-                <span class="sr-only" data-analysis-progress-label>{{ $analysisProgress }}</span>
             </div>
         </div>
     </aside>

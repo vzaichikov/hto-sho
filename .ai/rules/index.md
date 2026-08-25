@@ -19,6 +19,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | app/Http/Controllers/EventJournalController.php | .ai/rules/http-controllers.md |
 | app/{Jobs,Services,Http/Controllers}/**/*Cart*.php | .ai/rules/jobs-services-http-controllers.md |
 | app/Jobs/** | .ai/rules/jobs.md |
+| {resources/views/events/**,resources/js/app.js,config/goose_analysis_phrases.php} | .ai/rules/js.md |
 | {vite.config.js,resources/views/components/layouts/**} | .ai/rules/layouts.md |
 | app/{Models,Services}/Harness*.php | .ai/rules/models-services.md |
 | resources/**/landing* | .ai/rules/resources.md |

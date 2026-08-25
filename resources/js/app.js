@@ -1395,30 +1395,193 @@ const workspace = document.querySelector('[data-event-workspace]');
 
 if (workspace) {
     const overlay = document.querySelector('[data-analysis-overlay]');
-    const analysisForm = document.querySelector('[data-analysis-form]');
-    const analysisButton = document.querySelector('[data-analysis-button]');
+    const minimizedOverlay = document.querySelector('[data-analysis-minimized]');
+    const analysisForms = Array.from(document.querySelectorAll('[data-analysis-form]'));
+    const analysisButtons = analysisForms
+        .map((form) => form.querySelector('[data-analysis-button]'))
+        .filter(Boolean);
     const minimizeButton = document.querySelector('[data-analysis-minimize]');
+    const restoreButton = document.querySelector('[data-analysis-restore]');
+    const analysisSteps = overlay?.querySelector('[data-analysis-steps]');
     const initialStateVersion = Number(workspace.dataset.eventStateVersion);
     const initialPlanStatus = workspace.dataset.eventPlanStatus;
+    let analysisTaskId = null;
+    let analysisMinimized = false;
+
+    const activeAnalysisStages = ['waiting_for_quiet', 'waiting_for_images', 'summarizing'];
+    const analysisScrollBehavior = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    const analysisStorageKey = (taskId) => `hto-sho:analysis:${taskId}:steps`;
+    const analysisTitle = (stage) => ({
+        waiting_for_quiet: 'Гусь слухає новий контекст',
+        waiting_for_images: 'Гусь читає картинки',
+        summarizing: 'Гусь складає все докупи',
+        completed: 'Гусь усе розгріб',
+        completed_with_warnings: 'Гусь усе розгріб, але є нюанси',
+        failed: 'Гусь перечепився',
+    })[stage] ?? 'Гусь працює';
+
+    const storedAnalysisSteps = (taskId) => {
+        if (! taskId) {
+            return [];
+        }
+
+        try {
+            const stored = JSON.parse(window.sessionStorage.getItem(analysisStorageKey(taskId)) ?? '[]');
+
+            return Array.isArray(stored)
+                ? stored.filter((message) => typeof message === 'string' && message.trim() !== '').slice(-100)
+                : [];
+        } catch {
+            return [];
+        }
+    };
+
+    const saveAnalysisSteps = () => {
+        if (! analysisTaskId || ! analysisSteps) {
+            return;
+        }
+
+        const messages = Array.from(analysisSteps.children)
+            .map((row) => row.textContent)
+            .filter(Boolean)
+            .slice(-100);
+
+        try {
+            window.sessionStorage.setItem(analysisStorageKey(analysisTaskId), JSON.stringify(messages));
+        } catch {
+            // The live flow still works when browser storage is unavailable.
+        }
+    };
+
+    const appendAnalysisStep = (message, { animate = true, persist = true } = {}) => {
+        const normalizedMessage = typeof message === 'string' ? message.trim() : '';
+
+        if (! analysisSteps || normalizedMessage === '' || analysisSteps.lastElementChild?.textContent === normalizedMessage) {
+            return;
+        }
+
+        const row = document.createElement('li');
+        row.className = 'border-l-2 border-yellow/55 pl-3 text-paper/90';
+
+        if (animate) {
+            row.classList.add('analysis-step-arrival');
+        }
+
+        row.textContent = normalizedMessage;
+        analysisSteps.append(row);
+
+        while (analysisSteps.children.length > 100) {
+            analysisSteps.firstElementChild?.remove();
+        }
+
+        if (persist) {
+            saveAnalysisSteps();
+        }
+
+        row.scrollIntoView({ block: 'nearest', behavior: analysisScrollBehavior() });
+    };
+
+    const useAnalysisTask = (taskId) => {
+        if (! taskId || taskId === analysisTaskId || ! analysisSteps) {
+            return;
+        }
+
+        analysisTaskId = taskId;
+        analysisSteps.replaceChildren();
+        storedAnalysisSteps(taskId).forEach((message) => {
+            appendAnalysisStep(message, { animate: false, persist: false });
+        });
+        analysisSteps.lastElementChild?.scrollIntoView({ block: 'nearest' });
+    };
+
+    const setAnalysisButtons = (active) => {
+        analysisButtons.forEach((button) => {
+            button.dataset.idleLabel ||= button.textContent;
+            button.disabled = active;
+            button.textContent = active ? 'Гусь уже гребе…' : button.dataset.idleLabel;
+        });
+    };
+
+    const openAnalysisDialog = () => {
+        if (! (overlay instanceof HTMLDialogElement) || analysisMinimized) {
+            return;
+        }
+
+        minimizedOverlay?.classList.add('hidden');
+
+        if (! overlay.open) {
+            overlay.showModal();
+        }
+    };
+
+    const closeAnalysisExperience = (clearStoredSteps = false) => {
+        if (overlay instanceof HTMLDialogElement && overlay.open) {
+            overlay.close();
+        }
+
+        minimizedOverlay?.classList.add('hidden');
+        analysisMinimized = false;
+
+        if (clearStoredSteps && analysisTaskId) {
+            try {
+                window.sessionStorage.removeItem(analysisStorageKey(analysisTaskId));
+            } catch {
+                // Nothing needs cleanup when browser storage is unavailable.
+            }
+        }
+    };
+
+    const updateMinimizedAnalysis = ({ title, message, progress, active }) => {
+        if (! minimizedOverlay) {
+            return;
+        }
+
+        minimizedOverlay.querySelector('[data-analysis-minimized-title]').textContent = title;
+        minimizedOverlay.querySelector('[data-analysis-minimized-status]').textContent = message;
+        minimizedOverlay.querySelector('[data-analysis-minimized-progress]').style.width = `${progress}%`;
+        minimizedOverlay.querySelector('[data-analysis-minimized-progress-label]').textContent = `${progress}%`;
+        minimizedOverlay.querySelector('img')?.classList.toggle('goose-working', active);
+    };
 
     const setOverlay = (task) => {
         if (! overlay || ! task) {
-            overlay?.classList.add('hidden');
+            closeAnalysisExperience();
 
             return;
         }
 
-        const active = ['waiting_for_quiet', 'waiting_for_images', 'summarizing'].includes(task.stage);
+        const taskId = task.id ?? task.task_id ?? analysisTaskId;
+        const active = activeAnalysisStages.includes(task.stage);
         const failed = task.stage === 'failed';
-        overlay.classList.toggle('hidden', ! active && ! failed);
-        overlay.querySelector('[data-analysis-message]').textContent = task.error || task.message || '';
-        overlay.querySelector('[data-analysis-progress]').style.width = `${task.progress ?? 0}%`;
-        overlay.querySelector('[data-analysis-progress-label]').textContent = task.progress ?? 0;
-        overlay.querySelector('img')?.classList.toggle('goose-working', active);
+        const progress = Number(task.progress ?? 0);
+        const title = analysisTitle(task.stage);
+        const message = task.error || task.message || title;
 
-        if (analysisButton) {
-            analysisButton.disabled = active;
-            analysisButton.textContent = active ? 'Гусь уже гребе…' : 'Гусь, розгреби все';
+        useAnalysisTask(taskId);
+        appendAnalysisStep(task.message);
+
+        if (task.error) {
+            appendAnalysisStep(task.error);
+        }
+
+        overlay.querySelector('[data-analysis-status-title]').textContent = title;
+        overlay.querySelector('[data-analysis-progress]').style.width = `${progress}%`;
+        overlay.querySelector('[data-analysis-progress-label]').textContent = `${progress}%`;
+        overlay.querySelector('img')?.classList.toggle('goose-working', active);
+        overlay.querySelector('[data-analysis-live-dot]').classList.toggle('hidden', ! active);
+        updateMinimizedAnalysis({ title, message, progress, active });
+        setAnalysisButtons(active);
+
+        if (! active && ! failed) {
+            closeAnalysisExperience(true);
+
+            return;
+        }
+
+        if (analysisMinimized) {
+            minimizedOverlay?.classList.remove('hidden');
+        } else {
+            openAnalysisDialog();
         }
     };
 
@@ -1487,50 +1650,84 @@ if (workspace) {
         }
     };
 
-    analysisForm?.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        analysisButton.disabled = true;
-        analysisButton.textContent = 'Гусь уже гребе…';
-        overlay?.classList.remove('hidden');
+    analysisForms.forEach((analysisForm) => {
+        analysisForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            setAnalysisButtons(true);
 
-        try {
-            const response = await fetch(analysisForm.action, {
-                method: 'POST',
-                headers: { Accept: 'application/json' },
-                credentials: 'same-origin',
-                body: new FormData(analysisForm),
-            });
+            try {
+                const response = await fetch(analysisForm.action, {
+                    method: 'POST',
+                    headers: { Accept: 'application/json' },
+                    credentials: 'same-origin',
+                    body: new FormData(analysisForm),
+                });
 
-            if (! response.ok) {
-                throw new Error('Analysis request failed.');
+                if (! response.ok) {
+                    throw new Error('Analysis request failed.');
+                }
+
+                const task = await response.json();
+                analysisMinimized = false;
+                setOverlay({ ...task, progress: task.stage === 'waiting_for_quiet' ? 10 : 20 });
+                window.setTimeout(pollStatus, 250);
+            } catch {
+                setAnalysisButtons(false);
+                analysisMinimized = false;
+                setOverlay({
+                    id: analysisTaskId ?? `request-${Date.now()}`,
+                    stage: 'failed',
+                    progress: 100,
+                    message: 'Гусь навіть не стартував. Перевірте зʼєднання і повторіть.',
+                });
             }
-
-            const task = await response.json();
-            setOverlay({ ...task, progress: task.stage === 'waiting_for_quiet' ? 10 : 20 });
-            window.setTimeout(pollStatus, 250);
-        } catch {
-            analysisButton.disabled = false;
-            analysisButton.textContent = 'Спробувати ще раз';
-
-            if (overlay) {
-                overlay.classList.remove('hidden');
-                overlay.querySelector('[data-analysis-message]').textContent = 'Гусь навіть не стартував. Перевірте з’єднання і повторіть.';
-            }
-        }
+        });
     });
 
     minimizeButton?.addEventListener('click', () => {
-        const minimized = overlay.dataset.minimized !== 'true';
-        overlay.dataset.minimized = String(minimized);
-        minimizeButton.textContent = minimized ? '+' : '−';
-        minimizeButton.setAttribute('aria-label', minimized ? 'Розгорнути прогрес' : 'Згорнути прогрес');
+        if (! (overlay instanceof HTMLDialogElement) || ! overlay.open) {
+            return;
+        }
+
+        analysisMinimized = true;
+        overlay.close();
+        minimizedOverlay?.classList.remove('hidden');
     });
+
+    restoreButton?.addEventListener('click', () => {
+        analysisMinimized = false;
+        minimizedOverlay?.classList.add('hidden');
+        openAnalysisDialog();
+        analysisSteps?.lastElementChild?.scrollIntoView({ block: 'nearest' });
+    });
+
+    if (overlay instanceof HTMLDialogElement) {
+        overlay.addEventListener('cancel', (event) => {
+            event.preventDefault();
+            minimizeButton?.click();
+        });
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) {
+                minimizeButton?.click();
+            }
+        });
+    }
 
     document.addEventListener('visibilitychange', () => {
         if (! document.hidden) {
             pollStatus();
         }
     });
+
+    if (overlay?.dataset.analysisId) {
+        setOverlay({
+            id: overlay.dataset.analysisId,
+            stage: overlay.dataset.analysisStage,
+            progress: Number(overlay.dataset.analysisProgressValue ?? 0),
+            message: overlay.dataset.analysisMessageValue,
+            error: overlay.dataset.analysisErrorValue,
+        });
+    }
 
     window.setInterval(pollStatus, 2000);
 }

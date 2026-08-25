@@ -60,6 +60,18 @@
     }
 }
 
+@keyframes analysis-step-arrival {
+    from {
+        opacity: 0;
+        transform: translateY(0.65rem);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 .goose-working {
     animation: goose-work 1.15s ease-in-out infinite;
     transform-origin: 50% 85%;
@@ -69,14 +81,8 @@
     animation: staged-cart-item-arrival 900ms ease-out both;
 }
 
-[data-analysis-overlay][data-minimized='true'] [data-analysis-message],
-[data-analysis-overlay][data-minimized='true'] [data-analysis-progress],
-[data-analysis-overlay][data-minimized='true'] [data-analysis-progress-label] {
-    display: none;
-}
-
-[data-analysis-overlay][data-minimized='true'] {
-    width: min(15rem, calc(100vw - 2rem));
+.analysis-step-arrival {
+    animation: analysis-step-arrival 450ms ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -88,7 +94,8 @@
         animation: none;
     }
 
-    .staged-cart-item-arrival {
+    .staged-cart-item-arrival,
+    .analysis-step-arrival {
         animation: none;
     }
 }

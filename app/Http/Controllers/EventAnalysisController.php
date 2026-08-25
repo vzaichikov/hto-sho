@@ -26,7 +26,10 @@ class EventAnalysisController extends Controller
             return response()->json([
                 'task_id' => $event->analysis_task_id,
                 'stage' => $event->analysis_stage?->value,
-                'message' => $event->analysis_stage?->message(),
+                'message' => $event->analysis_stage?->message(
+                    $event->analysis_task_id,
+                    $event->analysis_started_at,
+                ),
             ], 202);
         }
 

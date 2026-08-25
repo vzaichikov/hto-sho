@@ -87,7 +87,7 @@ class EventStatusController extends Controller
                 'id' => $event->analysis_task_id,
                 'stage' => $stage?->value,
                 'progress' => $progress,
-                'message' => $stage?->message(),
+                'message' => $stage?->message($event->analysis_task_id, $event->analysis_started_at),
                 'started_at' => $event->analysis_started_at?->toISOString(),
                 'finished_at' => $event->analysis_finished_at?->toISOString(),
                 'error' => $event->analysis_error,
