@@ -80,6 +80,33 @@ class EventSourceTest extends TestCase
         $this->assertSame(1, $mixedEvent->sources()->where('type', EventSourceType::Image)->count());
     }
 
+    public function test_share_target_upload_returns_json_and_clears_the_pending_share_session(): void
+    {
+        Storage::fake('local');
+        $user = User::factory()->create();
+        $event = Event::factory()->for($user)->create();
+
+        $this->actingAs($user)
+            ->withSession([
+                'share_target.pending' => true,
+                'share_target.return_after_create' => true,
+            ])
+            ->withHeaders([
+                'Accept' => 'application/json',
+                'X-Share-Target' => '1',
+            ])
+            ->post(route('events.sources.store', $event), [
+                'images' => [UploadedFile::fake()->image('shared-chat.png')->size(250)],
+            ])
+            ->assertCreated()
+            ->assertJsonPath('created', 1)
+            ->assertJsonPath('redirect', route('events.show', ['event' => $event, 'tab' => 'context']))
+            ->assertSessionMissing('share_target.pending')
+            ->assertSessionMissing('share_target.return_after_create');
+
+        $this->assertSame(1, $event->sources()->count());
+    }
+
     public function test_duplicate_content_is_not_added_twice(): void
     {
         $user = User::factory()->create();

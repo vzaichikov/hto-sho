@@ -151,11 +151,15 @@
 
                     <div class="mt-4 rounded-2xl border-2 border-dashed border-green/45 bg-green-soft/20 p-5 text-center transition data-[dragging=true]:border-orange data-[dragging=true]:bg-orange/5" data-file-dropzone>
                         <input class="sr-only" id="source-images" name="images[]" type="file" accept="image/jpeg,image/png,image/webp" multiple data-file-input>
+                        <input class="hidden" id="source-camera" type="file" accept="image/*" capture="environment" data-camera-input>
                         <label class="cursor-pointer" for="source-images">
                             <span class="mx-auto grid size-11 -rotate-3 place-items-center rounded-[45%] bg-yellow font-display text-2xl transition hover:rotate-0" aria-hidden="true">↥</span>
                             <span class="mt-3 block text-sm font-extrabold">Перетягніть, вставте або виберіть картинки</span>
                             <span class="mt-1 block text-xs text-muted">JPG, PNG чи WebP · до 8 МБ · максимум 10 файлів</span>
                         </label>
+                        <button class="mt-4 inline-flex items-center gap-2 rounded-full border-2 border-ink bg-paper px-4 py-2 text-xs font-extrabold shadow-[2px_2px_0_#F7C84B] transition hover:-translate-y-0.5 hover:bg-yellow/35 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-camera-trigger>
+                            <span aria-hidden="true">📷</span> Зробити фото
+                        </button>
                         <div class="mt-4 hidden grid-cols-2 gap-3 text-left sm:grid-cols-4" data-file-previews></div>
                     </div>
 

@@ -84,15 +84,17 @@ class EventController extends Controller
 
         $harnessRecorder->attach($harnessRun, $event);
         $harnessRecorder->finish($harnessRun);
+        $redirect = $request->session()->pull('share_target.return_after_create', false)
+            ? route('share-target.show')
+            : route('events.show', $event);
 
         if ($request->expectsJson()) {
             return response()->json([
-                'redirect' => route('events.show', $event),
+                'redirect' => $redirect,
             ], 201);
         }
 
-        return redirect()
-            ->route('events.show', $event)
+        return redirect($redirect)
             ->with('success', 'Задум смачний. Гусь уже розгрібає перший контекст.');
     }
 

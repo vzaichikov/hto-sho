@@ -41,6 +41,10 @@ class SilpoOAuthController extends Controller
         Auth::login($user);
         $request->session()->regenerate();
 
+        if ($request->session()->pull('share_target.return_after_auth', false)) {
+            return redirect()->route('share-target.show')->with('success', 'Ви увійшли через Сільпо. Картинки нікуди не втекли.');
+        }
+
         return redirect()->route('events.index')->with('success', 'Ви увійшли через Сільпо.');
     }
 }

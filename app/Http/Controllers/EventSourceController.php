@@ -8,6 +8,7 @@ use App\EventSourceType;
 use App\Http\Requests\StoreEventSourcesRequest;
 use App\Models\Event;
 use App\Models\EventSource;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
@@ -19,22 +20,42 @@ class EventSourceController extends Controller
         StoreEventSourcesRequest $request,
         Event $event,
         StoreEventSourcesAction $storeSources,
-    ): RedirectResponse {
+    ): JsonResponse|RedirectResponse {
         $created = $storeSources->execute(
             $event,
             $request->validated('text'),
             $request->file('images', []),
         );
+        $redirect = route('events.show', ['event' => $event, 'tab' => 'context']);
+        $message = $created === 0
+            ? 'Ці матеріали Гусь уже бачив.'
+            : 'Гусь усе отримав і вже оновлює план.';
+
+        if ($request->header('X-Share-Target') === '1') {
+            $request->session()->forget([
+                'share_target.pending',
+                'share_target.return_after_auth',
+                'share_target.return_after_create',
+            ]);
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'created' => $created,
+                'message' => $message,
+                'redirect' => $redirect,
+            ], $created === 0 ? 200 : 201);
+        }
 
         if ($created === 0) {
             return redirect()
-                ->route('events.show', ['event' => $event, 'tab' => 'context'])
-                ->with('info', 'Ці матеріали Гусь уже бачив.');
+                ->to($redirect)
+                ->with('info', $message);
         }
 
         return redirect()
-            ->route('events.show', ['event' => $event, 'tab' => 'context'])
-            ->with('success', 'Гусь усе отримав і вже оновлює план.');
+            ->to($redirect)
+            ->with('success', $message);
     }
 
     public function show(Event $event, EventSource $source): StreamedResponse

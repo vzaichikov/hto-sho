@@ -83,6 +83,34 @@ class EventCreationTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_event_created_for_a_pending_share_returns_to_the_chooser(): void
+    {
+        $user = User::factory()->create();
+        $this->clearCreationLimit($user);
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse([
+                'accepted' => true,
+                'reason' => 'accepted',
+            ])),
+        ]);
+
+        $this->actingAs($user)
+            ->withSession([
+                'share_target.pending' => true,
+                'share_target.return_after_create' => true,
+            ])
+            ->postJson(route('events.store'), [
+                'title' => 'Пікнік для спільних скринів',
+                'description' => 'Пікнік на озері.',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('redirect', route('share-target.show'))
+            ->assertSessionHas('share_target.pending', true)
+            ->assertSessionMissing('share_target.return_after_create');
+
+        $this->assertSame(1, Event::query()->whereBelongsTo($user)->count());
+    }
+
     #[DataProvider('acceptableDescriptions')]
     public function test_casual_food_and_drink_descriptions_are_within_the_acceptance_contract(string $description): void
     {

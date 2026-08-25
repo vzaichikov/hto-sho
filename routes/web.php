@@ -16,11 +16,14 @@ use App\Http\Controllers\LandingController;
 use App\Http\Controllers\LogoutController;
 use App\Http\Controllers\RefreshSilpoCartTimeslotController;
 use App\Http\Controllers\RetryEventSourceController;
+use App\Http\Controllers\ShareTargetController;
 use App\Http\Controllers\SilpoCartPreflightController;
 use App\Http\Controllers\SilpoOAuthController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', LandingController::class)->name('landing');
+Route::get('/share-target', ShareTargetController::class)->name('share-target.show');
+Route::post('/share-target/discard', [ShareTargetController::class, 'discard'])->name('share-target.discard');
 
 Route::get('/login/silpo', [SilpoOAuthController::class, 'redirect'])
     ->middleware('throttle:silpo-oauth')

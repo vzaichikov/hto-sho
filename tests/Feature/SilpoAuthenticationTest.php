@@ -167,6 +167,34 @@ class SilpoAuthenticationTest extends TestCase
         });
     }
 
+    public function test_callback_returns_a_share_target_login_to_the_chooser(): void
+    {
+        $this->fakeOAuthServer([
+            'access_token' => 'share-access-secret',
+            'refresh_token' => 'share-refresh-secret',
+        ]);
+        $this->app->instance(SilpoProfileGateway::class, new FakeSilpoProfileGateway([
+            'id' => 'sharing-guest',
+            'name' => 'Олена зі скринами',
+        ]));
+
+        $connectResponse = $this->withSession([
+            'share_target.pending' => true,
+            'share_target.return_after_auth' => true,
+        ])->get(route('mcp.oauth.silpo.connect'));
+        parse_str((string) parse_url((string) $connectResponse->headers->get('Location'), PHP_URL_QUERY), $query);
+
+        $this->get(route('mcp.oauth.silpo.callback', [
+            'code' => 'share-code',
+            'state' => $query['state'],
+        ]))
+            ->assertRedirect(route('share-target.show'))
+            ->assertSessionHas('share_target.pending', true)
+            ->assertSessionMissing('share_target.return_after_auth');
+
+        $this->assertAuthenticated();
+    }
+
     public function test_callback_rejects_a_mismatched_state_before_token_exchange(): void
     {
         $this->fakeOAuthServer([

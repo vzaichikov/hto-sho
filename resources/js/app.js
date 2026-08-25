@@ -2,6 +2,8 @@ const sourceComposer = document.querySelector('[data-source-composer]');
 
 if (sourceComposer) {
     const input = sourceComposer.querySelector('[data-file-input]');
+    const cameraInput = sourceComposer.querySelector('[data-camera-input]');
+    const cameraTrigger = sourceComposer.querySelector('[data-camera-trigger]');
     const dropzone = sourceComposer.querySelector('[data-file-dropzone]');
     const previews = sourceComposer.querySelector('[data-file-previews]');
 
@@ -41,7 +43,12 @@ if (sourceComposer) {
         renderPreviews();
     };
 
-    input.addEventListener('change', renderPreviews);
+    input.addEventListener('change', () => replaceFiles(input.files));
+    cameraTrigger?.addEventListener('click', () => cameraInput.click());
+    cameraInput?.addEventListener('change', () => {
+        replaceFiles([...input.files, ...cameraInput.files]);
+        cameraInput.value = '';
+    });
 
     ['dragenter', 'dragover'].forEach((eventName) => {
         dropzone.addEventListener(eventName, (event) => {
@@ -691,6 +698,8 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const input = element('input', 'min-w-0 flex-1 rounded-2xl border-2 border-ink/15 bg-paper px-4 py-3 outline-none focus:border-green focus:ring-3 focus:ring-green/15');
         input.type = 'search';
         input.maxLength = 120;
+        input.autocomplete = 'street-address';
+        input.enterKeyHint = 'search';
         input.placeholder = 'Наприклад: Київ, Хрещатик, 1';
         input.setAttribute('aria-label', 'Адреса для пошуку');
         const submit = actionButton('Гусь, шукай адресу', () => {});
@@ -768,6 +777,8 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const input = element('input', 'min-w-0 flex-1 rounded-2xl border-2 border-ink/15 bg-paper px-4 py-3 outline-none focus:border-green focus:ring-3 focus:ring-green/15');
         input.type = 'search';
         input.maxLength = 120;
+        input.autocomplete = 'address-level2';
+        input.enterKeyHint = 'search';
         input.placeholder = 'Наприклад: Київ';
         input.setAttribute('aria-label', 'Місто Нової пошти');
         const submit = actionButton('Гусь, знайди місто', () => {});
@@ -908,6 +919,8 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const input = element('textarea', 'min-h-28 w-full resize-y rounded-2xl border-2 border-ink/20 bg-paper px-4 py-3 leading-6 outline-none focus:border-green focus:ring-3 focus:ring-green/15');
         input.maxLength = 600;
         input.rows = 3;
+        input.autocomplete = 'street-address';
+        input.enterKeyHint = 'done';
         input.value = previousSentence;
         input.placeholder = 'Доставка додому: Київ, вул. Саксаганського, 57-Б. Завтра після 18:00';
         input.setAttribute('aria-label', 'Куди й як доставити кошик');
