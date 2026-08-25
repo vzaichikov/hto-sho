@@ -172,7 +172,7 @@ class EventContextSummaryJobTest extends TestCase
             fn (array $warning): bool => str_contains(Str::lower($warning['message']), 'умовн'),
         ));
         Http::assertSent(fn (Request $request): bool => str_contains(
-            $request['input'][0]['content'][0]['text'],
+            $request['instructions'],
             'Майбутнє «підтверджу» означає, що підтвердження ще буде',
         ));
     }
@@ -361,7 +361,7 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertSame([], $event->state['participants'][0]['restrictions']);
         $this->assertSame([], $event->state['restrictions']);
         Http::assertSentCount(2);
-        $repairPrompt = (string) data_get(Http::recorded()[1][0]->data(), 'input.0.content.0.text');
+        $repairPrompt = (string) data_get(Http::recorded()[1][0]->data(), 'instructions');
         $this->assertStringContainsString('не перетворена на відмову їсти чи пити', $repairPrompt);
     }
 
@@ -405,7 +405,7 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertSame([], $event->state['participants'][0]['brings']);
         Http::assertSentCount(2);
         $this->assertTrue(Http::recorded()->contains(fn (array $record): bool => str_contains(
-            $record[0]['input'][0]['content'][0]['text'],
+            $record[0]['instructions'],
             'Ти один раз перевіряєш повноту',
         )));
     }
@@ -457,7 +457,7 @@ class EventContextSummaryJobTest extends TestCase
             }
 
             $userData = json_decode(
-                (string) data_get($request->data(), 'input.1.content.0.text'),
+                (string) data_get($request->data(), 'input.0.content.0.text'),
                 true,
                 flags: JSON_THROW_ON_ERROR,
             );
@@ -541,10 +541,10 @@ class EventContextSummaryJobTest extends TestCase
             ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
         $this->assertSame(1, $event->contextVersions()->count());
         Http::assertSent(function (Request $request): bool {
-            $userJson = $request['input'][1]['content'][0]['text'];
+            $userJson = $request['input'][0]['content'][0]['text'];
 
-            return $request['input'][0]['role'] === 'system'
-                && $request['input'][1]['role'] === 'user'
+            return is_string($request['instructions'])
+                && $request['input'][0]['role'] === 'user'
                 && mb_strpos($userJson, 'Спочатку: зустріч у суботу.')
                     < mb_strpos($userJson, 'Уточнення: перенесли на неділю.');
         });
@@ -657,8 +657,8 @@ class EventContextSummaryJobTest extends TestCase
         Http::assertSentCount(1);
         /** @var Request $request */
         $request = Http::recorded()->first()[0];
-        $systemPrompt = $request['input'][0]['content'][0]['text'];
-        $userJson = $request['input'][1]['content'][0]['text'];
+        $systemPrompt = $request['instructions'];
+        $userJson = $request['input'][0]['content'][0]['text'];
         $laterPosition = mb_strpos($userJson, '"source_id": '.$laterInFirstBatch->id);
         $olderPosition = mb_strpos($userJson, '"source_id": '.$olderInFirstBatch->id);
 
@@ -719,8 +719,8 @@ class EventContextSummaryJobTest extends TestCase
         $event->refresh();
         $this->assertSame([$correction->id], $event->state['agreements'][0]['source_ids']);
         Http::assertSent(function (Request $request): bool {
-            $systemPrompt = $request['input'][0]['content'][0]['text'];
-            $userJson = $request['input'][1]['content'][0]['text'];
+            $systemPrompt = $request['instructions'];
+            $userJson = $request['input'][0]['content'][0]['text'];
 
             return str_contains($userJson, '"origin": "plan_correction"')
                 && str_contains($userJson, 'Води вдвічі менше.')
@@ -884,8 +884,8 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertStringNotContainsString('алкоголь', Str::lower($event->state['unresolved_questions'][0]['question']));
         $this->assertStringStartsWith('q_', $event->state['unresolved_questions'][0]['key']);
         Http::assertSent(function (Request $request): bool {
-            $systemPrompt = $request['input'][0]['content'][0]['text'];
-            $userJson = $request['input'][1]['content'][0]['text'];
+            $systemPrompt = $request['instructions'];
+            $userJson = $request['input'][0]['content'][0]['text'];
 
             return str_contains($userJson, '"organizer_context"')
                 && str_contains($userJson, 'Хочемо пікнік на озері й щось нове від Гуся.')
@@ -998,8 +998,8 @@ class EventContextSummaryJobTest extends TestCase
                 && $entry->response_payload !== null,
         ));
         Http::assertSent(function (Request $request): bool {
-            $systemPrompt = $request['input'][0]['content'][0]['text'];
-            $userJson = $request['input'][1]['content'][0]['text'];
+            $systemPrompt = $request['instructions'];
+            $userJson = $request['input'][0]['content'][0]['text'];
 
             return str_contains($userJson, '"question_ledger"')
                 && str_contains($userJson, '"key": "q_names_current"')

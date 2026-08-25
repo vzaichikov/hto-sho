@@ -363,7 +363,7 @@ class AiProductLogicRegressionTest extends TestCase
                 return false;
             }
 
-            $prompt = (string) data_get($request->data(), 'input.1.content.0.text');
+            $prompt = (string) data_get($request->data(), 'input.0.content.0.text');
 
             foreach ($scenario['source_batches'] as $batch) {
                 if (! str_contains($prompt, '"upload_batch": "'.$batch['upload_batch'].'"')) {
@@ -403,7 +403,7 @@ class AiProductLogicRegressionTest extends TestCase
                 return false;
             }
 
-            $prompt = (string) data_get($request->data(), 'input.1.content.0.text');
+            $prompt = (string) data_get($request->data(), 'input.0.content.0.text');
             $containsSource = str_contains($prompt, '"source_id": '.$sourceId);
 
             return $shouldBeIncluded === $containsSource;

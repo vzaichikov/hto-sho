@@ -26,5 +26,5 @@ Before planning or editing, find the row whose globs match the file's path and r
 | app/{Models,Services}/Harness*.php | .ai/rules/models-services.md |
 | app/{Actions,Jobs,Services,Http/Controllers,Http/Requests,Contracts,Models}/**/*.php | .ai/rules/requests-contracts-models.md |
 | resources/**/landing* | .ai/rules/resources.md |
-| app/Services/SilpoOAuthClient.php, app/Services/AiRequestFactory.php | .ai/rules/services.md |
+| app/Services/SilpoOAuthClient.php, app/Services/AiRequestFactory.php, app/Services/* | .ai/rules/services.md |
 | resources/views/** | .ai/rules/views.md |

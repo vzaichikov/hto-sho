@@ -966,9 +966,14 @@ class CartCandidateSuitabilityTest extends TestCase
     {
         $suitability = new CartCandidateSuitability;
         $rawPork = $suitability->evidence(
-            ['name' => 'raw pork', 'note' => 'no peanuts'],
             [
-                'name' => 'Chilled pork chunks',
+                'name' => 'свиняча шия',
+                'product_name' => 'свиняча шия',
+                'purpose' => 'для гриля; перевірити склад маринаду на арахіс і горіхи',
+                'note' => 'Перевірити склад маринаду на арахіс і горіхи.',
+            ],
+            [
+                'name' => 'Свинячий ошийок домашній',
                 'details' => ['attributes' => ['Country' => 'Ukraine']],
             ],
             [],
@@ -976,7 +981,12 @@ class CartCandidateSuitabilityTest extends TestCase
             CartProductEvidence::SAFETY_UNVERIFIED,
         );
         $wholePepper = $suitability->evidence(
-            ['name' => 'перець для гриля', 'note' => 'без арахісу'],
+            [
+                'name' => 'перець для гриля',
+                'product_name' => 'перець',
+                'purpose' => 'для гриля; свіжий, не маринований і не готовий; перевірити склад готових маринадів на арахіс',
+                'note' => 'Без арахісу.',
+            ],
             ['name' => 'Перець червоний'],
             [],
             [],
@@ -997,7 +1007,12 @@ class CartCandidateSuitabilityTest extends TestCase
         }
 
         $this->assertFalse($suitability->requiresInspection(
-            ['name' => 'свинина сира', 'note' => 'без арахісу'],
+            [
+                'name' => 'свиняча шия',
+                'product_name' => 'свиняча шия',
+                'purpose' => 'для гриля; перевірити склад маринаду на арахіс і горіхи',
+                'note' => 'Перевірити склад маринаду на арахіс і горіхи.',
+            ],
             ['summary' => 'Сильна алергія на арахіс'],
         ));
     }
@@ -1008,6 +1023,11 @@ class CartCandidateSuitabilityTest extends TestCase
         $pairs = [
             [['name' => 'ковбаса'], ['name' => 'Ковбаса домашня']],
             [['name' => 'свинина маринована'], ['name' => 'Свинина маринована']],
+            [[
+                'name' => 'свиняча шия',
+                'product_name' => 'свиняча шия',
+                'purpose' => 'маринована для гриля',
+            ], ['name' => 'Свинячий ошийок домашній']],
             [['name' => 'картопляні чіпси'], ['name' => 'Чипси картопляні']],
             [['name' => 'соус до гриля'], ['name' => 'Соус томатний']],
         ];

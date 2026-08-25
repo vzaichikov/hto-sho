@@ -75,10 +75,12 @@ class ImageExtractionJobTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.openai.com/v1/responses'
             && $request['text']['format']['strict'] === true
             && in_array('message_timeline', $request['text']['format']['schema']['required'], true)
-            && str_contains($request['input'][0]['content'][0]['text'], 'Сторонній чат про роботу, техніку, новини, меми чи іншу тему — irrelevant')
-            && str_contains($request['input'][0]['content'][0]['text'], 'Навушники, одяг, автомобіль та інший випадковий каталог товарів без звʼязку з подією — irrelevant')
-            && str_contains($request['input'][0]['content'][0]['text'], 'короткі повідомлення «Я буду», «О 15:00» чи «Беру лід» можуть бути chat_screenshot')
-            && str_contains($request['input'][0]['content'][0]['text'], 'пиши з легкою самоіронією від «Гуся Шо»')
+            && $request['input'][0]['role'] === 'user'
+            && str_contains($request['input'][0]['content'][0]['text'], '"source_type": "attached_image"')
+            && str_contains($request['instructions'], 'Сторонній чат про роботу, техніку, новини, меми чи іншу тему — irrelevant')
+            && str_contains($request['instructions'], 'Навушники, одяг, автомобіль та інший випадковий каталог товарів без звʼязку з подією — irrelevant')
+            && str_contains($request['instructions'], 'короткі повідомлення «Я буду», «О 15:00» чи «Беру лід» можуть бути chat_screenshot')
+            && str_contains($request['instructions'], 'пиши з легкою самоіронією від «Гуся Шо»')
             && str_starts_with($request['input'][0]['content'][1]['image_url'], 'data:image/png;base64,'));
     }
 
@@ -157,7 +159,12 @@ class ImageExtractionJobTest extends TestCase
         $this->assertSame(ImageClassification::ProductImage, $result->classification);
         $this->assertSame([], $result->messageTimeline);
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://ollama.com/v1/chat/completions'
-            && $request['response_format']['type'] === 'json_object');
+            && $request['response_format']['type'] === 'json_object'
+            && data_get($request->data(), 'messages.0.role') === 'system'
+            && data_get($request->data(), 'messages.1.role') === 'user'
+            && str_contains((string) data_get($request->data(), 'messages.0.content.0.text'), 'OCR')
+            && str_contains((string) data_get($request->data(), 'messages.1.content.0.text'), '"source_type": "attached_image"')
+            && data_get($request->data(), 'messages.1.content.1.image_url.url') === 'data:image/png;base64,'.base64_encode('image-bytes'));
     }
 
     public function test_final_job_failure_updates_extraction_and_every_reference(): void

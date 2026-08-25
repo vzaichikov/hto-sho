@@ -117,8 +117,10 @@ class CartProductDecisionServiceTest extends TestCase
             return data_get($payload, 'messages.0.role') === 'system'
                 && data_get($payload, 'messages.1.role') === 'user'
                 && str_contains($systemText, 'Прямий пошук Сільпо')
+                && str_contains($systemText, 'Поверни лише один валідний JSON object')
                 && ! str_contains($systemText, 'untrusted-user-data-sentinel')
-                && str_contains($userText, 'untrusted-user-data-sentinel');
+                && str_contains($userText, 'untrusted-user-data-sentinel')
+                && ! str_contains($userText, 'Поверни лише');
         });
     }
 
@@ -441,6 +443,9 @@ class CartProductDecisionServiceTest extends TestCase
         ) && str_contains(
             (string) data_get($request->data(), 'instructions'),
             'warning каже, що позиція покрита чи достатня',
+        ) && str_contains(
+            (string) data_get($request->data(), 'instructions'),
+            'safety_evidence=not_required',
         ) && str_contains(
             (string) data_get($request->data(), 'instructions'),
             'Каталожне маркування «безалкогольний» приймай як безалкогольний статус',

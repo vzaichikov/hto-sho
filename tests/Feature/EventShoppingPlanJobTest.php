@@ -53,32 +53,33 @@ class EventShoppingPlanJobTest extends TestCase
         $this->assertSame(['q_alcohol'], $event->shopping_plan['unanswered_question_keys']);
 
         Http::assertSent(function (Request $request): bool {
-            $prompt = $request['input'][0]['content'][0]['text'];
+            $instructions = $request['instructions'];
+            $userJson = $request['input'][0]['content'][0]['text'];
 
-            return str_contains($prompt, 'питну воду та безалкогольні напої')
-                && str_contains($prompt, 'алкоголь додавай лише коли alcohol_planned=true')
-                && str_contains($prompt, '"alcohol_planned": false')
-                && str_contains($prompt, 'не вказуй SKU, бренди Сільпо, ціни')
-                && str_contains($prompt, 'не дублюй це в покупках')
-                && str_contains($prompt, 'структуроване participants.brings є авторитетним')
-                && str_contains($prompt, 'особисте обмеження одного учасника не додавай автоматично')
-                && str_contains($prompt, 'Preference, напій для конкретної людини або згадка імені не є внеском')
-                && str_contains($prompt, 'явну shopping_requirements позицію не позначай уже забезпеченою')
-                && str_contains($prompt, 'включи саме цей товар як резерв')
-                && str_contains($prompt, 'не замінюй названий товар')
-                && str_contains($prompt, 'свинина лишається свининою для шашлику')
-                && str_contains($prompt, 'телятина — телятиною для стейків')
-                && str_contains($prompt, '350–500 г сирого мʼяса')
-                && str_contains($prompt, 'якщо вже названо безглютеновий хліб, збережи саме хліб')
-                && str_contains($prompt, 'ніколи не на абстрактне «щось безглютенове»')
-                && str_contains($prompt, 'явний фінальний список організатора')
-                && str_contains($prompt, 'перенеси кожну назву, кількість та одиницю без перерахунку')
-                && str_contains($prompt, 'одноразовий посуд, пакети для сміття')
-                && str_contains($prompt, 'додавай їх у розумній кількості як оцінку')
-                && str_contains($prompt, 'визначай складену потребу за змістом, а не за конкретними словами')
-                && str_contains($prompt, 'minimum_distinct_products не може бути 1')
-                && str_contains($prompt, 'якщо названо хліб, залиш хліб')
-                && str_contains($prompt, 'алергії та жорсткі обмеження — критичні факти');
+            return str_contains($instructions, 'питну воду та безалкогольні напої')
+                && str_contains($instructions, 'алкоголь додавай лише коли alcohol_planned=true')
+                && str_contains($userJson, '"alcohol_planned": false')
+                && str_contains($instructions, 'не вказуй SKU, бренди Сільпо, ціни')
+                && str_contains($instructions, 'не дублюй це в покупках')
+                && str_contains($instructions, 'структуроване participants.brings є авторитетним')
+                && str_contains($instructions, 'особисте обмеження одного учасника не додавай автоматично')
+                && str_contains($instructions, 'Preference, напій для конкретної людини або згадка імені не є внеском')
+                && str_contains($instructions, 'явну shopping_requirements позицію не позначай уже забезпеченою')
+                && str_contains($instructions, 'включи саме цей товар як резерв')
+                && str_contains($instructions, 'не замінюй названий товар')
+                && str_contains($instructions, 'свинина лишається свининою для шашлику')
+                && str_contains($instructions, 'телятина — телятиною для стейків')
+                && str_contains($instructions, '350–500 г сирого мʼяса')
+                && str_contains($instructions, 'якщо вже названо безглютеновий хліб, збережи саме хліб')
+                && str_contains($instructions, 'ніколи не на абстрактне «щось безглютенове»')
+                && str_contains($instructions, 'явний фінальний список організатора')
+                && str_contains($instructions, 'перенеси кожну назву, кількість та одиницю без перерахунку')
+                && str_contains($instructions, 'одноразовий посуд, пакети для сміття')
+                && str_contains($instructions, 'додавай їх у розумній кількості як оцінку')
+                && str_contains($instructions, 'визначай складену потребу за змістом, а не за конкретними словами')
+                && str_contains($instructions, 'minimum_distinct_products не може бути 1')
+                && str_contains($instructions, 'якщо названо хліб, залиш хліб')
+                && str_contains($instructions, 'алергії та жорсткі обмеження — критичні факти');
         });
     }
 
@@ -292,7 +293,7 @@ class EventShoppingPlanJobTest extends TestCase
         $this->assertFalse($event->shopping_plan['items'][0]['optional']);
         $this->assertTrue(collect($event->shopping_plan['items'])->firstWhere('name', 'Пакети для сміття')['optional']);
         Http::assertSent(fn (Request $request): bool => str_contains(
-            $request['input'][0]['content'][0]['text'],
+            $request['instructions'],
             'кожен елемент структурованого shopping_requirements перенеси до items',
         ));
     }
@@ -356,13 +357,14 @@ class EventShoppingPlanJobTest extends TestCase
             ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
 
         Http::assertSent(function (Request $request): bool {
-            $prompt = $request['input'][0]['content'][0]['text'];
+            $instructions = $request['instructions'];
+            $userJson = $request['input'][0]['content'][0]['text'];
 
-            return str_contains($prompt, 'Води вдвічі менше.')
-                && str_contains($prompt, 'Список, який бачив організатор.')
-                && ! str_contains($prompt, 'Пізніший список не є базою цієї корективи.')
-                && str_contains($prompt, 'base_plan — лише незмінний довідковий знімок')
-                && str_contains($prompt, 'застосуй кожну відносну корективу один раз');
+            return str_contains($userJson, 'Води вдвічі менше.')
+                && str_contains($userJson, 'Список, який бачив організатор.')
+                && ! str_contains($userJson, 'Пізніший список не є базою цієї корективи.')
+                && str_contains($instructions, 'base_plan — лише незмінний довідковий знімок')
+                && str_contains($instructions, 'застосуй кожну відносну корективу один раз');
         });
     }
 

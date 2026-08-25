@@ -27,3 +27,6 @@ For the MVP, an explicit gluten-free catalog label is enough to match the produc
 
 ## Let the model propose broad visible replacements
 Exhaust exact catalog queries first. If the exact need is unavailable, let the LLM order practical alternatives by purpose similarity and stop at the first viable result; PHP must not contain product or species substitution maps. A hard identity change such as meat species may be staged only as a visible same-role replacement, while explicit allergens and preparation-state conflicts remain hard rejections.
+
+## Skip unrelated allergen checks for obvious simple foods
+Treat clearly single-ingredient raw unseasoned meat, whole fresh produce, and plain water as safety_evidence=not_required for unrelated allergens unless catalog evidence explicitly discloses the allergen or may-contain cross-contact. Safety instructions and negated phrases such as "check marinade" or "not marinated" are not positive evidence that the product is composite. Processed, marinated, seasoned, or otherwise composite foods remain strict.

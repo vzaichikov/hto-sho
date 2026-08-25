@@ -728,13 +728,27 @@ final class CartCandidateSuitability
             data_get($need, 'purpose'),
         ]);
 
-        if ($this->hasCompositeFoodMarkers($needText)) {
+        if ($this->hasCompositeNeedIntent($needText)) {
             return false;
         }
 
         return $this->isPlainWater($needText, data_get($need, 'category') === 'water')
             || $this->isProduceNeed($needText)
             || $this->isRawMeat($needText);
+    }
+
+    private function hasCompositeNeedIntent(string $text): bool
+    {
+        $affirmativeText = Str::of($text)
+            ->replaceMatches('/(?:^|[;.\s])(?:перевір|check)\p{L}*[^.;]*/iu', ' ')
+            ->replaceMatches(
+                '/\b(?:не|без|not|without)\s+(?:маринован|маринад|seasoned|приправлен|приправа|панірован|breaded|coated|фарширован|начин|filled|фарш|копчен|smoked|варен|cooked|запечен|смажен|готов|напівфабрикат)\p{L}*/iu',
+                ' ',
+            )
+            ->squish()
+            ->toString();
+
+        return $this->hasCompositeFoodMarkers($affirmativeText);
     }
 
     /** @param array<string, mixed> $need @param array<string, mixed> $candidate */

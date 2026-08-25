@@ -2,6 +2,7 @@
 paths:
   - app/Services/SilpoOAuthClient.php
   - app/Services/AiRequestFactory.php
+  - 'app/Services/*'
 ---
 
 # Services
@@ -11,3 +12,6 @@ For Silpo MCP OAuth, use Dynamic Client Registration with token_endpoint_auth_me
 
 ## Reuse the OpenAI-compatible AI request factory
 Configure AI through services.ai using AI_PROVIDER (openai or ollama), AI_MODEL, and AI_API_KEY. Both providers use their /v1 OpenAI-compatible endpoints; create outbound AI clients through AiRequestFactory.
+
+## Separate LLM instructions from runtime user data
+For every OpenAI-compatible LLM request, keep task, safety, and output-format instructions in OpenAI `instructions` or an Ollama `system` message. Put only runtime JSON and images in the `user` message. Apply the same boundary to retries and repair prompts, and cover both provider payload shapes in tests.
