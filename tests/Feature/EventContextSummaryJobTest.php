@@ -28,10 +28,13 @@ class EventContextSummaryJobTest extends TestCase
 {
     use DatabaseTransactions;
 
-    public function test_summary_retry_budget_covers_a_multi_image_evidence_wave(): void
+    public function test_summary_execution_budget_covers_a_bounded_repair(): void
     {
         $job = new SummarizeEventContextJob(1, (string) Str::ulid());
 
+        $this->assertSame(150, $job->timeout);
+        $this->assertTrue($job->failOnTimeout);
+        $this->assertLessThan(config('queue.connections.database.retry_after'), $job->timeout);
         $this->assertGreaterThanOrEqual(20, $job->tries);
     }
 

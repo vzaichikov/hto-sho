@@ -31,7 +31,9 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
-    public int $timeout = 90;
+    public int $timeout = 150;
+
+    public bool $failOnTimeout = true;
 
     public int $tries = 30;
 
