@@ -938,7 +938,7 @@ class EventCartRunTest extends TestCase
         $this->assertStringNotContainsString('mystery.code', $encoded);
     }
 
-    public function test_home_route_change_preserves_the_cart_address_and_shipments_while_sending_target_branch(): void
+    public function test_home_route_change_preserves_the_cart_address_and_sends_target_shipments(): void
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
@@ -998,11 +998,122 @@ class EventCartRunTest extends TestCase
         $this->assertSame('branch-2', $gateway->lastTargetBranchId);
         $this->assertSame($originalAddress, $gateway->lastFulfilmentAddress);
         $this->assertSame(
-            [['companyId' => 'company-1', 'branchId' => 'branch-1']],
+            [['companyId' => 'company-1', 'branchId' => 'branch-2']],
             $gateway->lastFulfilmentShipments,
         );
         $this->assertSame('branch-2', $gateway->cart->branchId);
         $this->assertSame([], collect($gateway->cart->items)->pluck('product_id')->all());
+    }
+
+    #[DataProvider('homeDeliveryTypes')]
+    public function test_found_home_route_from_non_home_cart_sends_the_reviewed_target_shipments(
+        string $deliveryType,
+    ): void {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $gateway = new FakeCartGateway(new SilpoCartContextData(
+            cartId: $cart->cartId,
+            deliveryType: 'SelfPickup',
+            branchId: 'pickup-branch',
+            companyId: 'company-1',
+            slotStart: $cart->slotStart,
+            slotEnd: $cart->slotEnd,
+            items: $cart->items,
+            validations: $cart->validations,
+            slot: $cart->slot,
+            totalAfterDiscounts: $cart->totalAfterDiscounts,
+        ));
+        $gateway->fulfilmentAddress = [
+            'addressType' => 'self-pickup',
+            'city' => 'Київ',
+            'street' => 'вул. Велика Васильківська, 1',
+            'latitude' => '50.4380',
+            'longitude' => '30.5150',
+        ];
+        $gateway->foundAddresses = [[
+            'address' => 'Київ, Хрещатик, 1',
+            'city' => 'Київ',
+            'street' => 'Хрещатик',
+            'houseNumber' => '1',
+            'latitude' => '50.4501',
+            'longitude' => '30.5234',
+        ]];
+        $gateway->availableDeliveryTypes = [[
+            'deliveryType' => $deliveryType,
+            'branchId' => 'home-branch',
+        ]];
+        $gateway->fulfilmentBranches = [[
+            'branchId' => 'home-branch',
+            'companyId' => 'company-1',
+            'city' => 'Київ',
+            'address' => 'дор. Кільцева, 1',
+            'latitude' => '50.4070',
+            'longitude' => '30.3920',
+            'open' => true,
+        ]];
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $this->resetCart($owner, $event);
+        $addresses = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
+                'stage' => 'address_search',
+                'query' => 'Київ, Хрещатик, 1',
+            ])
+            ->assertOk()
+            ->assertJsonPath('addresses.0.writable', true);
+        $routes = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
+                'stage' => 'address_options',
+                'token' => $addresses->json('addresses.0.token'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('options.0.delivery_type', $deliveryType);
+        $slots = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
+                'stage' => 'slots',
+                'token' => $routes->json('options.0.route_token'),
+            ])
+            ->assertOk();
+        $review = $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
+                'stage' => 'review',
+                'token' => $routes->json('options.0.route_token'),
+                'slot_start' => $slots->json('slots.0.start'),
+                'slot_end' => $slots->json('slots.0.end'),
+            ])
+            ->assertOk();
+
+        $this->actingAs($owner)
+            ->postJson(route('events.cart-runs.store', $event), [
+                'mode' => 'assisted',
+                'review_token' => $review->json('review_token'),
+            ])
+            ->assertAccepted();
+
+        $this->assertSame(1, $gateway->fulfilmentWrites);
+        $this->assertSame('home-branch', $gateway->lastTargetBranchId);
+        $this->assertSame('flat', data_get($gateway->lastFulfilmentAddress, 'addressType'));
+        $this->assertSame(
+            [['companyId' => 'company-1', 'branchId' => 'home-branch']],
+            $gateway->lastFulfilmentShipments,
+        );
+        $this->assertSame($deliveryType, $gateway->cart->deliveryType);
+        $this->assertSame('home-branch', $gateway->cart->branchId);
+        $this->assertSame([], collect($gateway->cart->items)->pluck('product_id')->all());
+    }
+
+    /** @return array<string, array{string}> */
+    public static function homeDeliveryTypes(): array
+    {
+        return [
+            'home delivery' => ['DeliveryHome'],
+            'wide assortment delivery' => ['WideAssortDelivery'],
+        ];
     }
 
     /** @param array<string, mixed> $selectedAddress @param array<string, mixed> $canonicalAddress */

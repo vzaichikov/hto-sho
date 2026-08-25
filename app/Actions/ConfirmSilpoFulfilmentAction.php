@@ -154,7 +154,7 @@ final class ConfirmSilpoFulfilmentAction
                     slotStart: (string) $selection['slot_start'],
                     slotEnd: (string) $selection['slot_end'],
                     address: $usesPreviousCartAddress ? $snapshot->address() : $selection['address'],
-                    shipments: $usesHomeAddress ? $snapshot->routeShipments() : $selection['shipments'],
+                    shipments: $selection['shipments'],
                     targetBranchId: $targetBranchId,
                     harnessRun: $harnessRun,
                 );
