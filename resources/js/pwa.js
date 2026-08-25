@@ -9,6 +9,54 @@ if ('serviceWorker' in navigator) {
     });
 }
 
+const installBanner = document.querySelector('[data-pwa-install-banner]');
+const installButton = installBanner?.querySelector('[data-pwa-install-button]');
+let deferredInstallPrompt = null;
+
+const hideInstallBanner = () => {
+    if (installBanner) {
+        installBanner.hidden = true;
+    }
+
+    if (installButton) {
+        installButton.disabled = false;
+    }
+};
+
+window.addEventListener('beforeinstallprompt', (event) => {
+    const isInstalled = window.matchMedia('(display-mode: standalone)').matches
+        || window.navigator.standalone === true;
+
+    if (! installBanner || ! installButton || isInstalled) {
+        return;
+    }
+
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    installBanner.hidden = false;
+});
+
+installButton?.addEventListener('click', async () => {
+    if (! deferredInstallPrompt) {
+        return;
+    }
+
+    const installPrompt = deferredInstallPrompt;
+    deferredInstallPrompt = null;
+    installButton.disabled = true;
+
+    try {
+        await installPrompt.prompt();
+    } finally {
+        hideInstallBanner();
+    }
+});
+
+window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    hideInstallBanner();
+});
+
 const openShareDatabase = () => new Promise((resolve, reject) => {
     const request = indexedDB.open(SHARE_DATABASE, 1);
 

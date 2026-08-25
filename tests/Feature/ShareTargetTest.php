@@ -17,6 +17,7 @@ class ShareTargetTest extends TestCase
             ->assertOk()
             ->assertSee('У яку подію їх додати?')
             ->assertSee('Увійти через Сільпо')
+            ->assertSee('data-pwa-install-banner', escape: false)
             ->assertSee('data-share-target', escape: false)
             ->assertSessionHas('share_target.pending', true)
             ->assertSessionHas('share_target.return_after_auth', true);
@@ -95,6 +96,15 @@ class ShareTargetTest extends TestCase
         $this->get(route('landing'))
             ->assertOk()
             ->assertSee(asset('manifest.json'), escape: false)
-            ->assertSee(asset('images/pwa/icon-512.png'), escape: false);
+            ->assertSee(asset('images/pwa/icon-512.png'), escape: false)
+            ->assertSee('data-pwa-install-banner', escape: false)
+            ->assertSee('data-pwa-install-button', escape: false)
+            ->assertSee('Встановити застосунок')
+            ->assertSee(asset('images/brand/goose-sho.png'), escape: false);
+
+        $progressiveWebAppJavascript = file_get_contents(resource_path('js/pwa.js'));
+        $this->assertStringContainsString("window.addEventListener('beforeinstallprompt'", $progressiveWebAppJavascript);
+        $this->assertStringContainsString("window.addEventListener('appinstalled'", $progressiveWebAppJavascript);
+        $this->assertStringContainsString('await installPrompt.prompt()', $progressiveWebAppJavascript);
     }
 }

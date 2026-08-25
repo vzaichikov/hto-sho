@@ -1,4 +1,5 @@
 @import './fonts.css';
+@import './pwa-install-banner.css';
 @import 'tailwindcss';
 
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';

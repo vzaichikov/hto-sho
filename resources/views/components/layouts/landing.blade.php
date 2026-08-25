@@ -23,6 +23,8 @@
     @vite(['resources/css/landing.css', 'resources/js/pwa.js'])
 </head>
 <body>
+    <x-pwa-install-banner />
+
     {{ $slot }}
 </body>
 </html>

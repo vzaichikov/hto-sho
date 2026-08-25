@@ -1,4 +1,5 @@
 @import './fonts.css';
+@import './pwa-install-banner.css';
 
 :root {
   --cream: #fff4dc;

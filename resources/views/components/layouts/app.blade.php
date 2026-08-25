@@ -18,6 +18,7 @@
     @vite(['resources/css/app.css', 'resources/js/pwa.js', 'resources/js/app.js'])
 </head>
 <body class="min-h-screen bg-canvas font-sans text-ink antialiased" data-brand-app-shell>
+    <x-pwa-install-banner />
 
     @auth
         <header class="sticky top-0 z-40 border-b-2 border-ink/10 bg-canvas/90 backdrop-blur-md">

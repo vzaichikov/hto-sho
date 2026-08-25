@@ -1,0 +1,125 @@
+.pwa-install-banner[hidden] {
+    display: none;
+}
+
+.pwa-install-banner {
+    position: relative;
+    z-index: 60;
+    color: #20201d;
+    background: #f7c84b;
+    border-bottom: 2px solid #20201d;
+    box-shadow: 0 4px 0 rgb(32 32 29 / 10%);
+}
+
+.pwa-install-banner__inner {
+    display: flex;
+    width: min(80rem, 100%);
+    min-height: 4.75rem;
+    padding: 0.55rem 1rem;
+    margin-inline: auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.pwa-install-banner__copy {
+    min-width: 0;
+}
+
+.pwa-install-banner__title,
+.pwa-install-banner__note {
+    margin: 0;
+}
+
+.pwa-install-banner__title {
+    font-size: 1rem;
+    font-weight: 800;
+    line-height: 1.25;
+}
+
+.pwa-install-banner__note {
+    margin-top: 0.15rem;
+    color: rgb(32 32 29 / 72%);
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.pwa-install-banner__button {
+    display: inline-flex;
+    min-height: 3.5rem;
+    padding: 0.35rem 1rem 0.35rem 0.45rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65rem;
+    color: #fffaf0;
+    background: #f24b35;
+    border: 2px solid #20201d;
+    border-radius: 1rem;
+    box-shadow: 3px 3px 0 #20201d;
+    font: inherit;
+    font-size: 0.84rem;
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.pwa-install-banner__button:hover {
+    background: #d93422;
+    transform: translateY(-1px);
+}
+
+.pwa-install-banner__button:active {
+    box-shadow: 1px 1px 0 #20201d;
+    transform: translate(2px, 2px);
+}
+
+.pwa-install-banner__button:focus-visible {
+    outline: 3px solid #4e9f62;
+    outline-offset: 3px;
+}
+
+.pwa-install-banner__button:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.pwa-install-banner__goose {
+    width: 2.5rem;
+    height: 2.5rem;
+    flex: none;
+    object-fit: contain;
+    filter: drop-shadow(1px 2px 0 rgb(32 32 29 / 22%));
+}
+
+@media (max-width: 39.999rem) {
+    .pwa-install-banner__inner {
+        min-height: auto;
+        padding-block: 0.65rem;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.55rem;
+        text-align: center;
+    }
+
+    .pwa-install-banner__note {
+        display: none;
+    }
+
+    .pwa-install-banner__button {
+        width: 100%;
+        min-height: 3.25rem;
+    }
+
+    .pwa-install-banner__goose {
+        width: 2.25rem;
+        height: 2.25rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pwa-install-banner__button {
+        transition: none;
+    }
+}
