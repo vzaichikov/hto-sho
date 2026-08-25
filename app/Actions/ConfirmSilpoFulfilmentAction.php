@@ -113,48 +113,57 @@ final class ConfirmSilpoFulfilmentAction
 
             $baseCartFingerprint = Arr::get($payload, 'base_cart_fingerprint');
 
-            if (! is_string($baseCartFingerprint)
-                || ! hash_equals($baseCartFingerprint, $snapshot->cartFingerprint())) {
+            if (! is_string($baseCartFingerprint)) {
                 throw new RuntimeException('Маршрут кошика вже змінився. Гусь не буде перетирати його навмання.');
             }
 
-            $usesHomeAddress = in_array(
-                Arr::get($selection, 'delivery_type'),
-                ['DeliveryHome', 'WideAssortDelivery'],
-                true,
-            );
-            $targetBranchId = $usesHomeAddress ? Arr::get($selection, 'target_branch_id') : null;
-            $addressSource = Arr::get($selection, 'address_source');
-            $selectedAddress = Arr::get($selection, 'address');
-            $usesPreviousCartAddress = in_array($addressSource, ['current_cart', 'previous_cart'], true);
-            $usesMvpHomeAddress = $addressSource === 'found_coordinates_flat'
-                && is_array($selectedAddress)
-                && SilpoFulfilmentSnapshotData::hasMvpHomeAddressShape($selectedAddress);
+            $baseCartIsCurrent = hash_equals($baseCartFingerprint, $snapshot->cartFingerprint());
+            $selectionIsAlreadyApplied = ! $baseCartIsCurrent
+                && $this->snapshotMatchesSelection($snapshot, $selection);
 
-            if ($usesHomeAddress
-                && ((! $usesPreviousCartAddress && ! $usesMvpHomeAddress)
-                    || ($usesPreviousCartAddress && $selectedAddress !== $snapshot->address())
-                    || ! is_string($targetBranchId)
-                    || $targetBranchId === '')) {
-                throw new RuntimeException('Домашня адреса вже не збігається з кошиком. Гусь нічого не записував.');
+            if (! $baseCartIsCurrent && ! $selectionIsAlreadyApplied) {
+                throw new RuntimeException('Маршрут кошика вже змінився. Гусь не буде перетирати його навмання.');
             }
 
-            $snapshot = $this->silpo->updateFulfilment(
-                accessToken: $accessToken,
-                cartId: (string) $selection['cart_id'],
-                deliveryType: (string) $selection['delivery_type'],
-                slotStart: (string) $selection['slot_start'],
-                slotEnd: (string) $selection['slot_end'],
-                address: $usesPreviousCartAddress ? $snapshot->address() : $selection['address'],
-                shipments: $usesHomeAddress ? $snapshot->routeShipments() : $selection['shipments'],
-                targetBranchId: $targetBranchId,
-                harnessRun: $harnessRun,
-            );
+            if (! $selectionIsAlreadyApplied) {
+                $usesHomeAddress = in_array(
+                    Arr::get($selection, 'delivery_type'),
+                    ['DeliveryHome', 'WideAssortDelivery'],
+                    true,
+                );
+                $targetBranchId = $usesHomeAddress ? Arr::get($selection, 'target_branch_id') : null;
+                $addressSource = Arr::get($selection, 'address_source');
+                $selectedAddress = Arr::get($selection, 'address');
+                $usesPreviousCartAddress = in_array($addressSource, ['current_cart', 'previous_cart'], true);
+                $usesMvpHomeAddress = $addressSource === 'found_coordinates_flat'
+                    && is_array($selectedAddress)
+                    && SilpoFulfilmentSnapshotData::hasMvpHomeAddressShape($selectedAddress);
 
-            if ($snapshot === null
-                || ! $this->snapshotMatchesSelection($snapshot, $selection)
-                || ! hash_equals($snapshot->productFingerprint(), $expectedProductFingerprint)) {
-                throw new RuntimeException('Сільпо не підтвердило обраний маршрут. Гусь нічого далі не чіпає.');
+                if ($usesHomeAddress
+                    && ((! $usesPreviousCartAddress && ! $usesMvpHomeAddress)
+                        || ($usesPreviousCartAddress && $selectedAddress !== $snapshot->address())
+                        || ! is_string($targetBranchId)
+                        || $targetBranchId === '')) {
+                    throw new RuntimeException('Домашня адреса вже не збігається з кошиком. Гусь нічого не записував.');
+                }
+
+                $snapshot = $this->silpo->updateFulfilment(
+                    accessToken: $accessToken,
+                    cartId: (string) $selection['cart_id'],
+                    deliveryType: (string) $selection['delivery_type'],
+                    slotStart: (string) $selection['slot_start'],
+                    slotEnd: (string) $selection['slot_end'],
+                    address: $usesPreviousCartAddress ? $snapshot->address() : $selection['address'],
+                    shipments: $usesHomeAddress ? $snapshot->routeShipments() : $selection['shipments'],
+                    targetBranchId: $targetBranchId,
+                    harnessRun: $harnessRun,
+                );
+
+                if ($snapshot === null
+                    || ! $this->snapshotMatchesSelection($snapshot, $selection)
+                    || ! hash_equals($snapshot->productFingerprint(), $expectedProductFingerprint)) {
+                    throw new RuntimeException('Сільпо не підтвердило обраний маршрут. Гусь нічого далі не чіпає.');
+                }
             }
 
             $this->resetGuard->assertEmptySnapshot($reset, $snapshot);
@@ -207,24 +216,34 @@ final class ConfirmSilpoFulfilmentAction
     /** @param array<string, mixed> $selection */
     private function snapshotMatchesSelection(SilpoFulfilmentSnapshotData $snapshot, array $selection): bool
     {
-        if (Arr::get($selection, 'address_source') !== 'found_coordinates_flat') {
-            return hash_equals(
-                $snapshot->fulfilmentFingerprint(),
-                SilpoFulfilmentSnapshotData::selectionFingerprint($selection),
+        $addressSource = Arr::get($selection, 'address_source');
+        $selectedAddress = Arr::get($selection, 'address');
+
+        if (! is_array($selectedAddress)
+            || ! hash_equals($snapshot->cartId, (string) Arr::get($selection, 'cart_id'))
+            || $snapshot->deliveryType() !== Arr::get($selection, 'delivery_type')
+            || $snapshot->routeShipments() !== Arr::get($selection, 'shipments')
+            || $snapshot->slotStart() !== Arr::get($selection, 'slot_start')
+            || $snapshot->slotEnd() !== Arr::get($selection, 'slot_end')) {
+            return false;
+        }
+
+        if ($addressSource === 'found_coordinates_flat') {
+            return SilpoFulfilmentSnapshotData::hasMvpHomeAddressShape($selectedAddress)
+                && Arr::get($snapshot->address(), 'addressType') === 'flat'
+                && SilpoFulfilmentSnapshotData::representsSameHomeAddress($selectedAddress, $snapshot->address());
+        }
+
+        if (in_array($addressSource, ['self_pickup', 'nova_poshta'], true)) {
+            $actualAddress = $snapshot->address();
+
+            return collect($selectedAddress)->every(
+                fn (mixed $value, string|int $key): bool => array_key_exists($key, $actualAddress)
+                    && $actualAddress[$key] === $value,
             );
         }
 
-        $selectedAddress = Arr::get($selection, 'address');
-
-        return is_array($selectedAddress)
-            && SilpoFulfilmentSnapshotData::hasMvpHomeAddressShape($selectedAddress)
-            && Arr::get($snapshot->address(), 'addressType') === 'flat'
-            && SilpoFulfilmentSnapshotData::representsSameHomeAddress($selectedAddress, $snapshot->address())
-            && hash_equals($snapshot->cartId, (string) Arr::get($selection, 'cart_id'))
-            && $snapshot->deliveryType() === Arr::get($selection, 'delivery_type')
-            && $snapshot->routeShipments() === Arr::get($selection, 'shipments')
-            && $snapshot->slotStart() === Arr::get($selection, 'slot_start')
-            && $snapshot->slotEnd() === Arr::get($selection, 'slot_end');
+        return $snapshot->address() === $selectedAddress;
     }
 
     /** @return array<int, string> */

@@ -38,6 +38,7 @@ use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -1004,8 +1005,14 @@ class EventCartRunTest extends TestCase
         $this->assertSame([], collect($gateway->cart->items)->pluck('product_id')->all());
     }
 
-    public function test_final_route_confirmation_updates_once_from_empty_cart_and_replay_opens_the_same_run(): void
-    {
+    /** @param array<string, mixed> $selectedAddress @param array<string, mixed> $canonicalAddress */
+    #[DataProvider('canonicalExternalRoutes')]
+    public function test_final_external_route_confirmation_accepts_canonical_address_metadata_and_replay_opens_the_same_run(
+        string $deliveryType,
+        string $addressSource,
+        array $selectedAddress,
+        array $canonicalAddress,
+    ): void {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
         $gateway = new FakeCartGateway($this->readyCart());
@@ -1015,18 +1022,14 @@ class EventCartRunTest extends TestCase
         $reset = $event->silpoCartResets()->sole();
         $selection = [
             'cart_id' => $snapshot->cartId,
-            'delivery_type' => 'SelfPickup',
-            'address' => [
-                'addressType' => 'self-pickup',
-                'city' => 'Київ',
-                'street' => 'вул. Велика Васильківська, 1',
-                'latitude' => '50.4380',
-                'longitude' => '30.5150',
-            ],
+            'delivery_type' => $deliveryType,
+            'address_source' => $addressSource,
+            'address' => $selectedAddress,
             'shipments' => [['companyId' => 'company-2', 'branchId' => 'branch-2']],
             'slot_start' => $gateway->cart->slotStart,
             'slot_end' => $gateway->cart->slotEnd,
         ];
+        $gateway->fulfilmentReadbackAddress = $canonicalAddress;
         $reviewToken = $this->app->make(SilpoFulfilmentTokenService::class)->issue(
             'fulfilment_review',
             $owner,
@@ -1055,9 +1058,134 @@ class EventCartRunTest extends TestCase
 
         $this->assertSame($first->json('run_url'), $second->json('run_url'));
         $this->assertSame(1, $gateway->fulfilmentWrites);
-        $this->assertSame('SelfPickup', $gateway->cart->deliveryType);
+        $this->assertSame($deliveryType, $gateway->cart->deliveryType);
         $this->assertSame('branch-2', $gateway->cart->branchId);
         $this->assertSame([], collect($gateway->cart->items)->pluck('product_id')->all());
+        $this->assertSame(1, EventCartRun::query()->whereBelongsTo($event)->count());
+    }
+
+    /** @return array<string, array{string, string, array<string, mixed>, array<string, mixed>}> */
+    public static function canonicalExternalRoutes(): array
+    {
+        return [
+            'self pickup' => [
+                'SelfPickup',
+                'self_pickup',
+                [
+                    'addressType' => 'self-pickup',
+                    'city' => 'Київ',
+                    'street' => 'вул. Велика Васильківська, 1',
+                    'latitude' => '50.4380',
+                    'longitude' => '30.5150',
+                ],
+                [
+                    'addressType' => 'self-pickup',
+                    'latitude' => '50.4380',
+                    'longitude' => '30.5150',
+                    'courrierComment' => null,
+                    'country' => 'Україна',
+                    'region' => 'Київ',
+                    'city' => 'Київ',
+                    'street' => 'вул. Велика Васильківська, 1',
+                    'house' => '1',
+                    'polygonId' => 'polygon-1',
+                ],
+            ],
+            'nova poshta' => [
+                'NovaPoshta',
+                'nova_poshta',
+                [
+                    'addressType' => 'nova-poshta',
+                    'city' => 'Київ',
+                    'region' => 'Київська область',
+                    'latitude' => '50.4380',
+                    'longitude' => '30.5150',
+                    'officeId' => 'office-1',
+                    'street' => 'Відділення #1',
+                ],
+                [
+                    'addressType' => 'nova-poshta',
+                    'latitude' => '50.4380',
+                    'longitude' => '30.5150',
+                    'country' => 'Україна',
+                    'region' => 'Київська область',
+                    'city' => 'Київ',
+                    'street' => 'Відділення #1',
+                    'house' => '',
+                    'officeId' => 'office-1',
+                    'polygonId' => 'polygon-2',
+                ],
+            ],
+        ];
+    }
+
+    public function test_pickup_confirmation_retry_accepts_the_already_applied_route_without_a_second_write(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $this->resetCart($owner, $event);
+        $snapshot = $gateway->getFulfilmentSnapshot('test-token');
+        $reset = $event->silpoCartResets()->sole();
+        $selection = [
+            'cart_id' => $snapshot->cartId,
+            'delivery_type' => 'SelfPickup',
+            'address_source' => 'self_pickup',
+            'address' => [
+                'addressType' => 'self-pickup',
+                'city' => 'Київ',
+                'street' => 'вул. Велика Васильківська, 1',
+                'latitude' => '50.4380',
+                'longitude' => '30.5150',
+            ],
+            'shipments' => [['companyId' => 'company-2', 'branchId' => 'branch-2']],
+            'slot_start' => $gateway->cart->slotStart,
+            'slot_end' => $gateway->cart->slotEnd,
+        ];
+        $reviewToken = $this->app->make(SilpoFulfilmentTokenService::class)->issue(
+            'fulfilment_review',
+            $owner,
+            $event,
+            [
+                'base_cart_fingerprint' => $snapshot->cartFingerprint(),
+                'product_fingerprint' => $snapshot->productFingerprint(),
+                'selection' => $selection,
+                'summary' => [],
+                'reset_id' => $reset->id,
+                'empty_product_fingerprint' => $reset->empty_product_fingerprint,
+            ],
+        );
+        $gateway->fulfilmentReadbackAddress = [
+            'addressType' => 'self-pickup',
+            'latitude' => '50.4380',
+            'longitude' => '30.5150',
+            'country' => 'Україна',
+            'city' => 'Київ',
+            'street' => 'вул. Велика Васильківська, 1',
+            'house' => '1',
+        ];
+        $gateway->updateFulfilment(
+            accessToken: 'test-token',
+            cartId: $selection['cart_id'],
+            deliveryType: $selection['delivery_type'],
+            slotStart: $selection['slot_start'],
+            slotEnd: $selection['slot_end'],
+            address: $selection['address'],
+            shipments: $selection['shipments'],
+        );
+        $gateway->fulfilmentWrites = 0;
+
+        $this->actingAs($owner)
+            ->postJson(route('events.cart-runs.store', $event), [
+                'mode' => 'assisted',
+                'review_token' => $reviewToken,
+            ])
+            ->assertAccepted();
+
+        $this->assertSame(0, $gateway->fulfilmentWrites);
+        $this->assertSame('SelfPickup', $gateway->cart->deliveryType);
+        $this->assertSame('branch-2', $gateway->cart->branchId);
         $this->assertSame(1, EventCartRun::query()->whereBelongsTo($event)->count());
     }
 

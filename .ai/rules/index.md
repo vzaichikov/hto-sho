@@ -5,6 +5,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | Applies to | Rule file |
 | --- | --- |
 | app/{Actions,Data,Jobs,Models,Services}/** | .ai/rules/actions-data-jobs-models-services.md |
+| app/{Actions,Data,Services}/**/*Silpo*.php | .ai/rules/actions-data-services.md |
 | app/{Actions,Jobs,Http/Controllers}/**/*Cart*.php | .ai/rules/actions-jobs-http-controllers.md |
 | app/{Actions,Jobs,Services}/** | .ai/rules/actions-jobs-services.md |
 | tests/Fixtures/AiProductLogic/** | .ai/rules/ai-product-logic.md |
