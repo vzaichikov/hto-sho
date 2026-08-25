@@ -11,6 +11,7 @@ use App\Models\HarnessRun;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use JsonException;
 use Laravel\Mcp\Client;
 use Laravel\Mcp\Client\Primitives\Tool;
@@ -68,6 +69,18 @@ final class McpSilpoCartGateway implements SilpoCartGateway
     ];
 
     /** @var array<int, string> */
+    private const CART_READ_TOOLS = [
+        'silpo_get_my_shopping_cart',
+        'silpo_get_shopping_cart_by_id',
+    ];
+
+    /** @var array<int, string> */
+    private const CART_RESET_TOOLS = [
+        'silpo_clear_shopping_cart',
+        'silpo_get_shopping_cart_by_id',
+    ];
+
+    /** @var array<int, string> */
     private const FULFILMENT_DELIVERY_TYPES = [
         'DeliveryHome',
         'WideAssortDelivery',
@@ -84,9 +97,46 @@ final class McpSilpoCartGateway implements SilpoCartGateway
         $client = $this->client($accessToken);
 
         try {
-            $this->assertRequiredTools($client, $harnessRun, self::FULFILMENT_TOOLS);
+            $this->assertRequiredTools($client, $harnessRun, self::CART_READ_TOOLS);
 
             return $this->readFulfilmentSnapshot($client, $harnessRun);
+        } finally {
+            $client->disconnect();
+        }
+    }
+
+    public function clearCartProducts(
+        string $accessToken,
+        string $cartId,
+        ?HarnessRun $harnessRun = null,
+    ): SilpoFulfilmentSnapshotData {
+        $client = $this->client($accessToken);
+
+        try {
+            $tools = $this->assertRequiredTools($client, $harnessRun, self::CART_RESET_TOOLS);
+            $required = data_get($tools->get('silpo_clear_shopping_cart')?->inputSchema, 'required', []);
+
+            if (! is_array($required) || $required !== ['shoppingCartId']) {
+                throw new RuntimeException('Сільпо змінило правила очищення кошика. Гусь нічого не видаляв.');
+            }
+
+            $this->payload(
+                $this->callTool(
+                    $client,
+                    'silpo_clear_shopping_cart',
+                    ['shoppingCartId' => $cartId],
+                    $harnessRun,
+                ),
+                'очищення кошика',
+            );
+
+            $snapshot = $this->readFulfilmentSnapshotById($client, $cartId, $harnessRun);
+
+            if (! $snapshot->isEmpty()) {
+                throw new RuntimeException('Сільпо не підтвердило повне очищення кошика. Гусь зупинився.');
+            }
+
+            return $snapshot;
         } finally {
             $client->disconnect();
         }
@@ -1010,7 +1060,16 @@ final class McpSilpoCartGateway implements SilpoCartGateway
     private function payload(ToolResult $result, string $operation): array
     {
         if ($result->isError) {
-            throw new RuntimeException("Сільпо не завершило операцію: {$operation}.");
+            $details = Str::of($result->text())
+                ->stripTags()
+                ->squish()
+                ->replaceMatches('/Bearer\s+[A-Za-z0-9._~+\/-]+/i', 'Bearer [приховано]')
+                ->limit(1000)
+                ->toString();
+
+            throw new RuntimeException($details === ''
+                ? "Сільпо не завершило операцію: {$operation}."
+                : "Сільпо не завершило операцію: {$operation}. Відповідь Сільпо: {$details}");
         }
 
         if ($result->structuredContent !== null) {

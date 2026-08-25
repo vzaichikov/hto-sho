@@ -135,6 +135,11 @@ final readonly class SilpoFulfilmentSnapshotData
                 : 0);
     }
 
+    public function isEmpty(): bool
+    {
+        return $this->itemsCount() === 0;
+    }
+
     public function totalAfterDiscounts(): ?float
     {
         $total = Arr::get($this->cart, 'calculation.totalAfterDiscounts');

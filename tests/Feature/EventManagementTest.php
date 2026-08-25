@@ -204,7 +204,8 @@ class EventManagementTest extends TestCase
             ->assertSee('Відправити Гуся в Сільпо')
             ->assertSee('Відправити Гуся в Сільпо?')
             ->assertSee('Скажіть Гусю, куди й як доставити')
-            ->assertSee('Можна лишити нинішній маршрут або попросити інший.')
+            ->assertSee('Зберегти копію й очистити кошик')
+            ->assertSee('Оберіть місце, магазин і час заново.')
             ->assertSee('Гусю, маршрут є — лети збирати кошик')
             ->assertSee('method="dialog"', escape: false)
             ->assertDontSee('cart-sync');

@@ -314,6 +314,7 @@ const silpoDialog = document.querySelector('[data-silpo-dialog]');
 
 if (silpoDialog instanceof HTMLDialogElement) {
     const loadingPanel = silpoDialog.querySelector('[data-silpo-loading]');
+    const resetPanel = silpoDialog.querySelector('[data-silpo-reset]');
     const guardPanel = silpoDialog.querySelector('[data-silpo-guard]');
     const fulfilmentPanel = silpoDialog.querySelector('[data-silpo-fulfilment]');
     const fulfilmentContent = silpoDialog.querySelector('[data-silpo-fulfilment-content]');
@@ -327,6 +328,10 @@ if (silpoDialog instanceof HTMLDialogElement) {
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ?? '';
     let runUrl = null;
     let confirmUrl = null;
+    let confirmButtonLabel = 'Підтверджую товари — додати в кошик';
+    let resetUrl = null;
+    let resetToken = null;
+    let verifiedResetToken = null;
     let discoverUrl = null;
     let startUrl = null;
     let reviewToken = null;
@@ -365,16 +370,21 @@ if (silpoDialog instanceof HTMLDialogElement) {
     };
 
     const showPanel = (target) => {
-        [loadingPanel, guardPanel, fulfilmentPanel, runPanel].forEach((panel) => {
+        [loadingPanel, resetPanel, guardPanel, fulfilmentPanel, runPanel].forEach((panel) => {
             panel?.classList.toggle('hidden', panel !== target);
-            panel?.classList.toggle('grid', panel === target && [loadingPanel, guardPanel].includes(panel));
+            panel?.classList.toggle('grid', panel === target && [loadingPanel, resetPanel, guardPanel].includes(panel));
         });
 
         if (target === loadingPanel) {
             updateMinimizedHarness({
                 title: 'Гусь працює',
-                message: 'Гусь звіряє ваш нинішній маршрут…',
+                message: loadingPanel.querySelector('[data-silpo-loading-message]').textContent,
                 active: true,
+            });
+        } else if (target === resetPanel) {
+            updateMinimizedHarness({
+                title: 'Гусь чекає на дозвіл',
+                message: 'Копія й повне очищення почнуться лише після вашого підтвердження.',
             });
         } else if (target === fulfilmentPanel) {
             updateMinimizedHarness({
@@ -382,6 +392,11 @@ if (silpoDialog instanceof HTMLDialogElement) {
                 message: 'Розгорніть вікно й підкажіть, куди йому летіти.',
             });
         }
+    };
+
+    const showLoading = (message) => {
+        loadingPanel.querySelector('[data-silpo-loading-message]').textContent = message;
+        showPanel(loadingPanel);
     };
 
     const fetchJson = async (url, options = {}) => {
@@ -511,11 +526,15 @@ if (silpoDialog instanceof HTMLDialogElement) {
             throw new Error('Гусь загубив двері до вибору маршруту.');
         }
 
-        showPanel(loadingPanel);
+        if (! verifiedResetToken) {
+            throw new Error('Спершу підтвердьте збереження копії й очищення кошика.');
+        }
+
+        showLoading('Гусь перевіряє чистий кошик і свіжий маршрут…');
 
         return fetchJson(discoverUrl, {
             method: 'POST',
-            body: JSON.stringify(input),
+            body: JSON.stringify({ ...input, reset_token: verifiedResetToken }),
         });
     };
 
@@ -653,7 +672,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
                 choose.classList.add('mt-3', 'w-full');
                 card.append(choose);
             } else {
-                const fallback = actionButton('До поточного маршруту й знайомих адрес', renderManualFulfilment, false);
+                const fallback = actionButton('До попередніх і збережених адрес', renderManualFulfilment, false);
                 fallback.classList.add('mt-3', 'w-full');
                 card.append(fallback);
             }
@@ -809,45 +828,15 @@ if (silpoDialog instanceof HTMLDialogElement) {
         input.focus();
     };
 
-    const currentRouteCard = (currentRoute, withKeepAction = false) => {
+    const freshStartCard = () => {
         const current = element('section', 'rounded-[22px] border-2 border-green/35 bg-green-soft/15 p-4 sm:p-5');
-
-        if (! currentRoute) {
-            current.append(
-                element('h6', 'font-display text-2xl', 'Маршрут іще не склався'),
-                element('p', 'mt-2 text-sm leading-6 text-muted', 'Адреса, магазин або час відсутні. Гусь не геройствує, а просить обрати їх явно.'),
-            );
-
-            return current;
-        }
-
-        current.append(element('h6', 'font-display text-2xl', 'Що стоїть у кошику зараз'));
-        const details = element('dl', 'mt-3 grid gap-3 sm:grid-cols-2');
-        details.append(
-            detail('Отримання', currentRoute.delivery_label),
-            detail('Куди', currentRoute.address_label),
-            detail('Звідки збирає Сільпо', (currentRoute.branch_labels ?? []).join(' + ')),
-            detail('Час', currentRoute.timeslot),
-            detail('У кошику вже є', `${currentRoute.items_count ?? 0} позицій`),
-            detail('Поточна сума', money(currentRoute.total)),
+        current.append(
+            element('h6', 'font-display text-2xl', 'Кошик очищено й перевірено'),
+            element('p', 'mt-2 text-sm leading-6 text-muted', 'Зашифрована копія попереднього складу лишається з цією подією. Тепер потрібен повністю свіжий вибір місця, магазину й часу.'),
         );
-        current.append(details);
-        const warnings = cartWarnings(currentRoute.validations);
 
-        if (warnings) {
-            current.append(warnings);
-        }
-
-        if ((currentRoute.shipments_count ?? 0) > 1) {
-            current.append(element('p', 'mt-3 rounded-2xl bg-yellow/45 p-3 text-sm font-bold', `Маршрут розділено на ${currentRoute.shipments_count} відправлення.`));
-        }
-
-        if (withKeepAction && currentRoute.review_token) {
-            const keep = actionButton('Лишаємо так — Гусю, покажи фінальну звірку', () => renderReview(currentRoute, currentRoute.review_token));
-            keep.classList.add('mt-4', 'w-full');
-            current.append(keep);
-        } else if (! currentRoute.review_token) {
-            current.append(element('p', 'mt-4 rounded-2xl border-2 border-orange/30 bg-orange/8 p-3 text-sm font-bold text-orange-dark', 'Цей час уже недоступний. Попросіть Гуся знайти свіжий маршрут.'));
+        if ((fulfilmentInitial?.backup?.items_count ?? 0) > 0) {
+            current.append(element('p', 'mt-3 rounded-2xl bg-paper p-3 text-sm font-bold', `У копії: ${fulfilmentInitial.backup.items_count} позицій · ${money(fulfilmentInitial.backup.total)}`));
         }
 
         return current;
@@ -855,7 +844,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
 
     const renderManualFulfilment = () => {
         const payload = fulfilmentInitial;
-        setFulfilmentBody('Оберіть маршрут вручну', 'Запасний план Гуся', 'Оберіть нинішню чи збережену адресу або знайдіть іншу точку. Усе одно кожен крок доведеться підтвердити — диктатури дзьоба не буде.');
+        setFulfilmentBody('Оберіть маршрут вручну', 'Запасний план Гуся', 'Оберіть попередню чи збережену адресу або знайдіть іншу точку. Магазин і час у будь-якому разі вибираємо заново.');
         const layout = element('div', 'grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]');
         const change = element('section', 'rounded-[22px] bg-canvas p-4 sm:p-5');
         change.append(
@@ -870,23 +859,13 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const search = actionButton('Інша точка — нехай Гусь пошукає', renderAddressSearch, false);
         search.classList.add('mt-3', 'w-full');
         change.append(search);
-        layout.append(currentRouteCard(payload.current, true), change);
+        layout.append(freshStartCard(), change);
         fulfilmentContent.append(layout);
     };
 
     const handleRouteIntent = (payload, sentence) => {
         if (payload.kind === 'clarification') {
             renderIntentPrompt(payload.question, sentence);
-
-            return;
-        }
-
-        if (payload.kind === 'keep_current') {
-            if (fulfilmentInitial.current?.review_token) {
-                renderReview(fulfilmentInitial.current, fulfilmentInitial.current.review_token);
-            } else {
-                renderIntentPrompt('Нинішній час уже не підходить. Скажіть Гусю нову адресу, спосіб і бажаний час.', sentence);
-            }
 
             return;
         }
@@ -907,7 +886,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
     };
 
     const renderIntentPrompt = (question = null, previousSentence = '') => {
-        setFulfilmentBody('Скажіть Гусю, куди й як доставити', '', 'Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.');
+        setFulfilmentBody('Скажіть Гусю, куди й як доставити', '', 'Оберіть місце, магазин і час заново. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить кожну частину маршруту.');
         const layout = element('div', 'grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(18rem,0.9fr)]');
         const prompt = element('section', 'rounded-[24px] border-2 border-ink bg-yellow/25 p-4 shadow-[4px_4px_0_#20201D] sm:p-5');
 
@@ -956,7 +935,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const manual = actionButton('Обрати маршрут вручну', renderManualFulfilment, true);
         manual.classList.add('mt-4', 'w-full', 'sm:w-auto');
         prompt.append(manual);
-        layout.append(prompt, currentRouteCard(fulfilmentInitial.current));
+        layout.append(prompt, freshStartCard());
         fulfilmentContent.append(layout);
 
         if (question) {
@@ -966,6 +945,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
 
     const renderInitialFulfilment = (payload) => {
         fulfilmentInitial = payload;
+        verifiedResetToken = payload.reset_token;
         discoverUrl = payload.discover_url;
         startUrl = payload.start_url;
         renderIntentPrompt();
@@ -1171,6 +1151,14 @@ if (silpoDialog instanceof HTMLDialogElement) {
         const confirmation = runPanel.querySelector('[data-silpo-confirmation]');
         confirmation.classList.toggle('hidden', ! payload.requires_confirmation);
         confirmUrl = payload.requires_confirmation ? payload.confirm_url : null;
+        confirmButtonLabel = payload.confirmation_label ?? 'Підтверджую товари — додати в кошик';
+        confirmation.querySelector('[data-silpo-confirm]').textContent = confirmButtonLabel;
+        confirmation.querySelector('[data-silpo-confirm-title]').textContent = payload.commit_retry_available
+            ? 'Набір збережено — можна повторити'
+            : 'Останній людський погляд';
+        confirmation.querySelector('[data-silpo-confirm-copy]').textContent = payload.commit_retry_available
+            ? 'Гусь залишив рівно той набір, який ви вже підтвердили. Перед повтором він перевірить маршрут і не допустить сторонні товари.'
+            : 'Перевірте реальні товари Сільпо, рольові заміни, знаки питання щодо паковання, кількості й суму. До цього підтвердження Гусь нічого в кошик не записує.';
 
         const warnings = [...(payload.warnings ?? [])];
 
@@ -1236,8 +1224,11 @@ if (silpoDialog instanceof HTMLDialogElement) {
     };
 
     const preflight = async () => {
-        showPanel(loadingPanel);
+        showLoading('Гусь готує безпечний старт…');
         stopPolling();
+        resetUrl = null;
+        resetToken = null;
+        verifiedResetToken = null;
 
         try {
             const payload = await fetchJson(silpoDialog.dataset.preflightUrl);
@@ -1248,7 +1239,9 @@ if (silpoDialog instanceof HTMLDialogElement) {
                 return;
             }
 
-            renderInitialFulfilment(payload);
+            resetUrl = payload.reset_url;
+            resetToken = payload.reset_token;
+            showPanel(resetPanel);
         } catch (error) {
             showGuard(error.payload ?? { message: error.message });
         }
@@ -1290,6 +1283,31 @@ if (silpoDialog instanceof HTMLDialogElement) {
             silpoDialog.showModal();
             preflight();
         });
+    });
+
+    resetPanel.querySelector('[data-silpo-reset-confirm]').addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+
+        if (! resetUrl || ! resetToken) {
+            showGuard({ message: 'Підтвердження очищення вже неактуальне. Відкрийте похід Гуся ще раз.' });
+
+            return;
+        }
+
+        button.disabled = true;
+        showLoading('Гусь зберігає копію й звільняє кошик…');
+
+        try {
+            const payload = await fetchJson(resetUrl, {
+                method: 'POST',
+                body: JSON.stringify({ reset_token: resetToken }),
+            });
+            renderInitialFulfilment(payload);
+        } catch (error) {
+            showGuard(error.payload ?? { message: error.message });
+        } finally {
+            button.disabled = false;
+        }
     });
 
     silpoDialog.querySelector('[data-silpo-start]').addEventListener('click', async (event) => {
@@ -1362,7 +1380,7 @@ if (silpoDialog instanceof HTMLDialogElement) {
             showGuard(error.payload ?? { message: error.message });
         } finally {
             button.disabled = false;
-            button.textContent = 'Підтверджую товари — додати в кошик';
+            button.textContent = confirmButtonLabel;
         }
     });
 

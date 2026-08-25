@@ -14,6 +14,12 @@ interface SilpoCartGateway
         ?HarnessRun $harnessRun = null,
     ): ?SilpoFulfilmentSnapshotData;
 
+    public function clearCartProducts(
+        string $accessToken,
+        string $cartId,
+        ?HarnessRun $harnessRun = null,
+    ): SilpoFulfilmentSnapshotData;
+
     /** @return array<int, array<string, mixed>> */
     public function getSavedDeliveryAddresses(
         string $accessToken,

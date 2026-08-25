@@ -10,6 +10,9 @@ use App\Data\SilpoCartContextData;
 use App\Jobs\CommitEventCartRunJob;
 use App\Models\EventCartRun;
 use App\Services\GooseCartStatusService;
+use App\Services\SilpoCartLock;
+use App\Services\SilpoCartResetGuard;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 use UnexpectedValueException;
@@ -19,11 +22,26 @@ final class ConfirmEventCartRunAction
     public function __construct(
         private readonly SilpoCartGateway $silpo,
         private readonly GooseCartStatusService $statuses,
+        private readonly SilpoCartResetGuard $resetGuard,
+        private readonly SilpoCartLock $lock,
     ) {}
 
     public function execute(EventCartRun $run): EventCartRun
     {
-        $run->loadMissing(['event.user.silpoConnection', 'harnessRun']);
+        $run->loadMissing(['event.user.silpoConnection', 'harnessRun', 'silpoCartReset']);
+
+        try {
+            return $this->lock->execute(
+                $run->event->user_id,
+                fn (): EventCartRun => $this->confirm($run),
+            );
+        } catch (LockTimeoutException) {
+            throw new RuntimeException('Гусь уже працює з цим кошиком. Дайте йому мить і спробуйте ще раз.');
+        }
+    }
+
+    private function confirm(EventCartRun $run): EventCartRun
+    {
 
         if ($run->status !== CartRunStatus::WaitingForConfirmation
             || $run->phase !== CartRunPhase::ReadyToCommit) {
@@ -36,10 +54,24 @@ final class ConfirmEventCartRunAction
             throw new RuntimeException((string) $run->refresh()->error);
         }
 
+        if ($run->silpoCartReset === null) {
+            $this->markStale($run, 'Для цього старого походу немає підтвердженого очищення. Запустіть Гуся заново.');
+
+            throw new RuntimeException((string) $run->refresh()->error);
+        }
+
+        $this->resetGuard->assertLatest($run->silpoCartReset, $run->event, allowConsumed: true);
+
         $currentCart = $this->silpo->getReadyCart(
             $this->accessToken($run),
             $run->harnessRun,
         );
+
+        if ($currentCart !== null && ! $this->cartMayBeCommitted($run, $currentCart)) {
+            $this->markStale($run, 'У кошику Сільпо зʼявилися сторонні товари. Гусь не змішуватиме їх із підтвердженим набором.');
+
+            throw new RuntimeException((string) $run->refresh()->error);
+        }
 
         return $this->confirmLocked($run, $currentCart);
     }
@@ -77,6 +109,10 @@ final class ConfirmEventCartRunAction
                 'status' => CartRunStatus::Committing,
                 'blocker' => null,
                 'error' => null,
+                'state' => [
+                    ...$lockedRun->state,
+                    'commit_attempts' => (int) data_get($lockedRun->state, 'commit_attempts', 0) + 1,
+                ],
                 'cursor' => $lockedRun->cursor + 1,
             ]);
             $this->statuses->append($lockedRun, 'confirmation');
@@ -125,6 +161,26 @@ final class ConfirmEventCartRunAction
     {
         return $run->event->state_version === $run->plan_state_version
             && $run->event->isPlanCurrent();
+    }
+
+    private function cartMayBeCommitted(EventCartRun $run, SilpoCartContextData $cart): bool
+    {
+        if ($cart->items === []) {
+            return true;
+        }
+
+        if ((int) data_get($run->state, 'commit_attempts', 0) === 0) {
+            return false;
+        }
+
+        $approvedProductIds = collect($run->staged_items ?? [])
+            ->pluck('product_id')
+            ->filter(fn (mixed $productId): bool => is_string($productId) && $productId !== '')
+            ->unique();
+
+        return collect($cart->items)->every(
+            fn (array $item): bool => $approvedProductIds->containsStrict((string) data_get($item, 'product_id')),
+        );
     }
 
     private function accessToken(EventCartRun $run): string

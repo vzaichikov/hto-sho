@@ -9,7 +9,7 @@ use App\HarnessRunType;
 use App\Models\Event;
 use App\Models\User;
 use App\Services\HarnessRecorder;
-use Illuminate\Support\Facades\Cache;
+use App\Services\SilpoCartLock;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -19,12 +19,13 @@ final class RefreshSilpoCartTimeslotAction
     public function __construct(
         private readonly SilpoCartGateway $silpo,
         private readonly HarnessRecorder $harnessRecorder,
+        private readonly SilpoCartLock $lock,
     ) {}
 
     /** @param array{route_fingerprint: string, current_slot_fingerprint: string, slot_start: string, slot_end: string} $input */
     public function execute(User $user, Event $event, array $input): ?SilpoCartContextData
     {
-        if ($event->cartRuns()->whereIn('status', $this->activeStatuses())->exists()) {
+        if ($user->cartRuns()->whereIn('event_cart_runs.status', $this->activeStatuses())->exists()) {
             throw new RuntimeException('Гусь уже працює з цим кошиком. Спершу завершіть або перезапустіть поточний збір.');
         }
 
@@ -36,7 +37,7 @@ final class RefreshSilpoCartTimeslotAction
             throw new RuntimeException('Звʼязок із Сільпо вже неактивний. Підключіть його ще раз і повторіть перевірку.');
         }
 
-        return Cache::lock("silpo-cart-refresh:user:{$user->id}", 45)->block(2, function () use (
+        return $this->lock->execute($user->id, function () use (
             $connection,
             $event,
             $input,

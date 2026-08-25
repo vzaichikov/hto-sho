@@ -2,18 +2,16 @@
 
 namespace App\Actions;
 
-use App\CartRunStatus;
 use App\Contracts\SilpoCartGateway;
 use App\Data\SilpoFulfilmentSnapshotData;
 use App\Exceptions\SilpoCartUnavailableException;
 use App\HarnessRunType;
 use App\Models\Event;
-use App\Models\HarnessRun;
+use App\Models\SilpoCartReset;
 use App\Models\User;
 use App\Services\HarnessRecorder;
-use App\Services\SilpoCartValidationPresenter;
+use App\Services\SilpoCartResetGuard;
 use App\Services\SilpoFulfilmentTokenService;
-use Carbon\CarbonImmutable;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use Throwable;
@@ -24,25 +22,12 @@ final class PrepareSilpoFulfilmentAction
         private readonly SilpoCartGateway $silpo,
         private readonly SilpoFulfilmentTokenService $tokens,
         private readonly HarnessRecorder $harnessRecorder,
-        private readonly SilpoCartValidationPresenter $validationPresenter,
+        private readonly SilpoCartResetGuard $resetGuard,
     ) {}
 
     /** @return array<string, mixed> */
-    public function execute(User $user, Event $event): array
+    public function execute(User $user, Event $event, SilpoCartReset $reset): array
     {
-        $activeRun = $event->cartRuns()
-            ->whereIn('status', $this->activeStatuses())
-            ->where('plan_state_version', $event->state_version)
-            ->latest()
-            ->first();
-
-        if ($activeRun !== null) {
-            return [
-                'ready' => true,
-                'active_run_url' => route('events.cart-runs.show', [$event, $activeRun]),
-            ];
-        }
-
         $connection = $user->silpoConnection()->whereNull('revoked_at')->first();
 
         if ($connection === null || ($connection->expires_at !== null && $connection->expires_at->isPast())) {
@@ -71,17 +56,13 @@ final class PrepareSilpoFulfilmentAction
                 );
             }
 
-            $branches = $this->silpo->getFulfilmentBranches(
-                $connection->access_token,
-                pickup: false,
-                novaPoshta: false,
-                harnessRun: $harnessRun,
-            );
+            $this->resetGuard->assertLatest($reset, $event);
+            $this->resetGuard->assertEmptySnapshot($reset, $snapshot);
             $savedAddresses = $this->silpo->getSavedDeliveryAddresses(
                 $connection->access_token,
                 $harnessRun,
             );
-            $response = $this->response($user, $event, $snapshot, $branches, $savedAddresses, $connection->access_token, $harnessRun);
+            $response = $this->response($user, $event, $reset, $snapshot, $savedAddresses);
             $this->harnessRecorder->finish($harnessRun);
 
             return $response;
@@ -95,20 +76,16 @@ final class PrepareSilpoFulfilmentAction
     }
 
     /**
-     * @param  array<int, array<string, mixed>>  $branches
      * @param  array<int, array<string, mixed>>  $savedAddresses
      * @return array<string, mixed>
      */
     private function response(
         User $user,
         Event $event,
+        SilpoCartReset $reset,
         SilpoFulfilmentSnapshotData $snapshot,
-        array $branches,
         array $savedAddresses,
-        string $accessToken,
-        HarnessRun $harnessRun,
     ): array {
-        $branchMap = collect($branches)->keyBy(fn (array $branch): string => (string) Arr::get($branch, 'branchId'));
         $addresses = collect();
 
         if ($snapshot->address() !== []) {
@@ -119,18 +96,19 @@ final class PrepareSilpoFulfilmentAction
                 $snapshot,
                 $snapshot->address(),
                 $homeWritable,
-                'Поточна адреса',
-                'current_cart',
+                'Попередня адреса',
+                'previous_cart',
                 $homeWritable
                     ? null
-                    : 'Ця точка належить нинішньому способу отримання, а не домашній доставці. Гусь може лишити маршрут як є або знайти від неї самовивіз.',
+                    : 'Цю адресу можна використати як точку пошуку, але місце, магазин і час треба обрати заново.',
+                $reset,
             ));
         }
 
         collect($savedAddresses)
             ->map(fn (array $address): array => $this->unwrapAddress($address))
             ->filter(fn (array $address): bool => $this->hasCoordinates($address))
-            ->each(function (array $address) use ($addresses, $event, $snapshot, $user): void {
+            ->each(function (array $address) use ($addresses, $event, $reset, $snapshot, $user): void {
                 $addresses->push($this->addressOption(
                     $user,
                     $event,
@@ -140,72 +118,22 @@ final class PrepareSilpoFulfilmentAction
                     'Збережена адреса',
                     'saved_address',
                     'Сільпо показало цю збережену адресу, але не дозволило перенести її в поточний кошик. Гусь може знайти від неї самовивіз або Нову пошту.',
+                    $reset,
                 ));
             });
 
         $addresses = $addresses
             ->unique(fn (array $address): string => hash('sha256', $address['label']))
             ->values();
-        $current = null;
-
-        if ($snapshot->isComplete()) {
-            $selection = $snapshot->currentSelection();
-            $branchLabels = collect($snapshot->routeShipments())
-                ->map(fn (array $shipment): string => $this->branchLabel(
-                    $branchMap->get($shipment['branchId']),
-                ))
-                ->values()
-                ->all();
-            $routePayload = [
-                'cart_id' => $snapshot->cartId,
-                'address' => $snapshot->address(),
-                'address_label' => $snapshot->addressLabel(),
-                'delivery_type' => $snapshot->deliveryType(),
-                'delivery_label' => $this->deliveryLabel((string) $snapshot->deliveryType()),
-                'shipments' => $snapshot->routeShipments(),
-                'branch_labels' => $branchLabels,
-                'writable' => true,
-                'address_source' => 'current_cart',
-                'target_branch_id' => data_get($snapshot->routeShipments(), '0.branchId'),
-            ];
-            $slots = in_array($snapshot->deliveryType(), [
-                'DeliveryHome',
-                'WideAssortDelivery',
-                'NovaPoshta',
-                'SelfPickup',
-            ], true)
-                ? $this->silpo->getFulfilmentSlots(
-                    $accessToken,
-                    $snapshot->routeShipments()[0]['branchId'],
-                    (string) $snapshot->deliveryType(),
-                    $harnessRun,
-                )
-                : [];
-            $currentSlot = collect($slots)->first(fn (array $slot): bool => data_get($slot, 'available') === true
-                && data_get($slot, 'start') === $snapshot->slotStart()
-                && data_get($slot, 'end') === $snapshot->slotEnd());
-            $reviewToken = is_array($currentSlot)
-                ? $this->reviewToken($user, $event, $snapshot, $selection, $routePayload)
-                : null;
-
-            $current = [
-                'address_label' => $snapshot->addressLabel(),
-                'delivery_label' => $routePayload['delivery_label'],
-                'branch_labels' => $branchLabels,
-                'timeslot' => $this->timeslotLabel((string) $snapshot->slotStart(), (string) $snapshot->slotEnd()),
-                'slot_valid' => is_array($currentSlot),
-                'items_count' => $snapshot->itemsCount(),
-                'total' => $snapshot->totalAfterDiscounts(),
-                'shipments_count' => count($snapshot->routeShipments()),
-                'validations' => $this->validationPresenter->present($snapshot->validations()),
-                'route_token' => $this->tokens->issue('fulfilment_route', $user, $event, $routePayload),
-                'review_token' => $reviewToken,
-            ];
-        }
 
         return [
             'ready' => true,
-            'current' => $current,
+            'reset_verified' => true,
+            'reset_token' => $this->resetGuard->issueToken($reset, $user, $event),
+            'backup' => [
+                'items_count' => $reset->items_count,
+                'total' => $reset->total,
+            ],
             'addresses' => $addresses->all(),
             'discover_url' => route('events.silpo.fulfilment.discover', $event),
             'start_url' => route('events.cart-runs.store', $event),
@@ -222,6 +150,7 @@ final class PrepareSilpoFulfilmentAction
         string $eyebrow,
         string $addressSource,
         ?string $homeUnavailableMessage,
+        SilpoCartReset $reset,
     ): array {
         return [
             'eyebrow' => $eyebrow,
@@ -234,26 +163,18 @@ final class PrepareSilpoFulfilmentAction
                 'home_writable' => $homeWritable,
                 'address_source' => $addressSource,
                 'home_unavailable_message' => $homeUnavailableMessage,
+                ...$this->resetBinding($reset),
             ]),
         ];
     }
 
-    /** @param array<string, mixed> $selection @param array<string, mixed> $routePayload */
-    private function reviewToken(
-        User $user,
-        Event $event,
-        SilpoFulfilmentSnapshotData $snapshot,
-        array $selection,
-        array $routePayload,
-    ): string {
-        return $this->tokens->issue('fulfilment_review', $user, $event, [
-            'base_cart_fingerprint' => $snapshot->cartFingerprint(),
-            'product_fingerprint' => $snapshot->productFingerprint(),
-            'selection' => $selection,
-            'summary' => Arr::only($routePayload, [
-                'address_label', 'delivery_label', 'branch_labels',
-            ]),
-        ]);
+    /** @return array{reset_id: int, empty_product_fingerprint: string} */
+    private function resetBinding(SilpoCartReset $reset): array
+    {
+        return [
+            'reset_id' => $reset->id,
+            'empty_product_fingerprint' => (string) $reset->empty_product_fingerprint,
+        ];
     }
 
     /** @param array<string, mixed> $address */
@@ -288,48 +209,5 @@ final class PrepareSilpoFulfilmentAction
             Arr::get($address, 'house'),
             Arr::get($address, 'houseNumber'),
         ])->filter(fn (mixed $part): bool => is_string($part) && $part !== '')->unique()->implode(', ');
-    }
-
-    /** @param array<string, mixed>|null $branch */
-    private function branchLabel(?array $branch): string
-    {
-        if ($branch === null) {
-            return 'Магазин Сільпо';
-        }
-
-        return collect([
-            Arr::get($branch, 'cityFull', Arr::get($branch, 'city')),
-            Arr::get($branch, 'addressFull', Arr::get($branch, 'address')),
-        ])->filter()->unique()->implode(', ');
-    }
-
-    private function deliveryLabel(string $deliveryType): string
-    {
-        return match ($deliveryType) {
-            'DeliveryHome' => 'Доставка Сільпо',
-            'WideAssortDelivery' => 'Доставка широкого асортименту',
-            'NovaPoshta' => 'Нова пошта',
-            'SelfPickup' => 'Самовивіз',
-            default => 'Спосіб отримання Сільпо',
-        };
-    }
-
-    private function timeslotLabel(string $start, string $end): string
-    {
-        $timezone = (string) config('app.timezone');
-
-        return CarbonImmutable::parse($start)->setTimezone($timezone)->translatedFormat('j M, H:i')
-            .'–'.CarbonImmutable::parse($end)->setTimezone($timezone)->format('H:i');
-    }
-
-    /** @return array<int, string> */
-    private function activeStatuses(): array
-    {
-        return [
-            CartRunStatus::Running->value,
-            CartRunStatus::WaitingForAnswer->value,
-            CartRunStatus::WaitingForConfirmation->value,
-            CartRunStatus::Committing->value,
-        ];
     }
 }

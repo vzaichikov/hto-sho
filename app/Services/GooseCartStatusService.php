@@ -26,7 +26,14 @@ final class GooseCartStatusService
         $step = $run->steps()->create([
             'sequence' => $sequence,
             'kind' => $kind,
-            'message' => $this->phrase($kind, $run->id, $sequence, $product, $previousMessage),
+            'message' => $this->phrase(
+                $kind,
+                $run->id,
+                $sequence,
+                $product,
+                $previousMessage,
+                is_string(data_get($context, 'query')) ? data_get($context, 'query') : null,
+            ),
             'context' => $context,
         ]);
 
@@ -59,8 +66,12 @@ final class GooseCartStatusService
         int $sequence,
         ?string $product = null,
         ?string $previousMessage = null,
+        ?string $query = null,
     ): string {
-        $phrases = config("goose_cart_phrases.{$kind}");
+        $queryPhrases = filled($query) ? config("goose_cart_phrases.{$kind}_query") : null;
+        $phrases = is_array($queryPhrases) && $queryPhrases !== []
+            ? $queryPhrases
+            : config("goose_cart_phrases.{$kind}");
 
         if (! is_array($phrases) || $phrases === []) {
             throw new RuntimeException("Unknown Goose cart phrase category [{$kind}].");
@@ -69,11 +80,20 @@ final class GooseCartStatusService
         $index = abs(crc32("{$runId}:{$kind}:{$sequence}")) % count($phrases);
         $phrase = $phrases[$index];
         $safeProduct = Str::of($product ?? 'цей товар')->squish()->limit(100, '…')->toString();
-        $message = str_replace(['%product%', '%product name%'], $safeProduct, $phrase);
+        $safeQuery = Str::of($query ?? $safeProduct)->squish()->limit(160, '…')->toString();
+        $message = str_replace(
+            ['%product%', '%product name%', '%query%'],
+            [$safeProduct, $safeProduct, $safeQuery],
+            $phrase,
+        );
 
         if ($message === $previousMessage && count($phrases) > 1) {
             $phrase = $phrases[($index + 1) % count($phrases)];
-            $message = str_replace(['%product%', '%product name%'], $safeProduct, $phrase);
+            $message = str_replace(
+                ['%product%', '%product name%', '%query%'],
+                [$safeProduct, $safeProduct, $safeQuery],
+                $phrase,
+            );
         }
 
         return $message;

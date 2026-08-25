@@ -8,6 +8,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | app/{Actions,Jobs,Http/Controllers}/**/*Cart*.php | .ai/rules/actions-jobs-http-controllers.md |
 | app/{Actions,Jobs,Services}/** | .ai/rules/actions-jobs-services.md |
 | tests/Fixtures/AiProductLogic/** | .ai/rules/ai-product-logic.md |
+| {app/{Jobs,Services}/**/*Cart*.php,config/goose_cart_phrases.php} | .ai/rules/app-jobs-services.md |
 | {app,config,database,resources,routes,tests}/** | .ai/rules/appconfigdatabaseresourcesroutestests.md |
 | {vite.config.js,resources/css/**,resources/fonts/**,resources/views/components/layouts/**} | .ai/rules/components-layouts.md |
 | resources/views/{components,events}/** | .ai/rules/componentsevents.md |
@@ -22,6 +23,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | {resources/views/events/**,resources/js/app.js,config/goose_analysis_phrases.php} | .ai/rules/js.md |
 | {vite.config.js,resources/views/components/layouts/**} | .ai/rules/layouts.md |
 | app/{Models,Services}/Harness*.php | .ai/rules/models-services.md |
+| app/{Actions,Jobs,Services,Http/Controllers,Http/Requests,Contracts,Models}/**/*.php | .ai/rules/requests-contracts-models.md |
 | resources/**/landing* | .ai/rules/resources.md |
 | app/Services/SilpoOAuthClient.php, app/Services/AiRequestFactory.php | .ai/rules/services.md |
 | resources/views/** | .ai/rules/views.md |

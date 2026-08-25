@@ -27,6 +27,7 @@ class DiscoverSilpoFulfilmentRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'reset_token' => ['required', 'string'],
             'stage' => ['required', Rule::in([
                 'intent',
                 'address_search',

@@ -238,7 +238,11 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
         $state['last_details'] = null;
         unset($state['needs'][$currentIndex]['assisted_search_pending']);
         unset($state['needs'][$currentIndex]['agent_search_pending']);
-        $stepDefinitions = [['kind' => 'searching', 'product' => (string) data_get($need, 'name')]];
+        $stepDefinitions = [[
+            'kind' => 'searching',
+            'product' => (string) data_get($need, 'name'),
+            'query' => $query,
+        ]];
 
         if ($candidates === [] && count($state['needs'][$currentIndex]['attempts']) < 6) {
             $fallbackQuery = $candidateSuitability->nextSearchQuery($state['needs'][$currentIndex]);
@@ -248,7 +252,11 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 $this->transition(
                     $run,
                     ['phase' => CartRunPhase::Searching, 'state' => $state],
-                    [...$stepDefinitions, ['kind' => 'retry', 'product' => (string) data_get($need, 'name')]],
+                    [...$stepDefinitions, [
+                        'kind' => 'retry',
+                        'product' => (string) data_get($need, 'name'),
+                        'query' => $fallbackQuery,
+                    ]],
                 );
 
                 return;
@@ -778,7 +786,11 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 $this->transition(
                     $run,
                     ['phase' => CartRunPhase::Searching, 'state' => $state],
-                    [['kind' => 'retry', 'product' => (string) data_get($need, 'name')]],
+                    [[
+                        'kind' => 'retry',
+                        'product' => (string) data_get($need, 'name'),
+                        'query' => $fallbackQuery,
+                    ]],
                 );
 
                 return;
@@ -851,7 +863,11 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 $this->transition(
                     $run,
                     ['phase' => CartRunPhase::Searching, 'state' => $state],
-                    [['kind' => 'retry', 'product' => (string) data_get($need, 'name')]],
+                    [[
+                        'kind' => 'retry',
+                        'product' => (string) data_get($need, 'name'),
+                        'query' => $fallbackQuery,
+                    ]],
                 );
 
                 return;
@@ -1033,7 +1049,11 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
         $this->transition(
             $run,
             ['phase' => CartRunPhase::Searching, 'state' => $state],
-            [['kind' => $kind, 'product' => (string) data_get($need, 'name')]],
+            [[
+                'kind' => $kind,
+                'product' => (string) data_get($need, 'name'),
+                'query' => $query,
+            ]],
         );
     }
 
@@ -1193,7 +1213,11 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 $this->transition(
                     $run,
                     ['phase' => CartRunPhase::Searching, 'state' => $state],
-                    [['kind' => 'retry', 'product' => (string) data_get($need, 'name')]],
+                    [[
+                        'kind' => 'retry',
+                        'product' => (string) data_get($need, 'name'),
+                        'query' => $fallbackQuery,
+                    ]],
                 );
 
                 return;
@@ -1367,7 +1391,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
 
     /**
      * @param  array<string, mixed>  $attributes
-     * @param  array<int, array{kind: string, product?: string}>  $stepDefinitions
+     * @param  array<int, array{kind: string, product?: string, query?: string}>  $stepDefinitions
      */
     private function transition(
         EventCartRun $run,
@@ -1393,6 +1417,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                     $lockedRun,
                     $step['kind'],
                     $step['product'] ?? null,
+                    isset($step['query']) ? ['query' => $step['query']] : [],
                 );
             }
 
@@ -1649,7 +1674,11 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ],
             [
                 ['kind' => 'auditing'],
-                ['kind' => 'retry', 'product' => (string) data_get($state, "needs.{$needIndex}.name")],
+                [
+                    'kind' => 'retry',
+                    'product' => (string) data_get($state, "needs.{$needIndex}.name"),
+                    'query' => $query,
+                ],
             ],
         );
 

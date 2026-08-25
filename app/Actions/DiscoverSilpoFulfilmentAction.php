@@ -8,8 +8,10 @@ use App\Data\SilpoFulfilmentSnapshotData;
 use App\HarnessRunType;
 use App\Models\Event;
 use App\Models\HarnessRun;
+use App\Models\SilpoCartReset;
 use App\Models\User;
 use App\Services\HarnessRecorder;
+use App\Services\SilpoCartResetGuard;
 use App\Services\SilpoCartValidationPresenter;
 use App\Services\SilpoFulfilmentTokenService;
 use Carbon\CarbonImmutable;
@@ -21,12 +23,15 @@ use Throwable;
 
 final class DiscoverSilpoFulfilmentAction
 {
+    private ?SilpoCartReset $activeReset = null;
+
     public function __construct(
         private readonly SilpoCartGateway $silpo,
         private readonly SilpoRouteIntentInterpreter $intentInterpreter,
         private readonly SilpoFulfilmentTokenService $tokens,
         private readonly HarnessRecorder $harnessRecorder,
         private readonly SilpoCartValidationPresenter $validationPresenter,
+        private readonly SilpoCartResetGuard $resetGuard,
     ) {}
 
     /** @param array<string, mixed> $input @return array<string, mixed> */
@@ -46,6 +51,12 @@ final class DiscoverSilpoFulfilmentAction
         );
 
         try {
+            $this->activeReset = $this->resetGuard->fromToken(
+                (string) $input['reset_token'],
+                $user,
+                $event,
+            );
+            $this->snapshot($connection->access_token, $harnessRun);
             $response = match ($input['stage']) {
                 'intent' => $this->intent($user, $event, $connection->access_token, (string) $input['query'], $harnessRun),
                 'address_search' => $this->addressSearch($user, $event, $connection->access_token, (string) $input['query'], $harnessRun),
@@ -102,12 +113,9 @@ final class DiscoverSilpoFulfilmentAction
         }
 
         if ($intent->action === 'keep_current') {
-            return [
-                'kind' => 'keep_current',
-                'heard' => $sentence,
-                'message' => 'Гусь почув: нинішній маршрут лишається без змін.',
-                'manual_fallback' => true,
-            ];
+            return $this->clarification(
+                'Для нового походу місце, магазин і час треба обрати заново — навіть якщо вони будуть такими самими.',
+            );
         }
 
         if ($intent->deliveryPreference === 'nova_poshta') {
@@ -191,6 +199,7 @@ final class DiscoverSilpoFulfilmentAction
         HarnessRun $harnessRun,
     ): array {
         $addressPayload = $this->tokens->decode($token, 'fulfilment_address', $user, $event);
+        $this->guardTokenBinding($addressPayload);
         $address = Arr::get($addressPayload, 'address');
 
         if (! is_array($address) || ! $this->hasCoordinates($address)) {
@@ -299,6 +308,7 @@ final class DiscoverSilpoFulfilmentAction
                     'cart_id' => $snapshot->cartId,
                     'delivery_preference' => $deliveryPreference,
                     'time_preference' => $timePreference,
+                    ...$this->resetBinding(),
                 ]),
                 'preferred' => $deliveryPreference === 'nova_poshta',
             ]);
@@ -322,6 +332,7 @@ final class DiscoverSilpoFulfilmentAction
         HarnessRun $harnessRun,
     ): array {
         $context = $this->tokens->decode($token, 'fulfilment_np_context', $user, $event);
+        $this->guardTokenBinding($context);
         $snapshot = $this->snapshot($accessToken, $harnessRun);
         $this->guardCart($snapshot, (string) Arr::get($context, 'cart_id'));
 
@@ -349,6 +360,7 @@ final class DiscoverSilpoFulfilmentAction
         HarnessRun $harnessRun,
     ): array {
         $payload = $this->tokens->decode($token, 'fulfilment_np_settlement', $user, $event);
+        $this->guardTokenBinding($payload);
         $settlement = Arr::get($payload, 'settlement');
 
         if (! is_array($settlement)) {
@@ -378,6 +390,7 @@ final class DiscoverSilpoFulfilmentAction
                         'office' => $office,
                         'delivery_preference' => Arr::get($payload, 'delivery_preference'),
                         'time_preference' => $this->timePreference($payload),
+                        ...$this->resetBinding(),
                     ]),
                 ])
                 ->values()
@@ -394,6 +407,7 @@ final class DiscoverSilpoFulfilmentAction
         HarnessRun $harnessRun,
     ): array {
         $payload = $this->tokens->decode($token, 'fulfilment_np_office', $user, $event);
+        $this->guardTokenBinding($payload);
         $settlement = Arr::get($payload, 'settlement');
         $office = Arr::get($payload, 'office');
 
@@ -452,6 +466,7 @@ final class DiscoverSilpoFulfilmentAction
         HarnessRun $harnessRun,
     ): array {
         $route = $this->tokens->decode($token, 'fulfilment_route', $user, $event);
+        $this->guardTokenBinding($route);
         $branchId = Arr::get($route, 'shipments.0.branchId');
         $deliveryType = Arr::get($route, 'delivery_type');
 
@@ -501,6 +516,7 @@ final class DiscoverSilpoFulfilmentAction
         HarnessRun $harnessRun,
     ): array {
         $route = $this->tokens->decode((string) $input['token'], 'fulfilment_route', $user, $event);
+        $this->guardTokenBinding($route);
 
         if (Arr::get($route, 'writable') !== true) {
             throw new RuntimeException('Нову домашню адресу Сільпо поки не дає записати безпечно. Оберіть збережену адресу, самовивіз або Нову пошту.');
@@ -522,7 +538,7 @@ final class DiscoverSilpoFulfilmentAction
 
         $homeAddress = Arr::get($route, 'address');
         $homeAddressSource = Arr::get($route, 'address_source');
-        $homeRouteIsValid = $homeAddressSource === 'current_cart'
+        $homeRouteIsValid = in_array($homeAddressSource, ['current_cart', 'previous_cart'], true)
             ? $homeAddress === $snapshot->address()
             : $homeAddressSource === 'found_coordinates_flat'
                 && is_array($homeAddress)
@@ -560,6 +576,7 @@ final class DiscoverSilpoFulfilmentAction
                 'product_fingerprint' => $snapshot->productFingerprint(),
                 'selection' => $selection,
                 'summary' => $summary,
+                ...$this->resetBinding(),
             ]),
         ];
     }
@@ -571,6 +588,13 @@ final class DiscoverSilpoFulfilmentAction
         if ($snapshot === null) {
             throw new RuntimeException('Кошик Сільпо кудись покотився. Створіть його й перевірте ще раз.');
         }
+
+        if ($this->activeReset === null) {
+            throw new RuntimeException('Підтвердження чистого кошика загубилося. Почніть похід Гуся ще раз.');
+        }
+
+        $this->resetGuard->assertLatest($this->activeReset, $this->activeReset->event);
+        $this->resetGuard->assertEmptySnapshot($this->activeReset, $snapshot);
 
         return $snapshot;
     }
@@ -618,6 +642,7 @@ final class DiscoverSilpoFulfilmentAction
                             ? null
                             : 'Сільпо підтвердило точку, але не дало міста, вулиці або будинку. Гусь не буде домальовувати їх навмання.',
                         ...$metadata,
+                        ...$this->resetBinding(),
                     ]),
                 ];
             })
@@ -644,6 +669,7 @@ final class DiscoverSilpoFulfilmentAction
                     'cart_id' => $snapshot->cartId,
                     'settlement' => $settlement,
                     ...$metadata,
+                    ...$this->resetBinding(),
                 ]),
             ])
             ->values()
@@ -734,9 +760,37 @@ final class DiscoverSilpoFulfilmentAction
             'preferred' => $preferredDeliveryType !== null
                 && Arr::get($route, 'delivery_type') === $preferredDeliveryType,
             'route_token' => $writable
-                ? $this->tokens->issue('fulfilment_route', $user, $event, $route)
+                ? $this->tokens->issue('fulfilment_route', $user, $event, [
+                    ...$route,
+                    ...$this->resetBinding(),
+                ])
                 : null,
         ];
+    }
+
+    /** @return array{reset_id: int, empty_product_fingerprint: string} */
+    private function resetBinding(): array
+    {
+        if ($this->activeReset === null || ! is_string($this->activeReset->empty_product_fingerprint)) {
+            throw new RuntimeException('Підтвердження чистого кошика загубилося. Почніть похід Гуся ще раз.');
+        }
+
+        return [
+            'reset_id' => $this->activeReset->id,
+            'empty_product_fingerprint' => $this->activeReset->empty_product_fingerprint,
+        ];
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function guardTokenBinding(array $payload): void
+    {
+        $binding = $this->resetBinding();
+
+        if ((int) Arr::get($payload, 'reset_id') !== $binding['reset_id']
+            || ! is_string(Arr::get($payload, 'empty_product_fingerprint'))
+            || ! hash_equals($binding['empty_product_fingerprint'], Arr::get($payload, 'empty_product_fingerprint'))) {
+            throw new RuntimeException('Цей крок маршруту належить іншому очищенню кошика. Почніть знову.');
+        }
     }
 
     /**

@@ -7,6 +7,7 @@ use App\CartRunPhase;
 use App\CartRunStatus;
 use App\CartSyncStatus;
 use App\Contracts\SilpoCartGateway;
+use App\Data\ConfirmedSilpoFulfilmentData;
 use App\Exceptions\SilpoCartUnavailableException;
 use App\HarnessEntryKind;
 use App\HarnessRunType;
@@ -15,6 +16,10 @@ use App\Models\Event;
 use App\Models\EventCartRun;
 use App\Services\GooseCartStatusService;
 use App\Services\HarnessRecorder;
+use App\Services\SilpoCartLock;
+use App\Services\SilpoCartResetGuard;
+use App\SilpoCartResetStatus;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -26,25 +31,47 @@ final class StartEventCartRunAction
         private readonly SilpoCartGateway $silpo,
         private readonly GooseCartStatusService $statuses,
         private readonly HarnessRecorder $harnessRecorder,
+        private readonly SilpoCartResetGuard $resetGuard,
+        private readonly SilpoCartLock $lock,
     ) {}
 
     public function execute(
         Event $event,
         CartRunMode $mode,
-        ?string $expectedFulfilmentFingerprint = null,
+        ConfirmedSilpoFulfilmentData $confirmed,
     ): EventCartRun {
-        $activeRun = $event->cartRuns()
-            ->whereIn('status', $this->activeStatuses())
-            ->where('plan_state_version', $event->state_version)
-            ->latest()
+        try {
+            return $this->lock->execute(
+                $event->user_id,
+                fn (): EventCartRun => $this->start($event, $mode, $confirmed),
+            );
+        } catch (LockTimeoutException) {
+            throw new RuntimeException('Гусь уже працює з цим кошиком. Дайте йому мить і спробуйте ще раз.');
+        }
+    }
+
+    private function start(
+        Event $event,
+        CartRunMode $mode,
+        ConfirmedSilpoFulfilmentData $confirmed,
+    ): EventCartRun {
+        $activeRun = $event->user->cartRuns()
+            ->with('event')
+            ->whereIn('event_cart_runs.status', $this->activeStatuses())
+            ->latest('event_cart_runs.id')
             ->first();
 
         if ($activeRun !== null) {
-            return $activeRun;
+            if ($activeRun->event_id === $event->id) {
+                return $activeRun;
+            }
+
+            throw new RuntimeException('Інший похід Гуся ще активний. Завершіть його перед новим кошиком.');
         }
 
         $this->guardPlan($event);
-        $connection = $event->user()->firstOrFail()->silpoConnection()
+        $reset = $this->resetGuard->assertLatest($confirmed->reset, $event);
+        $connection = $event->user->silpoConnection()
             ->whereNull('revoked_at')
             ->first();
 
@@ -66,8 +93,9 @@ final class StartEventCartRunAction
             $cart = $this->silpo->getReadyCart($connection->access_token, $harnessRun);
 
             if ($cart !== null
-                && $expectedFulfilmentFingerprint !== null
-                && ! hash_equals($expectedFulfilmentFingerprint, $cart->fingerprint())) {
+                && ($cart->items !== []
+                    || ! hash_equals($confirmed->cart->fingerprint(), $cart->fingerprint())
+                    || ! hash_equals($reset->cart_id, $cart->cartId))) {
                 throw new RuntimeException('Маршрут змінився просто перед стартом. Гусь просить перевірити його ще раз.');
             }
 
@@ -93,9 +121,14 @@ final class StartEventCartRunAction
             );
         }
 
-        return DB::transaction(function () use ($event, $mode, $cart, $catalogScopes, $harnessRun): EventCartRun {
+        return DB::transaction(function () use ($event, $mode, $cart, $catalogScopes, $harnessRun, $reset): EventCartRun {
             $lockedEvent = Event::query()->lockForUpdate()->findOrFail($event->id);
             $this->guardPlan($lockedEvent);
+
+            $lockedReset = $lockedEvent->silpoCartResets()
+                ->lockForUpdate()
+                ->findOrFail($reset->id);
+            $this->resetGuard->assertLatest($lockedReset, $lockedEvent);
 
             $lockedEvent->cartRuns()
                 ->whereIn('status', $this->activeStatuses())
@@ -122,6 +155,7 @@ final class StartEventCartRunAction
             }
 
             $run = $lockedEvent->cartRuns()->create([
+                'silpo_cart_reset_id' => $lockedReset->id,
                 'harness_run_id' => $harnessRun->id,
                 'mode' => $mode,
                 'status' => CartRunStatus::Running,
@@ -149,6 +183,10 @@ final class StartEventCartRunAction
 
             $this->statuses->append($run, 'preflight');
             $this->statuses->append($run, 'planning');
+            $lockedReset->update([
+                'status' => SilpoCartResetStatus::Consumed,
+                'consumed_at' => now(),
+            ]);
             $lockedEvent->update([
                 'silpo_cart_id' => $cart->cartId,
                 'cart_sync_status' => CartSyncStatus::Syncing,

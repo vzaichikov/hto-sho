@@ -13,3 +13,6 @@ The owner may explicitly confirm the displayed nearest available slot when the c
 
 ## Review fulfilment before Silpo product matching
 The old prepared-cart-only MVP rule is superseded for event cart starts. The owner must review the current Silpo address, branch, delivery type, shipments, and live slot or explicitly choose a supported alternative. Bind the final choice to encrypted owner/event-scoped state, serialize and re-read before writing, verify exact read-back while preserving product lines, then and only then launch product matching. Never checkout, pay, clear items, or change bonuses, promos, certificates, or preferences.
+
+## Reset-first cart contract supersedes preservation rules
+For every newly initiated event cart run, the reset-first contract supersedes the old prepared-cart, preserve-unrelated-products, keep-route, and never-clear rules. After explicit consent, back up the complete cart encrypted, clear all products, prove empty readback, require a fresh route write/readback, reject foreign lines, and preserve the approved staged set plus safe external error details for exact retry.

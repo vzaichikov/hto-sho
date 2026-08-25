@@ -51,7 +51,7 @@ class EventCartRunController extends Controller
         }
 
         try {
-            $cart = $confirmFulfilment->execute(
+            $confirmed = $confirmFulfilment->execute(
                 $request->user(),
                 $event,
                 $request->validated('review_token'),
@@ -59,7 +59,7 @@ class EventCartRunController extends Controller
             $run = $start->execute(
                 $event,
                 CartRunMode::from($request->validated('mode')),
-                $cart->fingerprint(),
+                $confirmed,
             );
         } catch (SilpoCartUnavailableException $exception) {
             return response()->json([
@@ -130,6 +130,9 @@ class EventCartRunController extends Controller
             : ($cartRun->status === CartRunStatus::WaitingForConfirmation
                 ? 96
                 : min(92, 8 + (int) round(($finishedNeeds / max($needs->count(), 1)) * 80)));
+        $isCommitRetry = $cartRun->status === CartRunStatus::WaitingForConfirmation
+            && (int) data_get($cartRun->state, 'commit_attempts', 0) > 0
+            && filled($cartRun->error);
 
         return response()->json([
             'status' => $cartRun->status->value,
@@ -151,6 +154,10 @@ class EventCartRunController extends Controller
             ),
             'continue_url' => route('events.cart-runs.continue', [$event, $cartRun]),
             'requires_confirmation' => $cartRun->status === CartRunStatus::WaitingForConfirmation,
+            'commit_retry_available' => $isCommitRetry,
+            'confirmation_label' => $isCommitRetry
+                ? 'Повторити додавання цього набору'
+                : 'Підтверджую товари — додати в кошик',
             'confirm_url' => $cartRun->status === CartRunStatus::WaitingForConfirmation
                 ? route('events.cart-runs.confirm', [$event, $cartRun])
                 : null,

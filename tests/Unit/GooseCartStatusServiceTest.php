@@ -28,4 +28,19 @@ class GooseCartStatusServiceTest extends TestCase
         $this->assertStringNotContainsString('%product%', $first);
         $this->assertNotSame($first, $second);
     }
+
+    public function test_real_search_query_uses_the_query_aware_phrase_library(): void
+    {
+        $service = new GooseCartStatusService;
+        $message = $service->phrase(
+            'searching',
+            9,
+            2,
+            'Виделки та ножі одноразові',
+            query: 'одноразові столові прибори',
+        );
+
+        $this->assertStringContainsString('одноразові столові прибори', $message);
+        $this->assertStringNotContainsString('%query%', $message);
+    }
 }

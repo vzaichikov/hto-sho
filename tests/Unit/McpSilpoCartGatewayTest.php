@@ -68,6 +68,8 @@ class McpSilpoCartGatewayTest extends TestCase
             }
 
             $toolName = data_get($payload, 'params.name');
+            $toolError = $toolName === 'silpo_find_address'
+                && data_get($payload, 'params.arguments.address') === 'error-with-details';
             $structuredContent = match ($toolName) {
                 'silpo_find_products_batch' => ['queries' => [[
                     'query' => data_get($payload, 'params.arguments.products.0'),
@@ -116,9 +118,11 @@ class McpSilpoCartGatewayTest extends TestCase
                 'jsonrpc' => '2.0',
                 'id' => $payload['id'],
                 'result' => [
-                    'content' => [],
-                    'isError' => false,
-                    'structuredContent' => $structuredContent,
+                    'content' => $toolError
+                        ? [['type' => 'text', 'text' => 'Door is closed. Bearer private-token']]
+                        : [],
+                    'isError' => $toolError,
+                    'structuredContent' => $toolError ? null : $structuredContent,
                 ],
             ]);
         });
@@ -155,6 +159,173 @@ class McpSilpoCartGatewayTest extends TestCase
         $this->assertCount(1, $commitArguments['products']);
         $this->assertFalse($commitArguments['products'][0]['addQuantity']);
         $this->assertSame(4, $commitArguments['products'][0]['quantity']);
+    }
+
+    public function test_cart_reset_requires_the_live_clear_schema_and_calls_snapshot_clear_then_immediate_readback(): void
+    {
+        $cleared = false;
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) use (&$cleared) {
+            $payload = $request->data();
+            $method = $payload['method'] ?? null;
+
+            if ($method === 'notifications/initialized') {
+                return Http::response('', 202);
+            }
+
+            if ($method === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'protocolVersion' => ProtocolVersion::LATEST->value,
+                        'capabilities' => [],
+                        'serverInfo' => ['name' => 'silpo-test', 'version' => '1.0.0'],
+                    ],
+                ]);
+            }
+
+            if ($method === 'tools/list') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => ['tools' => [[
+                        'name' => 'silpo_get_my_shopping_cart',
+                        'inputSchema' => ['type' => 'object', 'properties' => (object) []],
+                    ], [
+                        'name' => 'silpo_get_shopping_cart_by_id',
+                        'inputSchema' => ['type' => 'object', 'properties' => (object) []],
+                    ], [
+                        'name' => 'silpo_clear_shopping_cart',
+                        'inputSchema' => [
+                            'type' => 'object',
+                            'properties' => ['shoppingCartId' => ['type' => 'string']],
+                            'required' => ['shoppingCartId'],
+                        ],
+                    ]]],
+                ]);
+            }
+
+            $toolName = data_get($payload, 'params.name');
+            $structuredContent = match ($toolName) {
+                'silpo_get_my_shopping_cart' => ['shoppingCartId' => 'cart-1'],
+                'silpo_clear_shopping_cart' => tap(['cleared' => true], function () use (&$cleared): void {
+                    $cleared = true;
+                }),
+                'silpo_get_shopping_cart_by_id' => ['cart' => [
+                    'deliveryType' => 'DeliveryHome',
+                    'address' => ['addressType' => 'delivery', 'address' => 'Київ, Хрещатик, 1'],
+                    'timeslot' => ['start' => '2026-08-26T10:00:00Z', 'end' => '2026-08-26T11:00:00Z'],
+                    'shipments' => [[
+                        'companyId' => 'company-1',
+                        'branchId' => 'branch-1',
+                        'products' => $cleared ? [] : [['productId' => 'water-1', 'quantity' => 2]],
+                    ]],
+                    'calculation' => ['validations' => [], 'totalAfterDiscounts' => $cleared ? 0 : 60],
+                ]],
+                default => [],
+            };
+
+            return Http::response([
+                'jsonrpc' => '2.0',
+                'id' => $payload['id'],
+                'result' => [
+                    'content' => [],
+                    'isError' => false,
+                    'structuredContent' => $structuredContent,
+                ],
+            ]);
+        });
+
+        $gateway = $this->app->make(McpSilpoCartGateway::class);
+        $before = $gateway->getFulfilmentSnapshot('secret-token');
+        $after = $gateway->clearCartProducts('secret-token', 'cart-1');
+
+        $this->assertSame(1, $before?->itemsCount());
+        $this->assertTrue($after->isEmpty());
+        $calls = Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'method') === 'tools/call',
+        )->map(fn (array $record): string => (string) data_get($record[0]->data(), 'params.name'))
+            ->values()
+            ->all();
+        $this->assertSame([
+            'silpo_get_my_shopping_cart',
+            'silpo_get_shopping_cart_by_id',
+            'silpo_clear_shopping_cart',
+            'silpo_get_shopping_cart_by_id',
+        ], $calls);
+        $clearRequest = Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'params.name') === 'silpo_clear_shopping_cart',
+        )->sole()[0];
+        $this->assertSame(
+            ['shoppingCartId' => 'cart-1'],
+            data_get($clearRequest->data(), 'params.arguments'),
+        );
+    }
+
+    public function test_cart_reset_stops_before_clear_when_the_live_schema_changes(): void
+    {
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) {
+            $payload = $request->data();
+            $method = $payload['method'] ?? null;
+
+            if ($method === 'notifications/initialized') {
+                return Http::response('', 202);
+            }
+
+            if ($method === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'protocolVersion' => ProtocolVersion::LATEST->value,
+                        'capabilities' => [],
+                        'serverInfo' => ['name' => 'silpo-test', 'version' => '1.0.0'],
+                    ],
+                ]);
+            }
+
+            if ($method === 'tools/list') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => ['tools' => [[
+                        'name' => 'silpo_clear_shopping_cart',
+                        'inputSchema' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'shoppingCartId' => ['type' => 'string'],
+                                'reason' => ['type' => 'string'],
+                            ],
+                            'required' => ['shoppingCartId', 'reason'],
+                        ],
+                    ], [
+                        'name' => 'silpo_get_shopping_cart_by_id',
+                        'inputSchema' => ['type' => 'object', 'properties' => (object) []],
+                    ]]],
+                ]);
+            }
+
+            return Http::response('', 500);
+        });
+
+        try {
+            $this->app->make(McpSilpoCartGateway::class)
+                ->clearCartProducts('secret-token', 'cart-1');
+            $this->fail('Expected the changed reset schema to be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame(
+                'Сільпо змінило правила очищення кошика. Гусь нічого не видаляв.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertCount(0, Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'method') === 'tools/call',
+        ));
     }
 
     public function test_catalog_discovery_flattens_categories_and_sets_then_browses_one_scope(): void
@@ -206,6 +377,21 @@ class McpSilpoCartGatewayTest extends TestCase
             fn (Request $request): bool => $request->data()['method'] === 'tools/list',
         );
         $this->assertCount(2, $manifestCalls);
+    }
+
+    public function test_silpo_tool_error_details_are_preserved_but_credentials_are_redacted(): void
+    {
+        try {
+            $this->app->make(McpSilpoCartGateway::class)
+                ->findDeliveryAddresses('secret-token', 'error-with-details');
+            $this->fail('Expected the Silpo tool error to be surfaced.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame(
+                'Сільпо не завершило операцію: пошук адреси. Відповідь Сільпо: Door is closed. Bearer [приховано]',
+                $exception->getMessage(),
+            );
+            $this->assertStringNotContainsString('private-token', $exception->getMessage());
+        }
     }
 
     public function test_transient_manifest_failure_is_retried_once_on_a_fresh_client(): void

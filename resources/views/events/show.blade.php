@@ -686,7 +686,7 @@
                     <header class="flex items-start justify-between gap-4 border-b-2 border-ink/10 bg-yellow/35 px-5 py-4 sm:px-7">
                         <div>
                             <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Перед походом у Сільпо</p>
-                            <h3 class="mt-1 font-display text-3xl leading-[1.1] sm:text-4xl" id="silpo-dialog-title">Куди Гусю йти по кошик?</h3>
+                            <h3 class="mt-1 font-display text-3xl leading-[1.1] sm:text-4xl" id="silpo-dialog-title">Новий похід — чистий кошик</h3>
                         </div>
                         <form method="dialog">
                             <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-translate-y-0.5 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-silpo-dialog-close data-silpo-dialog-minimize aria-label="Згорнути вікно кошика">−</button>
@@ -697,7 +697,20 @@
                         <section class="grid min-h-72 place-items-center text-center" data-silpo-loading>
                             <div>
                                 <img class="goose-working mx-auto size-28 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо перевіряє кошик">
-                                <p class="mt-3 font-display text-2xl">Гусь звіряє ваш нинішній маршрут…</p>
+                                <p class="mt-3 font-display text-2xl" data-silpo-loading-message>Гусь готує безпечний старт…</p>
+                            </div>
+                        </section>
+
+                        <section class="hidden min-h-72 place-items-center" data-silpo-reset>
+                            <div class="grid max-w-4xl gap-5 rounded-[26px] border-2 border-ink bg-yellow/25 p-5 shadow-[6px_7px_0_#20201D] sm:grid-cols-[10rem_minmax(0,1fr)] sm:p-7">
+                                <img class="mx-auto size-36 object-contain" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо готує чистий кошик">
+                                <div>
+                                    <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-orange-dark">Перед будь-яким маршрутом</p>
+                                    <h4 class="mt-1 font-display text-4xl leading-[1.05]">Спершу — чистий кошик</h4>
+                                    <p class="mt-3 text-base leading-7 text-muted">Старі товари можуть засипати Гуся попередженнями про залишки, паковання й прострочений час. Після вашого підтвердження ми зашифровано збережемо повну копію нинішнього кошика, очистимо всі товари й одразу перевіримо, що він справді порожній.</p>
+                                    <p class="mt-3 rounded-2xl bg-paper p-4 text-sm font-bold leading-6">Адресу, магазин і час потім треба обрати заново. Це підтвердження не дозволяє додавати товари, оформляти замовлення, платити або змінювати бонуси й промокоди.</p>
+                                    <button class="mt-5 w-full rounded-2xl bg-orange px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-orange-dark disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="button" data-silpo-reset-confirm>Зберегти копію й очистити кошик</button>
+                                </div>
                             </div>
                         </section>
 
@@ -719,7 +732,7 @@
                             <div data-silpo-fulfilment-content aria-live="polite">
                                 <div class="mb-4">
                                     <h5 class="font-display text-3xl leading-[1.1]">Скажіть Гусю, куди й як доставити</h5>
-                                    <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.</p>
+                                    <p class="mt-2 max-w-3xl text-sm leading-6 text-muted">Оберіть місце, магазин і час заново. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить кожну частину маршруту.</p>
                                 </div>
                             </div>
 
@@ -773,7 +786,7 @@
                                         <p class="rounded-2xl border border-dashed border-ink/20 bg-paper p-4 text-sm text-muted" data-silpo-staged-empty>Поки порожньо. Гусь лише зайшов.</p>
                                     </div>
                                     <details class="mt-4 rounded-2xl bg-paper p-4">
-                                        <summary class="cursor-pointer text-sm font-extrabold">Що вже було у вашому кошику <span data-silpo-existing-badge></span></summary>
+                                        <summary class="cursor-pointer text-sm font-extrabold">Стартовий кошик після очищення <span data-silpo-existing-badge></span></summary>
                                         <div class="mt-3 grid gap-2" data-silpo-existing-items></div>
                                     </details>
                                 </section>
@@ -789,8 +802,8 @@
                             </div>
 
                             <div class="mt-5 hidden rounded-[22px] border-2 border-green bg-green-soft/20 p-5" data-silpo-confirmation>
-                                <p class="font-display text-3xl">Останній людський погляд</p>
-                                <p class="mt-2 text-sm leading-6 text-muted">Перевірте реальні товари Сільпо, рольові заміни, знаки питання щодо паковання, кількості й суму. До цього підтвердження Гусь нічого в кошик не записує.</p>
+                                <p class="font-display text-3xl" data-silpo-confirm-title>Останній людський погляд</p>
+                                <p class="mt-2 text-sm leading-6 text-muted" data-silpo-confirm-copy>Перевірте реальні товари Сільпо, рольові заміни, знаки питання щодо паковання, кількості й суму. До цього підтвердження Гусь нічого в кошик не записує.</p>
                                 <button class="mt-4 w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="button" data-silpo-confirm>Підтверджую товари — додати в кошик</button>
                             </div>
 
@@ -816,7 +829,7 @@
                             <p class="font-display text-xl leading-[1.15]" data-silpo-minimized-title>Гусь працює</p>
                             <button class="grid size-8 shrink-0 place-items-center rounded-full bg-canvas text-base font-extrabold transition hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-green" type="button" data-silpo-dialog-restore aria-label="Розгорнути вікно кошика">+</button>
                         </div>
-                        <p class="mt-1 text-sm leading-5 text-muted" data-silpo-minimized-status>Гусь звіряє ваш нинішній маршрут…</p>
+                        <p class="mt-1 text-sm leading-5 text-muted" data-silpo-minimized-status>Гусь готує безпечний старт…</p>
                         <div class="mt-3 hidden h-2 overflow-hidden rounded-full bg-ink/10" data-silpo-minimized-progress-wrap>
                             <div class="h-full rounded-full bg-orange transition-[width] duration-500" style="width: 0%" data-silpo-minimized-progress></div>
                             <span class="sr-only" data-silpo-minimized-progress-label>0%</span>

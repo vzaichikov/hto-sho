@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'event_id',
+    'silpo_cart_reset_id',
     'harness_run_id',
     'mode',
     'status',
@@ -68,6 +69,11 @@ class EventCartRun extends Model
     public function event(): BelongsTo
     {
         return $this->belongsTo(Event::class);
+    }
+
+    public function silpoCartReset(): BelongsTo
+    {
+        return $this->belongsTo(SilpoCartReset::class);
     }
 
     public function harnessRun(): BelongsTo

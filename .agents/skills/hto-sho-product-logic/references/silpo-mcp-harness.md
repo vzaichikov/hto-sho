@@ -26,13 +26,14 @@ The model must not treat its own product names, prices, or availability as catal
 ## Tool-use Stages
 
 1. **Authenticate and identify:** establish the OAuth context and, when needed, read the guest profile.
-2. **Plan without cart mutation:** validate that the shopping plan is current and sufficiently resolved for product matching.
-3. **Find candidates:** use text search first, then live category and relevant thematic-set browsing, current price/availability data, and event constraints to propose specific products.
-4. **Validate mapping:** ensure every selected item maps back to a generic plan need and violates no allergy or restriction. Keep missing or ambiguous matches visible.
-5. **Mutate only on explicit cart action:** create or update the reviewable cart for the current plan revision.
-6. **Verify:** read the resulting cart or use the MCP response to confirm identifiers, quantities, failures, and checkout URL when the server exposes them.
+2. **Confirm and reset:** before route or catalog work, obtain explicit reset consent, read the current cart only for an encrypted event-scoped backup, clear every product, and immediately prove the same cart is empty.
+3. **Choose a fresh route:** require a new place, store, and time choice; write it once and verify exact readback while the cart remains empty.
+4. **Find candidates:** use text search first, then live category and relevant thematic-set browsing, current price/availability data, and event constraints to propose specific products.
+5. **Validate mapping:** ensure every selected item maps back to a generic plan need and violates no allergy or restriction. Keep missing or ambiguous matches visible.
+6. **Mutate products only after final SKU review:** write the approved absolute quantities for the current plan revision.
+7. **Verify:** immediately read the resulting cart and confirm identifiers, quantities, failures, validations, and totals.
 
-Catalog searches and profile reads are non-cart discovery. Adding, removing, or changing cart lines is an external mutation and requires the user-initiated cart-sync action.
+Catalog searches and profile reads are non-cart discovery. The early reset confirmation authorizes only backup plus a full product clear. Adding matched products remains a separate external mutation requiring the final SKU-review action.
 
 ## Selection Rules
 
@@ -47,10 +48,11 @@ Catalog searches and profile reads are non-cart discovery. Adding, removing, or 
 ## Mutation and Retry Rules
 
 - Bind every sync attempt to the authenticated user, event, and current plan revision.
-- The discovered server exposes the authenticated user's current cart, not a separate create-cart operation. Inspect the cart before mutation and preserve unrelated products the user added outside Хто Шо?.
+- The discovered server exposes the authenticated user's current cart, not a separate create-cart operation. A new run therefore reinitializes that cart: back up its complete pre-clear payload encrypted, clear all products after explicit consent, and verify an empty readback before route work.
 - Prefer an MCP-supported absolute quantity update that converges on the intended cart. The discovered add/update tool is annotated non-idempotent, so re-read the cart before any retry and never blindly repeat a timed-out call.
 - Group repeated staged uses of the same SKU into one aggregate absolute quantity, verify aggregate stock first, and keep `addQuantity=false` semantics.
-- Never clear the whole cart during normal event synchronization. Remove only a line that Хто Шо? previously added for this event and can identify reliably.
+- Never preserve or merge pre-existing lines into a new run. If any product appears after the verified reset, invalidate the run; a replayed reset token must not clear newly changed non-empty contents.
+- If the final product write fails, retain the approved staged set and the safe Silpo error detail. A retry may write that exact set only after revalidating the plan, reset, route, and absence of foreign products.
 - Stop if the event or plan revision changes during synchronization. The new state needs a new review and sync.
 - Persist cart identifiers and the synchronized plan revision only after the MCP response confirms success.
 - Record per-item failures without marking the whole cart current when required items were not synchronized.

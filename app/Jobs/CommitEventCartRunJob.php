@@ -9,10 +9,15 @@ use App\Contracts\SilpoCartGateway;
 use App\Data\SilpoCartContextData;
 use App\Models\EventCartRun;
 use App\Services\GooseCartStatusService;
+use App\Services\SilpoCartLock;
+use App\Services\SilpoCartResetGuard;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use RuntimeException;
 use Throwable;
 use UnexpectedValueException;
 
@@ -38,10 +43,40 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
         return $this->runId.':commit:'.$this->expectedCursor;
     }
 
-    public function handle(SilpoCartGateway $silpo, GooseCartStatusService $statuses): void
-    {
+    public function handle(
+        SilpoCartGateway $silpo,
+        GooseCartStatusService $statuses,
+        ?SilpoCartResetGuard $resetGuard = null,
+        ?SilpoCartLock $lock = null,
+    ): void {
+        $resetGuard ??= app(SilpoCartResetGuard::class);
+        $lock ??= app(SilpoCartLock::class);
+        $userId = EventCartRun::query()
+            ->join('events', 'events.id', '=', 'event_cart_runs.event_id')
+            ->where('event_cart_runs.id', $this->runId)
+            ->value('events.user_id');
+
+        if (! is_numeric($userId)) {
+            return;
+        }
+
+        try {
+            $lock->execute(
+                (int) $userId,
+                fn () => $this->commit($silpo, $statuses, $resetGuard),
+            );
+        } catch (LockTimeoutException) {
+            throw new RuntimeException('Гусь не дочекався доступу до кошика Сільпо. Спробуйте додати цей самий набір ще раз.');
+        }
+    }
+
+    private function commit(
+        SilpoCartGateway $silpo,
+        GooseCartStatusService $statuses,
+        SilpoCartResetGuard $resetGuard,
+    ): void {
         $run = EventCartRun::query()
-            ->with(['event.user.silpoConnection', 'harnessRun'])
+            ->with(['event.user.silpoConnection', 'harnessRun', 'silpoCartReset'])
             ->find($this->runId);
 
         if (! $this->canCommit($run)) {
@@ -54,18 +89,33 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $accessToken = $this->accessToken($run);
-        $currentCart = $silpo->getReadyCart($accessToken, $run->harnessRun);
-
-        if ($currentCart === null
-            || $currentCart->cartId !== $run->cart_id
-            || $currentCart->fingerprint() !== $run->delivery_fingerprint) {
+        if ($run->silpoCartReset === null) {
             $this->markStale($run, $statuses);
 
             return;
         }
 
-        [$products, $targets, $warnings, $hasObsoleteManagedItems] = $this->absoluteProducts($run, $currentCart);
+        try {
+            $resetGuard->assertLatest($run->silpoCartReset, $run->event, allowConsumed: true);
+        } catch (RuntimeException) {
+            $this->markStale($run, $statuses);
+
+            return;
+        }
+
+        $accessToken = $this->accessToken($run);
+        $currentCart = $silpo->getReadyCart($accessToken, $run->harnessRun);
+
+        if ($currentCart === null
+            || $currentCart->cartId !== $run->cart_id
+            || $currentCart->fingerprint() !== $run->delivery_fingerprint
+            || ! $this->cartMayBeCommitted($run, $currentCart)) {
+            $this->markStale($run, $statuses);
+
+            return;
+        }
+
+        [$products, $targets, $warnings] = $this->absoluteProducts($run);
 
         if ($products === []) {
             $this->finish($run, $currentCart, CartRunStatus::Partial, [
@@ -91,6 +141,16 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
 
         if ($verifiedCart === null || $verifiedCart->fingerprint() !== $run->delivery_fingerprint) {
             throw new UnexpectedValueException('Silpo cart context changed during verification.');
+        }
+
+        $hasForeignProducts = collect($verifiedCart->items)->contains(
+            fn (array $item): bool => ! array_key_exists((string) data_get($item, 'product_id'), $targets),
+        );
+
+        if ($hasForeignProducts) {
+            $this->markStale($run, $statuses);
+
+            return;
         }
 
         $missingTargets = $this->missingTargets($verifiedCart, $targets);
@@ -123,8 +183,7 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ...$validationWarnings,
             ...collect($missingTargets)->map(fn (string $name): string => "Не вдалося підтвердити кількість: {$name}.")->all(),
         ]));
-        $hasSynchronizationGap = $hasObsoleteManagedItems
-            || $missingTargets !== []
+        $hasSynchronizationGap = $missingTargets !== []
             || $managedValidations !== []
             || collect($warnings)->contains(
                 fn (string $warning): bool => str_starts_with($warning, 'У Сільпо не вистачило повної кількості:'),
@@ -147,18 +206,32 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $message = 'Гусь не зміг безпечно підтвердити запис у кошик. Нічого повторно навмання не додавав.';
+        $details = $this->safeFailureDetails($exception);
+        $message = "Сільпо відповіло: {$details} Підтверджений набір Гуся збережено — можна повторити додавання без нового пошуку.";
         $run->update([
-            'status' => CartRunStatus::Failed,
-            'phase' => CartRunPhase::Finished,
+            'status' => CartRunStatus::WaitingForConfirmation,
+            'phase' => CartRunPhase::ReadyToCommit,
             'error' => $message,
-            'finished_at' => now(),
+            'finished_at' => null,
+            'cursor' => $run->cursor + 1,
         ]);
         app(GooseCartStatusService::class)->append($run, 'warning');
         $run->event->update([
             'cart_sync_status' => CartSyncStatus::Failed,
             'cart_sync_error' => $message,
         ]);
+    }
+
+    private function safeFailureDetails(?Throwable $exception): string
+    {
+        return Str::of($exception?->getMessage() ?? 'Сільпо не пояснило причину.')
+            ->stripTags()
+            ->squish()
+            ->replaceMatches('/Bearer\s+[A-Za-z0-9._~+\/-]+/i', 'Bearer [приховано]')
+            ->replaceMatches('/;\s*\[file\]\s+.*?(?=;\s*\[line\]\s+\d+|$)/i', '')
+            ->replaceMatches('/;\s*\[line\]\s+\d+/i', '')
+            ->limit(1200)
+            ->toString();
     }
 
     private function markCommitting(EventCartRun $run, GooseCartStatusService $statuses): void
@@ -182,28 +255,18 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * @return array{array<int, array<string, mixed>>, array<string, float>, array<int, string>, bool}
+     * @return array{array<int, array<string, mixed>>, array<string, float>, array<int, string>}
      */
-    private function absoluteProducts(EventCartRun $run, SilpoCartContextData $currentCart): array
+    private function absoluteProducts(EventCartRun $run): array
     {
         $stagedByProduct = collect($run->staged_items ?? [])->groupBy('product_id');
-        $previousRun = $run->event->cartRuns()
-            ->where('id', '!=', $run->id)
-            ->whereIn('status', [CartRunStatus::Synced->value, CartRunStatus::Partial->value])
-            ->latest()
-            ->first();
-        $previousByProduct = collect($previousRun?->staged_items ?? [])->groupBy('product_id');
-        $currentByProduct = collect($currentCart->items)->keyBy('product_id');
         $warnings = $run->warnings ?? [];
         $targets = [];
         $products = [];
 
         foreach ($stagedByProduct as $productId => $items) {
             $item = $items->first();
-            $newManagedQuantity = (float) $items->sum('quantity');
-            $previousManagedQuantity = (float) ($previousByProduct->get($productId)?->sum('quantity') ?? 0);
-            $currentQuantity = (float) data_get($currentByProduct->get($productId), 'quantity', 0);
-            $target = max(0, $currentQuantity - $previousManagedQuantity) + $newManagedQuantity;
+            $target = (float) $items->sum('quantity');
             $step = max((float) data_get($item, 'step', 1), 0.001);
             $stock = (float) data_get($item, 'stock', $target);
             $target = round(ceil(($target - 0.0000001) / $step) * $step, 3);
@@ -223,13 +286,27 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ];
         }
 
-        $obsoleteManagedItems = $previousByProduct->keys()->diff($stagedByProduct->keys());
+        return [$products, $targets, $warnings];
+    }
 
-        if ($obsoleteManagedItems->isNotEmpty()) {
-            $warnings[] = 'Попередні товари цієї події, яких уже немає в новому списку, Гусь не видаляв автоматично.';
+    private function cartMayBeCommitted(EventCartRun $run, SilpoCartContextData $cart): bool
+    {
+        if ($cart->items === []) {
+            return true;
         }
 
-        return [$products, $targets, $warnings, $obsoleteManagedItems->isNotEmpty()];
+        if ((int) data_get($run->state, 'commit_attempts', 0) <= 1) {
+            return false;
+        }
+
+        $approvedProductIds = collect($run->staged_items ?? [])
+            ->pluck('product_id')
+            ->filter(fn (mixed $productId): bool => is_string($productId) && $productId !== '')
+            ->unique();
+
+        return collect($cart->items)->every(
+            fn (array $item): bool => $approvedProductIds->containsStrict((string) data_get($item, 'product_id')),
+        );
     }
 
     /** @param array<string, float> $targets */

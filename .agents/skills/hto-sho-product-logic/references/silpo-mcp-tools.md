@@ -76,14 +76,14 @@ Because the server advertises that its tool list can change, always perform live
 
 ## Core Хто Шо? Flow
 
-1. Call `silpo_get_my_shopping_cart`, then `silpo_get_shopping_cart_by_id`.
-2. Immediately validate the cart's branch/delivery slot with `silpo_get_time_slots`, as required by the live cart-tool description. Times are UTC; convert them for the user.
-3. Preserve the cart's existing delivery context unless the user explicitly asks to change it. If the slot is invalid, stop for a new user choice before product work.
+1. Before any cart read, show the reset confirmation. After consent, call `silpo_get_my_shopping_cart`, then `silpo_get_shopping_cart_by_id`, and persist the complete response encrypted for the event.
+2. Call `silpo_clear_shopping_cart`, then immediately call `silpo_get_shopping_cart_by_id`; continue only when every `cart.shipments[].products` list is empty.
+3. Require a fresh place, store, and time selection. Call `silpo_update_shopping_cart` once for the selected route, then verify exact route and empty-product readback.
 4. Search the generic event needs with `silpo_find_products_batch`. Use an exact `externalProductId` when already known; otherwise use names. One call accepts at most 30 search terms.
 5. Use `displayRatio` for package contents and `step` for allowed quantity increments. Respect `stock`; never add more than is available.
 6. Use `silpo_get_product_details` when attributes or nutrition can validate a choice. A title alone is not evidence that an item is safe for an allergy or dietary restriction.
 7. Show the proposed SKU mapping, quantities, substitutions, warnings, and estimated total before cart mutation.
-8. Re-read the current cart immediately before mutation. Preserve unrelated lines and use an absolute quantity update (`addQuantity: false`) for event-managed items when appropriate.
+8. Re-read the current cart immediately before mutation. Reject any foreign line, then use an absolute quantity update (`addQuantity: false`) for the approved staged set.
 9. Call `silpo_add_or_update_cart_products`, then immediately call `silpo_get_shopping_cart_by_id`. Do not mark synchronization successful until required lines, quantities, validations, and `calculation.totalAfterDiscounts` are verified.
 
 The snapshot exposes the authenticated user's current cart but no separate create-new-cart tool. It also exposes checkout links in cart details but no checkout, order-placement, or payment tool.
@@ -144,7 +144,7 @@ These are condensed from the live JSON Schemas. Fetch the live schemas before co
 }
 ```
 
-Only remove lines known to be managed by the current Хто Шо? event. `silpo_clear_shopping_cart` must not be part of normal synchronization because it would also remove unrelated user items.
+`silpo_clear_shopping_cart` is mandatory only at the explicit reset gate that starts a new run. Save the encrypted backup before calling it and require the immediate empty readback. Do not call it from product commit or from a replayed token after non-empty contents have changed.
 
 ### Change delivery settings
 

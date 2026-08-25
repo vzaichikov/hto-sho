@@ -23,4 +23,5 @@ Preserve these boundaries:
 - treat branch inventory as live state and report a real blocker only when both exact and same-role searches return no selectable candidate;
 - never truncate the requested quantity to available stock; reject an undersupplied candidate and keep searching;
 - after exact and scoped fallback exhaustion, compatible produce needs may reuse one staged raw SKU when the aggregate quantity remains in stock; group that SKU into one absolute cart line at commit;
-- never mutate the cart before the application’s final human confirmation gate.
+- treat the explicit reset confirmation as a narrow first mutation gate: it authorizes only encrypted backup, full product clear, and immediate empty-cart readback;
+- never add matched products before the separate final SKU-review confirmation gate.

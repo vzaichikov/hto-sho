@@ -24,21 +24,28 @@ use App\Jobs\CommitEventCartRunJob;
 use App\Models\Event;
 use App\Models\EventCartRun;
 use App\Models\HarnessRun;
+use App\Models\SilpoCartReset;
 use App\Models\SilpoConnection;
 use App\Models\User;
 use App\Services\CartCandidateSuitability;
 use App\Services\CartQuantityCalculator;
 use App\Services\GooseCartStatusService;
 use App\Services\SilpoFulfilmentTokenService;
+use App\SilpoCartResetStatus;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Testing\TestResponse;
 use RuntimeException;
 use Tests\TestCase;
 
 class EventCartRunTest extends TestCase
 {
     use DatabaseTransactions;
+
+    /** @var array<int, TestResponse> */
+    private array $resetResponses = [];
 
     protected function setUp(): void
     {
@@ -51,10 +58,20 @@ class EventCartRunTest extends TestCase
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
-        $this->app->instance(SilpoCartGateway::class, new FakeCartGateway(null));
+        $gateway = new FakeCartGateway(null);
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk()
+            ->assertJsonPath('reset_required', true)
+            ->assertJsonStructure(['reset_url', 'reset_token']);
+        $this->assertSame(0, $gateway->snapshotReads);
 
         $this->actingAs($owner)
-            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->postJson($preflight->json('reset_url'), [
+                'reset_token' => $preflight->json('reset_token'),
+            ])
             ->assertConflict()
             ->assertJsonPath('code', 'cart_missing')
             ->assertJsonPath(
@@ -69,6 +86,243 @@ class EventCartRunTest extends TestCase
 
         $this->assertDatabaseMissing('event_cart_runs', ['event_id' => $event->id]);
         Queue::assertNothingPushed();
+    }
+
+    public function test_reset_gate_encrypts_the_complete_backup_clears_the_cart_and_event_deletion_removes_it(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk()
+            ->assertJsonPath('reset_required', true);
+
+        $this->assertSame(0, $gateway->snapshotReads);
+
+        $this->actingAs($owner)
+            ->postJson($preflight->json('reset_url'), [
+                'reset_token' => $preflight->json('reset_token'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('backup.items_count', 1)
+            ->assertJsonPath('reset_verified', true);
+
+        $reset = $event->silpoCartResets()->sole();
+        $rawSnapshot = (string) DB::table('silpo_cart_resets')->where('id', $reset->id)->value('snapshot');
+        $this->assertSame('existing-1', data_get($reset->snapshot, 'cart.shipments.0.products.0.productId'));
+        $this->assertStringNotContainsString('existing-1', $rawSnapshot);
+        $this->assertStringNotContainsString('productId', $rawSnapshot);
+        $this->assertSame(SilpoCartResetStatus::Cleared, $reset->status);
+        $this->assertSame(1, $gateway->clearWrites);
+        $this->assertSame([], $gateway->cart?->items);
+
+        $resetId = $reset->id;
+        $event->delete();
+
+        $this->assertDatabaseMissing('silpo_cart_resets', ['id' => $resetId]);
+    }
+
+    public function test_reset_token_replay_never_clears_reappeared_products(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk();
+        $payload = ['reset_token' => $preflight->json('reset_token')];
+
+        $this->actingAs($owner)->postJson($preflight->json('reset_url'), $payload)->assertOk();
+        $this->actingAs($owner)->postJson($preflight->json('reset_url'), $payload)->assertOk();
+        $this->assertSame(1, $gateway->clearWrites);
+
+        $gateway->cart = $this->readyCart();
+
+        $this->actingAs($owner)
+            ->postJson($preflight->json('reset_url'), $payload)
+            ->assertConflict()
+            ->assertJsonPath(
+                'message',
+                'Після очищення в кошику зʼявилися товари. Гусь не видалятиме їх за старим дозволом.',
+            );
+
+        $this->assertSame(1, $gateway->clearWrites);
+        $this->assertSame(SilpoCartResetStatus::Superseded, $event->silpoCartResets()->sole()->status);
+        $this->assertSame(['existing-1'], collect($gateway->cart?->items)->pluck('product_id')->all());
+
+        $gateway->cart = $this->emptyReadyCart();
+        $this->actingAs($owner)
+            ->postJson($preflight->json('reset_url'), $payload)
+            ->assertConflict();
+        $this->assertSame(1, $gateway->clearWrites);
+    }
+
+    public function test_partial_clear_keeps_the_backup_and_blocks_route_selection(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $gateway->itemsAfterClear = $gateway->cart?->items;
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk();
+
+        $this->actingAs($owner)
+            ->postJson($preflight->json('reset_url'), [
+                'reset_token' => $preflight->json('reset_token'),
+            ])
+            ->assertConflict()
+            ->assertJsonMissingPath('addresses')
+            ->assertJsonMissingPath('discover_url')
+            ->assertJsonPath('message', 'Сільпо не підтвердило повне очищення кошика. Гусь зупинився.');
+
+        $reset = $event->silpoCartResets()->sole();
+        $this->assertSame(SilpoCartResetStatus::Failed, $reset->status);
+        $this->assertSame('existing-1', data_get($reset->snapshot, 'cart.shipments.0.products.0.productId'));
+    }
+
+    public function test_uncertain_clear_response_recovers_by_reading_the_empty_cart_instead_of_clearing_twice(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $gateway->clearExceptionAfterMutation = new RuntimeException('Gateway timeout after Silpo accepted clear.');
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk();
+
+        $this->actingAs($owner)
+            ->postJson($preflight->json('reset_url'), [
+                'reset_token' => $preflight->json('reset_token'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('reset_verified', true);
+
+        $this->assertSame(1, $gateway->clearWrites);
+        $this->assertSame([], $gateway->cart?->items);
+        $this->assertSame(SilpoCartResetStatus::Cleared, $event->silpoCartResets()->sole()->status);
+    }
+
+    public function test_active_run_for_another_event_blocks_even_a_valid_reset_token_without_reading_silpo(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        $otherEvent = Event::factory()->ready()->for($owner)->create();
+        EventCartRun::factory()->for($otherEvent)->create([
+            'status' => CartRunStatus::Running,
+            'plan_state_version' => $otherEvent->state_version,
+        ]);
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $token = app(SilpoFulfilmentTokenService::class)->issue('cart_reset', $owner, $event, [
+            'request_id' => 'blocked-cross-event-reset',
+            'plan_state_version' => $event->state_version,
+        ]);
+
+        $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk()
+            ->assertJsonStructure(['active_run_url'])
+            ->assertJsonMissingPath('reset_token');
+        $this->actingAs($owner)
+            ->postJson(route('events.silpo.cart-reset', $event), ['reset_token' => $token])
+            ->assertConflict();
+
+        $this->assertSame(0, $gateway->snapshotReads);
+        $this->assertSame(0, $gateway->clearWrites);
+    }
+
+    public function test_reset_token_is_plan_bound_before_any_silpo_read(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk();
+        $event->increment('state_version');
+
+        $this->actingAs($owner)
+            ->postJson($preflight->json('reset_url'), [
+                'reset_token' => $preflight->json('reset_token'),
+            ])
+            ->assertConflict();
+
+        $this->assertSame(0, $gateway->snapshotReads);
+        $this->assertSame(0, $gateway->clearWrites);
+    }
+
+    public function test_reset_token_is_owner_and_event_bound_before_any_silpo_read(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        [$otherOwner, $otherEvent] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $foreignToken = app(SilpoFulfilmentTokenService::class)->issue(
+            'cart_reset',
+            $otherOwner,
+            $otherEvent,
+            [
+                'request_id' => 'foreign-reset',
+                'plan_state_version' => $otherEvent->state_version,
+            ],
+        );
+
+        $this->actingAs($owner)
+            ->postJson(route('events.silpo.cart-reset', $event), ['reset_token' => $foreignToken])
+            ->assertConflict();
+
+        $this->assertSame(0, $gateway->snapshotReads);
+        $this->assertSame(0, $gateway->clearWrites);
+    }
+
+    public function test_an_already_empty_cart_is_still_backed_up_cleared_and_verified(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->emptyReadyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $this->resetCart($owner, $event)
+            ->assertJsonPath('backup.items_count', 0)
+            ->assertJsonPath('reset_verified', true);
+
+        $this->assertSame(1, $gateway->clearWrites);
+        $this->assertSame(SilpoCartResetStatus::Cleared, $event->silpoCartResets()->sole()->status);
+    }
+
+    public function test_products_reappearing_during_fulfilment_block_route_controls(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $gateway = new FakeCartGateway($this->readyCart());
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+        $reset = $this->resetCart($owner, $event);
+        $gateway->cart = $this->readyCart();
+
+        $this->actingAs($owner)
+            ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
+                'stage' => 'address_options',
+                'token' => $reset->json('addresses.0.token'),
+            ])
+            ->assertConflict()
+            ->assertJsonMissingPath('options')
+            ->assertJsonPath(
+                'message',
+                'Кошик Сільпо вже не порожній або змінився. Потрібне нове підтвердження очищення.',
+            );
+
+        $this->assertSame(0, $gateway->deliveryTypeReads);
+        $this->assertSame(SilpoCartResetStatus::Superseded, $event->silpoCartResets()->sole()->status);
     }
 
     public function test_terminal_automatic_job_failure_closes_the_cart_harness(): void
@@ -158,19 +412,15 @@ class EventCartRunTest extends TestCase
         ];
         $this->app->instance(SilpoCartGateway::class, $gateway);
 
-        $preflight = $this->actingAs($owner)
-            ->getJson(route('events.silpo.cart-preflight', $event))
-            ->assertOk()
-            ->assertJsonPath('ready', true)
-            ->assertJsonPath('current.delivery_label', 'Доставка Сільпо')
-            ->assertJsonPath('current.items_count', 1)
-            ->assertJsonPath('current.address_label', 'Київ, Хрещатик, 1')
-            ->assertJsonStructure(['current' => ['review_token'], 'addresses']);
+        $reset = $this->resetCart($owner, $event)
+            ->assertJsonPath('backup.items_count', 1)
+            ->assertJsonPath('reset_verified', true);
+        $reviewToken = $this->freshReviewToken($owner, $event);
 
         $this->actingAs($owner)
             ->postJson(route('events.cart-runs.store', $event), [
                 'mode' => 'assisted',
-                'review_token' => $preflight->json('current.review_token'),
+                'review_token' => $reviewToken,
             ])
             ->assertAccepted()
             ->assertJsonStructure(['run_url']);
@@ -178,6 +428,9 @@ class EventCartRunTest extends TestCase
         $run = EventCartRun::query()->whereBelongsTo($event)->sole();
         $this->assertSame(CartRunStatus::Running, $run->status);
         $this->assertSame(CartRunPhase::Preparing, $run->phase);
+        $this->assertSame($event->silpoCartResets()->sole()->id, $run->silpo_cart_reset_id);
+        $this->assertSame(1, $gateway->clearWrites);
+        $this->assertSame([], data_get($run->cart_context, 'items'));
         $this->assertSame($event->state_version, $run->plan_state_version);
         $this->assertSame('voda-5087', data_get($run->state, 'catalog_scopes.categories.0.slug'));
         $this->assertSame('dlia-lehkoi-vecheri', data_get($run->state, 'catalog_scopes.sets.0.slug'));
@@ -214,14 +467,13 @@ class EventCartRunTest extends TestCase
             'polygonId' => 'polygon-1',
         ];
         $this->app->instance(SilpoCartGateway::class, $gateway);
-        $preflight = $this->actingAs($owner)
-            ->getJson(route('events.silpo.cart-preflight', $event))
-            ->assertOk()
+        $preflight = $this->resetCart($owner, $event)
             ->assertJsonCount(1, 'addresses');
         $addressToken = $preflight->json('addresses.0.token');
 
         $this->actingAs($stranger)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_options',
                 'token' => $addressToken,
             ])
@@ -229,6 +481,7 @@ class EventCartRunTest extends TestCase
 
         $routes = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_options',
                 'token' => $addressToken,
             ])
@@ -237,6 +490,7 @@ class EventCartRunTest extends TestCase
         $routeToken = $routes->json('options.0.route_token');
         $slots = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'slots',
                 'token' => $routeToken,
             ])
@@ -245,6 +499,7 @@ class EventCartRunTest extends TestCase
 
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'review',
                 'token' => $routeToken,
                 'slot_start' => $slots->json('slots.0.start'),
@@ -257,6 +512,7 @@ class EventCartRunTest extends TestCase
 
         $found = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_search',
                 'query' => 'Київ, вул. Саксаганського, 57-Б',
             ])
@@ -265,6 +521,7 @@ class EventCartRunTest extends TestCase
 
         $foundRoutes = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_options',
                 'token' => $found->json('addresses.0.token'),
             ])
@@ -276,12 +533,14 @@ class EventCartRunTest extends TestCase
             ->assertJsonStructure(['options' => [['route_token']]]);
         $foundSlots = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'slots',
                 'token' => $foundRoutes->json('options.0.route_token'),
             ])
             ->assertOk();
         $foundReview = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'review',
                 'token' => $foundRoutes->json('options.0.route_token'),
                 'slot_start' => $foundSlots->json('slots.0.start'),
@@ -310,7 +569,7 @@ class EventCartRunTest extends TestCase
             [['companyId' => 'company-1', 'branchId' => 'branch-1']],
             $gateway->lastFulfilmentShipments,
         );
-        $this->assertSame(['existing-1'], collect($gateway->cart->items)->pluck('product_id')->all());
+        $this->assertSame([], collect($gateway->cart->items)->pluck('product_id')->all());
     }
 
     public function test_found_home_address_without_a_house_stays_read_only(): void
@@ -329,6 +588,7 @@ class EventCartRunTest extends TestCase
 
         $found = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_search',
                 'query' => 'Київ, вул. Саксаганського',
             ])
@@ -337,6 +597,7 @@ class EventCartRunTest extends TestCase
 
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_options',
                 'token' => $found->json('addresses.0.token'),
             ])
@@ -357,6 +618,7 @@ class EventCartRunTest extends TestCase
 
         $found = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_search',
                 'query' => 'Київ, вул. Хрещатик, 1',
             ])
@@ -365,6 +627,7 @@ class EventCartRunTest extends TestCase
 
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_options',
                 'token' => $found->json('addresses.0.token'),
             ])
@@ -391,15 +654,14 @@ class EventCartRunTest extends TestCase
         ]];
         $this->app->instance(SilpoCartGateway::class, $gateway);
 
-        $preflight = $this->actingAs($owner)
-            ->getJson(route('events.silpo.cart-preflight', $event))
-            ->assertOk()
+        $preflight = $this->resetCart($owner, $event)
             ->assertJsonCount(2, 'addresses')
             ->assertJsonPath('addresses.1.label', 'Київ, Саксаганського, 57-Б')
             ->assertJsonPath('addresses.1.writable', false);
 
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_options',
                 'token' => $preflight->json('addresses.1.token'),
             ])
@@ -426,7 +688,7 @@ class EventCartRunTest extends TestCase
         $this->assertFalse($snapshot->hasReusableHomeAddress());
     }
 
-    public function test_incomplete_or_rejected_route_intent_returns_manual_fallback_without_any_mcp_read(): void
+    public function test_incomplete_or_rejected_route_intent_returns_manual_fallback_without_route_search(): void
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
@@ -440,9 +702,12 @@ class EventCartRunTest extends TestCase
                 'house' => null,
             ])),
         ));
+        $this->resetCart($owner, $event);
+        $readsAfterReset = $gateway->snapshotReads;
 
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'intent',
                 'query' => 'Додому на Саксаганського',
             ])
@@ -457,6 +722,7 @@ class EventCartRunTest extends TestCase
         );
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'intent',
                 'query' => 'Щось дуже загадкове',
             ])
@@ -464,7 +730,7 @@ class EventCartRunTest extends TestCase
             ->assertJsonPath('kind', 'clarification')
             ->assertJsonPath('manual_fallback', true);
 
-        $this->assertSame(0, $gateway->snapshotReads);
+        $this->assertSame($readsAfterReset + 2, $gateway->snapshotReads);
         $this->assertSame([], $gateway->addressSearchQueries);
     }
 
@@ -494,6 +760,7 @@ class EventCartRunTest extends TestCase
 
         $intent = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'intent',
                 'query' => 'Доставка додому: Київ, вул. Саксаганського, 57-Б',
             ])
@@ -509,6 +776,7 @@ class EventCartRunTest extends TestCase
         $otherEvent = Event::factory()->ready()->for($owner)->create();
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $otherEvent), [
+                'reset_token' => $this->resetTokenPayload($owner, $event)['reset_token'],
                 'stage' => 'address_options',
                 'token' => $intent->json('addresses.0.token'),
             ])
@@ -516,6 +784,7 @@ class EventCartRunTest extends TestCase
 
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_options',
                 'token' => $intent->json('addresses.0.token'),
             ])
@@ -564,16 +833,19 @@ class EventCartRunTest extends TestCase
         ));
 
         $intent = $this->actingAs($owner)->postJson(route('events.silpo.fulfilment.discover', $event), [
+            ...$this->resetTokenPayload($owner, $event),
             'stage' => 'intent',
             'query' => 'Самовивіз у Києві на Хрещатику, 1 завтра після 18:00',
         ])->assertOk();
         $routes = $this->actingAs($owner)->postJson(route('events.silpo.fulfilment.discover', $event), [
+            ...$this->resetTokenPayload($owner, $event),
             'stage' => 'address_options',
             'token' => $intent->json('addresses.0.token'),
         ])->assertOk()
             ->assertJsonPath('options.0.delivery_label', 'Самовивіз')
             ->assertJsonPath('options.0.preferred', true);
         $slots = $this->actingAs($owner)->postJson(route('events.silpo.fulfilment.discover', $event), [
+            ...$this->resetTokenPayload($owner, $event),
             'stage' => 'slots',
             'token' => $routes->json('options.0.route_token'),
         ])->assertOk()
@@ -584,6 +856,7 @@ class EventCartRunTest extends TestCase
 
         $gateway->fulfilmentSlots = [$gateway->fulfilmentSlots[0]];
         $this->actingAs($owner)->postJson(route('events.silpo.fulfilment.discover', $event), [
+            ...$this->resetTokenPayload($owner, $event),
             'stage' => 'slots',
             'token' => $routes->json('options.0.route_token'),
         ])->assertOk()
@@ -615,6 +888,7 @@ class EventCartRunTest extends TestCase
 
         $settlements = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'intent',
                 'query' => 'Новою поштою в Ірпінь, поштомат 28122',
             ])
@@ -624,6 +898,7 @@ class EventCartRunTest extends TestCase
 
         $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'nova_offices',
                 'token' => $settlements->json('settlements.0.token'),
             ])
@@ -648,18 +923,10 @@ class EventCartRunTest extends TestCase
         ]));
         $this->app->instance(SilpoCartGateway::class, $gateway);
 
-        $response = $this->actingAs($owner)
-            ->getJson(route('events.silpo.cart-preflight', $event))
-            ->assertOk()
-            ->assertJsonCount(2, 'current.validations')
-            ->assertJsonPath(
-                'current.validations.0.message',
-                'Цей час уже недоступний. Гусь допоможе обрати свіжий.',
-            )
-            ->assertJsonPath(
-                'current.validations.1.message',
-                'Сільпо просить додатково перевірити кошик.',
-            );
+        $response = $this->resetCart($owner, $event)
+            ->assertJsonPath('backup.items_count', 1)
+            ->assertJsonMissingPath('current')
+            ->assertJsonMissingPath('backup.validations');
 
         $encoded = $response->getContent();
         $this->assertStringNotContainsString('promotion.available', $encoded);
@@ -690,11 +957,10 @@ class EventCartRunTest extends TestCase
         ]];
         $this->app->instance(SilpoCartGateway::class, $gateway);
 
-        $preflight = $this->actingAs($owner)
-            ->getJson(route('events.silpo.cart-preflight', $event))
-            ->assertOk();
+        $preflight = $this->resetCart($owner, $event);
         $routes = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'address_options',
                 'token' => $preflight->json('addresses.0.token'),
             ])
@@ -704,12 +970,14 @@ class EventCartRunTest extends TestCase
             ->assertJsonPath('options.0.branch_label', 'Київ, дор. Кільцева, 1');
         $slots = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'slots',
                 'token' => $routes->json('options.0.route_token'),
             ])
             ->assertOk();
         $review = $this->actingAs($owner)
             ->postJson(route('events.silpo.fulfilment.discover', $event), [
+                ...$this->resetTokenPayload($owner, $event),
                 'stage' => 'review',
                 'token' => $routes->json('options.0.route_token'),
                 'slot_start' => $slots->json('slots.0.start'),
@@ -732,16 +1000,18 @@ class EventCartRunTest extends TestCase
             $gateway->lastFulfilmentShipments,
         );
         $this->assertSame('branch-2', $gateway->cart->branchId);
-        $this->assertSame(['existing-1'], collect($gateway->cart->items)->pluck('product_id')->all());
+        $this->assertSame([], collect($gateway->cart->items)->pluck('product_id')->all());
     }
 
-    public function test_final_route_confirmation_updates_once_preserves_lines_and_replay_opens_the_same_run(): void
+    public function test_final_route_confirmation_updates_once_from_empty_cart_and_replay_opens_the_same_run(): void
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
         $gateway = new FakeCartGateway($this->readyCart());
         $this->app->instance(SilpoCartGateway::class, $gateway);
+        $this->resetCart($owner, $event);
         $snapshot = $gateway->getFulfilmentSnapshot('test-token');
+        $reset = $event->silpoCartResets()->sole();
         $selection = [
             'cart_id' => $snapshot->cartId,
             'delivery_type' => 'SelfPickup',
@@ -765,6 +1035,8 @@ class EventCartRunTest extends TestCase
                 'product_fingerprint' => $snapshot->productFingerprint(),
                 'selection' => $selection,
                 'summary' => [],
+                'reset_id' => $reset->id,
+                'empty_product_fingerprint' => $reset->empty_product_fingerprint,
             ],
         );
         $payload = ['mode' => 'assisted', 'review_token' => $reviewToken];
@@ -784,7 +1056,7 @@ class EventCartRunTest extends TestCase
         $this->assertSame(1, $gateway->fulfilmentWrites);
         $this->assertSame('SelfPickup', $gateway->cart->deliveryType);
         $this->assertSame('branch-2', $gateway->cart->branchId);
-        $this->assertSame(['existing-1'], collect($gateway->cart->items)->pluck('product_id')->all());
+        $this->assertSame([], collect($gateway->cart->items)->pluck('product_id')->all());
         $this->assertSame(1, EventCartRun::query()->whereBelongsTo($event)->count());
     }
 
@@ -794,7 +1066,9 @@ class EventCartRunTest extends TestCase
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
         $gateway = new FakeCartGateway($this->readyCart());
         $this->app->instance(SilpoCartGateway::class, $gateway);
+        $this->resetCart($owner, $event);
         $snapshot = $gateway->getFulfilmentSnapshot('test-token');
+        $reset = $event->silpoCartResets()->sole();
         $selection = [
             ...$snapshot->currentSelection(),
             'delivery_type' => 'SelfPickup',
@@ -815,6 +1089,8 @@ class EventCartRunTest extends TestCase
                 'product_fingerprint' => $snapshot->productFingerprint(),
                 'selection' => $selection,
                 'summary' => [],
+                'reset_id' => $reset->id,
+                'empty_product_fingerprint' => $reset->empty_product_fingerprint,
             ],
         );
         $gateway->fulfilmentAddress['address'] = 'Київ, інша адреса, 99';
@@ -838,7 +1114,9 @@ class EventCartRunTest extends TestCase
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
         $gateway = new FakeCartGateway($this->readyCart());
         $this->app->instance(SilpoCartGateway::class, $gateway);
+        $this->resetCart($owner, $event);
         $snapshot = $gateway->getFulfilmentSnapshot('test-token');
+        $reset = $event->silpoCartResets()->sole();
         $reviewToken = $this->app->make(SilpoFulfilmentTokenService::class)->issue(
             'fulfilment_review',
             $owner,
@@ -848,6 +1126,8 @@ class EventCartRunTest extends TestCase
                 'product_fingerprint' => $snapshot->productFingerprint(),
                 'selection' => $snapshot->currentSelection(),
                 'summary' => [],
+                'reset_id' => $reset->id,
+                'empty_product_fingerprint' => $reset->empty_product_fingerprint,
             ],
         );
         $gateway->slotsAvailable = false;
@@ -864,7 +1144,7 @@ class EventCartRunTest extends TestCase
         Queue::assertNothingPushed();
     }
 
-    public function test_single_product_flow_requires_confirmation_then_writes_one_absolute_batch_and_preserves_other_items(): void
+    public function test_single_product_flow_requires_confirmation_then_writes_one_absolute_batch_from_an_empty_cart(): void
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
@@ -891,10 +1171,7 @@ class EventCartRunTest extends TestCase
         );
         $this->app->instance(SilpoCartGateway::class, $gateway);
 
-        $reviewToken = $this->actingAs($owner)
-            ->getJson(route('events.silpo.cart-preflight', $event))
-            ->assertOk()
-            ->json('current.review_token');
+        $reviewToken = $this->freshReviewToken($owner, $event);
 
         $this->actingAs($owner)
             ->postJson(route('events.cart-runs.store', $event), [
@@ -928,6 +1205,9 @@ class EventCartRunTest extends TestCase
         $this->assertSame(['вода питна'], $gateway->searchQueries);
         $this->assertSame(CartRunPhase::Deciding, $run->phase);
         $this->assertSame('water-1', data_get($run->state, 'last_candidates.0.product_id'));
+        $searchStep = $run->steps()->where('kind', 'searching')->latest('sequence')->firstOrFail();
+        $this->assertSame('вода питна', data_get($searchStep->context, 'query'));
+        $this->assertStringContainsString('вода питна', $searchStep->message);
 
         (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
             $agent,
@@ -991,12 +1271,94 @@ class EventCartRunTest extends TestCase
         $this->assertSame('water-1', $gateway->writes[0][0]['productId']);
         $this->assertSame(2.0, (float) $gateway->writes[0][0]['quantity']);
         $this->assertFalse($gateway->writes[0][0]['addQuantity']);
-        $this->assertContains('existing-1', collect($gateway->cart?->items)->pluck('product_id')->all());
+        $this->assertNotContains('existing-1', collect($gateway->cart?->items)->pluck('product_id')->all());
 
         $this->actingAs($owner)
             ->postJson(route('events.cart-runs.confirm', [$event, $run]))
             ->assertConflict();
         $this->assertCount(1, $gateway->writes);
+    }
+
+    public function test_failed_final_write_keeps_the_approved_set_shows_the_silpo_error_and_retries_it(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->emptyReadyCart();
+        $stagedItems = [[
+            'need_key' => 'water',
+            'product_id' => 'water-1',
+            'company_id' => 'company-1',
+            'branch_id' => 'branch-1',
+            'name' => 'Вода негазована 2 л',
+            'quantity' => 2,
+            'price' => 30,
+            'step' => 1,
+            'stock' => 20,
+        ]];
+        $run = EventCartRun::factory()->for($event)->create([
+            'status' => CartRunStatus::WaitingForConfirmation,
+            'phase' => CartRunPhase::ReadyToCommit,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => ['has_unmet_needs' => false],
+            'staged_items' => $stagedItems,
+        ]);
+        $this->attachConsumedReset($run, $cart);
+        $gateway = new FakeCartGateway($cart);
+        $gateway->writeException = new RuntimeException(
+            'Door is closed after 22:00. Bearer should-never-be-shown; [file] /srv/app/vendor/client.php; [line] 956',
+        );
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $this->actingAs($owner)
+            ->postJson(route('events.cart-runs.confirm', [$event, $run]))
+            ->assertAccepted();
+        $run->refresh();
+        $failedJob = new CommitEventCartRunJob($run->id, $run->cursor);
+
+        try {
+            $failedJob->handle($gateway, app(GooseCartStatusService::class));
+            $this->fail('Expected the Silpo write to fail.');
+        } catch (RuntimeException $exception) {
+            $failedJob->failed($exception);
+        }
+
+        $run->refresh();
+        $this->assertSame(CartRunStatus::WaitingForConfirmation, $run->status);
+        $this->assertSame(CartRunPhase::ReadyToCommit, $run->phase);
+        $this->assertSame($stagedItems, $run->staged_items);
+        $this->assertStringContainsString('Сільпо відповіло: Door is closed after 22:00.', (string) $run->error);
+        $this->assertStringContainsString('Bearer [приховано]', (string) $run->error);
+        $this->assertStringNotContainsString('should-never-be-shown', (string) $run->error);
+        $this->assertStringNotContainsString('/srv/app/vendor/client.php', (string) $run->error);
+        $this->assertStringNotContainsString('[line] 956', (string) $run->error);
+
+        $this->actingAs($owner)
+            ->getJson(route('events.cart-runs.show', [$event, $run]))
+            ->assertOk()
+            ->assertJsonPath('commit_retry_available', true)
+            ->assertJsonPath('confirmation_label', 'Повторити додавання цього набору')
+            ->assertJsonPath('staged_items.0.product_id', 'water-1')
+            ->assertJsonPath('error', $run->error);
+
+        $gateway->writeException = null;
+        $this->actingAs($owner)
+            ->postJson(route('events.cart-runs.confirm', [$event, $run]))
+            ->assertAccepted();
+        $run->refresh();
+        (new CommitEventCartRunJob($run->id, $run->cursor))->handle(
+            $gateway,
+            app(GooseCartStatusService::class),
+        );
+
+        $this->assertSame(CartRunStatus::Synced, $run->refresh()->status);
+        $this->assertSame($stagedItems, $run->staged_items);
+        $this->assertCount(2, $gateway->writes);
+        $this->assertSame('water-1', $gateway->writes[1][0]['productId']);
+        $this->assertSame(2.0, (float) $gateway->writes[1][0]['quantity']);
     }
 
     public function test_a_fresh_plan_can_start_after_an_older_confirmation_run_becomes_stale(): void
@@ -1012,11 +1374,7 @@ class EventCartRunTest extends TestCase
             'plan_state_version' => $event->state_version - 1,
         ]);
 
-        $reviewToken = $this->actingAs($owner)
-            ->getJson(route('events.silpo.cart-preflight', $event))
-            ->assertOk()
-            ->assertJsonMissingPath('active_run_url')
-            ->json('current.review_token');
+        $reviewToken = $this->freshReviewToken($owner, $event);
 
         $this->actingAs($owner)
             ->postJson(route('events.cart-runs.store', $event), [
@@ -1064,7 +1422,7 @@ class EventCartRunTest extends TestCase
         [$owner, $event] = $this->eventWithPlan();
         $stranger = User::factory()->create();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
-        $originalCart = $this->readyCart();
+        $originalCart = $this->emptyReadyCart();
         $changedCart = new SilpoCartContextData(
             cartId: $originalCart->cartId,
             deliveryType: $originalCart->deliveryType,
@@ -1088,6 +1446,7 @@ class EventCartRunTest extends TestCase
             'cart_context' => $originalCart->toRunContext(),
             'staged_items' => [['product_id' => 'water-1', 'quantity' => 2]],
         ]);
+        $this->attachConsumedReset($run, $originalCart);
 
         $this->actingAs($stranger)
             ->postJson(route('events.cart-runs.confirm', [$event, $run]))
@@ -1099,6 +1458,40 @@ class EventCartRunTest extends TestCase
         $this->assertSame(CartRunStatus::Stale, $run->refresh()->status);
         Queue::assertNotPushed(CommitEventCartRunJob::class);
         $this->assertSame([], $gateway->writes);
+    }
+
+    public function test_foreign_product_after_matching_invalidates_the_run_before_final_commit(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $emptyCart = $this->emptyReadyCart();
+        $foreignCart = $this->readyCart();
+        $stagedItems = [['product_id' => 'water-1', 'quantity' => 2]];
+        $run = EventCartRun::factory()->for($event)->create([
+            'status' => CartRunStatus::WaitingForConfirmation,
+            'phase' => CartRunPhase::ReadyToCommit,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $emptyCart->cartId,
+            'delivery_fingerprint' => $emptyCart->fingerprint(),
+            'cart_context' => $emptyCart->toRunContext(),
+            'staged_items' => $stagedItems,
+        ]);
+        $this->attachConsumedReset($run, $emptyCart);
+        $gateway = new FakeCartGateway($foreignCart);
+        $this->app->instance(SilpoCartGateway::class, $gateway);
+
+        $this->actingAs($owner)
+            ->postJson(route('events.cart-runs.confirm', [$event, $run]))
+            ->assertConflict()
+            ->assertJsonPath(
+                'message',
+                'У кошику Сільпо зʼявилися сторонні товари. Гусь не змішуватиме їх із підтвердженим набором.',
+            );
+
+        $this->assertSame(CartRunStatus::Stale, $run->refresh()->status);
+        $this->assertSame($stagedItems, $run->staged_items);
+        $this->assertSame([], $gateway->writes);
+        Queue::assertNotPushed(CommitEventCartRunJob::class);
     }
 
     public function test_assisted_mode_waits_only_after_all_search_attempts_are_exhausted(): void
@@ -1780,6 +2173,9 @@ class EventCartRunTest extends TestCase
         $this->assertSame(CartRunPhase::Searching, $run->phase);
         $this->assertSame('вода', data_get($run->state, 'needs.0.search_query'));
         $this->assertNull($run->blocker);
+        $retryStep = $run->steps()->where('kind', 'retry')->latest('sequence')->firstOrFail();
+        $this->assertSame('вода', data_get($retryStep->context, 'query'));
+        $this->assertStringContainsString('вода', $retryStep->message);
     }
 
     public function test_model_rejected_catalog_candidate_is_not_silently_selected(): void
@@ -2453,7 +2849,7 @@ class EventCartRunTest extends TestCase
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
-        $originalCart = $this->readyCart();
+        $originalCart = $this->emptyReadyCart();
         $changedCart = new SilpoCartContextData(
             cartId: $originalCart->cartId,
             deliveryType: $originalCart->deliveryType,
@@ -2486,6 +2882,7 @@ class EventCartRunTest extends TestCase
                 'stock' => 20,
             ]],
         ]);
+        $this->attachConsumedReset($run, $originalCart);
         $gateway = new FakeCartGateway($changedCart);
 
         (new CommitEventCartRunJob($run->id, 0))->handle($gateway, new GooseCartStatusService);
@@ -2500,7 +2897,7 @@ class EventCartRunTest extends TestCase
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
-        $cart = $this->readyCart();
+        $cart = $this->emptyReadyCart();
         $harnessRun = HarnessRun::factory()->for($event)->create([
             'type' => HarnessRunType::SilpoCart,
             'status' => HarnessRunStatus::Running,
@@ -2530,6 +2927,7 @@ class EventCartRunTest extends TestCase
                 [...$item, 'need_key' => 'salad', 'quantity' => 1.0],
             ],
         ]);
+        $this->attachConsumedReset($run, $cart);
         $gateway = new FakeCartGateway($cart);
 
         (new CommitEventCartRunJob($run->id, 0))->handle(
@@ -2553,7 +2951,7 @@ class EventCartRunTest extends TestCase
     {
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
-        $cart = $this->readyCart();
+        $cart = $this->emptyReadyCart();
         $warning = 'Не знайдено: Сирі стейки або відруби з телятини.';
         $run = EventCartRun::factory()->for($event)->create([
             'phase' => CartRunPhase::ReadyToCommit,
@@ -2577,6 +2975,7 @@ class EventCartRunTest extends TestCase
                 'stock' => 20,
             ]],
         ]);
+        $this->attachConsumedReset($run, $cart);
         $gateway = new FakeCartGateway($cart);
 
         (new CommitEventCartRunJob($run->id, 0))->handle($gateway, new GooseCartStatusService);
@@ -2632,6 +3031,7 @@ class EventCartRunTest extends TestCase
                 'stock' => 20,
             ]],
         ]);
+        $this->attachConsumedReset($run, $emptyCart);
         $gateway = new FakeCartGateway($emptyCart);
         $gateway->validationsAfterWrite = $emptyCart->validations;
 
@@ -2654,7 +3054,9 @@ class EventCartRunTest extends TestCase
             ->get(route('events.show', ['event' => $event, 'tab' => 'plan']))
             ->assertOk()
             ->assertSee('Скажіть Гусю, куди й як доставити')
-            ->assertSee('Можна лишити нинішній маршрут або попросити інший. Спершу Гусь розбере фразу, потім Сільпо окремо підтвердить адресу, магазин і час.')
+            ->assertSee('Зберегти копію й очистити кошик')
+            ->assertSee('Адресу, магазин і час потім треба обрати заново.')
+            ->assertDontSee('Можна лишити нинішній маршрут або попросити інший.')
             ->assertSee('data-silpo-dialog', false)
             ->assertSee('data-silpo-dialog-minimize', false)
             ->assertSee('data-silpo-dialog-minimized', false)
@@ -2662,7 +3064,7 @@ class EventCartRunTest extends TestCase
             ->assertSee('Згорнути вікно кошика')
             ->assertSee('Розгорнути вікно кошика')
             ->assertSee('Перед походом у Сільпо')
-            ->assertSee('Куди Гусю йти по кошик?')
+            ->assertSee('Перед будь-яким маршрутом')
             ->assertDontSee('Крок перед справжнім кошиком')
             ->assertDontSee('Спершу посадимо Гуся на правильний маршрут')
             ->assertDontSee('Маршрут людською мовою')
@@ -2769,6 +3171,60 @@ class EventCartRunTest extends TestCase
     }
 
     /** @return array{User, Event} */
+    private function resetCart(User $owner, Event $event): TestResponse
+    {
+        if (isset($this->resetResponses[$event->id])) {
+            return $this->resetResponses[$event->id];
+        }
+
+        $preflight = $this->actingAs($owner)
+            ->getJson(route('events.silpo.cart-preflight', $event))
+            ->assertOk()
+            ->assertJsonPath('reset_required', true)
+            ->assertJsonStructure(['reset_url', 'reset_token']);
+
+        $this->resetResponses[$event->id] = $this->actingAs($owner)
+            ->postJson($preflight->json('reset_url'), [
+                'reset_token' => $preflight->json('reset_token'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('reset_verified', true)
+            ->assertJsonStructure(['reset_token', 'addresses', 'discover_url', 'start_url']);
+
+        return $this->resetResponses[$event->id];
+    }
+
+    /** @return array{reset_token: string} */
+    private function resetTokenPayload(User $owner, Event $event): array
+    {
+        return ['reset_token' => (string) $this->resetCart($owner, $event)->json('reset_token')];
+    }
+
+    private function freshReviewToken(User $owner, Event $event): string
+    {
+        $reset = $this->resetCart($owner, $event);
+        $routes = $this->actingAs($owner)->postJson(route('events.silpo.fulfilment.discover', $event), [
+            ...$this->resetTokenPayload($owner, $event),
+            'stage' => 'address_options',
+            'token' => $reset->json('addresses.0.token'),
+        ])->assertOk();
+        $slots = $this->actingAs($owner)->postJson(route('events.silpo.fulfilment.discover', $event), [
+            ...$this->resetTokenPayload($owner, $event),
+            'stage' => 'slots',
+            'token' => $routes->json('options.0.route_token'),
+        ])->assertOk();
+        $review = $this->actingAs($owner)->postJson(route('events.silpo.fulfilment.discover', $event), [
+            ...$this->resetTokenPayload($owner, $event),
+            'stage' => 'review',
+            'token' => $routes->json('options.0.route_token'),
+            'slot_start' => $slots->json('slots.0.start'),
+            'slot_end' => $slots->json('slots.0.end'),
+        ])->assertOk();
+
+        return (string) $review->json('review_token');
+    }
+
+    /** @return array{User, Event} */
     private function eventWithPlan(): array
     {
         $owner = User::factory()->create();
@@ -2843,6 +3299,43 @@ class EventCartRunTest extends TestCase
                 'slot_end' => $slotEnd,
             ]),
         );
+    }
+
+    private function emptyReadyCart(array $validations = []): SilpoCartContextData
+    {
+        $cart = $this->readyCart($validations);
+
+        return new SilpoCartContextData(
+            cartId: $cart->cartId,
+            deliveryType: $cart->deliveryType,
+            branchId: $cart->branchId,
+            companyId: $cart->companyId,
+            slotStart: $cart->slotStart,
+            slotEnd: $cart->slotEnd,
+            items: [],
+            validations: $cart->validations,
+            slot: $cart->slot,
+            totalAfterDiscounts: 0,
+            verifiedFulfilmentFingerprint: $cart->verifiedFulfilmentFingerprint,
+        );
+    }
+
+    private function attachConsumedReset(EventCartRun $run, SilpoCartContextData $cart): SilpoCartReset
+    {
+        $reset = SilpoCartReset::factory()
+            ->for($run->event)
+            ->for($run->event->user)
+            ->create([
+                'plan_state_version' => $run->plan_state_version,
+                'status' => SilpoCartResetStatus::Consumed,
+                'cart_id' => $cart->cartId,
+                'empty_product_fingerprint' => hash('sha256', json_encode([], JSON_THROW_ON_ERROR)),
+                'snapshot' => ['cart_id' => $cart->cartId, 'cart' => ['shipments' => []]],
+                'consumed_at' => now(),
+            ]);
+        $run->update(['silpo_cart_reset_id' => $reset->id]);
+
+        return $reset;
     }
 
     /** @param array<string, mixed> $overrides @return array<string, mixed> */
@@ -3039,6 +3532,17 @@ final class FakeCartGateway implements SilpoCartGateway
 
     public int $snapshotReads = 0;
 
+    public int $clearWrites = 0;
+
+    /** @var array<int, array<string, mixed>>|null */
+    public ?array $itemsAfterClear = null;
+
+    public ?RuntimeException $clearException = null;
+
+    public ?RuntimeException $clearExceptionAfterMutation = null;
+
+    public ?RuntimeException $writeException = null;
+
     public int $deliveryTypeReads = 0;
 
     /** @var array<int, string> */
@@ -3115,6 +3619,49 @@ final class FakeCartGateway implements SilpoCartGateway
                 'validations' => $this->cart->validations,
             ],
         ]);
+    }
+
+    public function clearCartProducts(
+        string $accessToken,
+        string $cartId,
+        ?HarnessRun $harnessRun = null,
+    ): SilpoFulfilmentSnapshotData {
+        $this->clearWrites++;
+
+        if ($this->clearException !== null) {
+            throw $this->clearException;
+        }
+
+        if ($this->cart === null || $this->cart->cartId !== $cartId) {
+            throw new RuntimeException('Fake cart is missing.');
+        }
+
+        $this->cart = new SilpoCartContextData(
+            cartId: $this->cart->cartId,
+            deliveryType: $this->cart->deliveryType,
+            branchId: $this->cart->branchId,
+            companyId: $this->cart->companyId,
+            slotStart: $this->cart->slotStart,
+            slotEnd: $this->cart->slotEnd,
+            items: $this->itemsAfterClear ?? [],
+            validations: [],
+            slot: $this->cart->slot,
+            totalAfterDiscounts: null,
+            verifiedFulfilmentFingerprint: $this->cart->verifiedFulfilmentFingerprint,
+        );
+
+        if ($this->clearExceptionAfterMutation !== null) {
+            throw $this->clearExceptionAfterMutation;
+        }
+
+        $snapshot = $this->getFulfilmentSnapshot($accessToken, $harnessRun)
+            ?? throw new RuntimeException('Fake cart is missing.');
+
+        if (! $snapshot->isEmpty()) {
+            throw new RuntimeException('Сільпо не підтвердило повне очищення кошика. Гусь зупинився.');
+        }
+
+        return $snapshot;
     }
 
     public function getSavedDeliveryAddresses(
@@ -3377,6 +3924,11 @@ final class FakeCartGateway implements SilpoCartGateway
         ?HarnessRun $harnessRun = null,
     ): array {
         $this->writes[] = $products;
+
+        if ($this->writeException !== null) {
+            throw $this->writeException;
+        }
+
         $items = collect($this->cart?->items ?? [])->keyBy('product_id');
 
         foreach ($products as $product) {

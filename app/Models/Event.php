@@ -106,6 +106,11 @@ class Event extends Model
         return $this->hasMany(EventCartRun::class);
     }
 
+    public function silpoCartResets(): HasMany
+    {
+        return $this->hasMany(SilpoCartReset::class);
+    }
+
     public function harnessRuns(): HasMany
     {
         return $this->hasMany(HarnessRun::class);

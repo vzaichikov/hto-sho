@@ -52,4 +52,9 @@ class User extends Authenticatable
     {
         return $this->hasManyThrough(EventCartRun::class, Event::class);
     }
+
+    public function silpoCartResets(): HasMany
+    {
+        return $this->hasMany(SilpoCartReset::class);
+    }
 }
