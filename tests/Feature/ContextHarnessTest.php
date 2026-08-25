@@ -169,6 +169,7 @@ class ContextHarnessTest extends TestCase
             ->assertAccepted()
             ->assertJsonPath('stage', 'waiting_for_quiet');
         $taskId = $first->json('task_id');
+        $this->assertIsString($first->json('started_at'));
 
         $this->actingAs($user)
             ->postJson(route('events.analysis.store', $event))
@@ -225,8 +226,10 @@ class ContextHarnessTest extends TestCase
             ->assertSee('data-analysis-minimized', escape: false)
             ->assertSee('data-analysis-restore', escape: false)
             ->assertSee('data-analysis-steps', escape: false)
+            ->assertSee('data-analysis-elapsed', escape: false)
             ->assertSee('Гусь розгрібає контекст')
             ->assertSee('Не заважайте, він красивий')
+            ->assertSee('Великий чат може зайняти кілька хвилин.')
             ->assertSee('data-source-card', escape: false)
             ->assertSee('Що Гусь уже бачив')
             ->assertSeeInOrder(['Контекст', 'Питання', 'Список', 'Сільпо'])
@@ -237,6 +240,8 @@ class ContextHarnessTest extends TestCase
         $this->assertStringContainsString('setInterval(pollStatus, 2000)', $javascript);
         $this->assertStringContainsString('window.sessionStorage', $javascript);
         $this->assertStringContainsString('overlay.showModal()', $javascript);
+        $this->assertStringContainsString('formatAnalysisElapsed', $javascript);
+        $this->assertStringContainsString('setInterval(updateAnalysisElapsed, 1000)', $javascript);
         $this->assertStringContainsString('prefers-reduced-motion: reduce', $css);
         $this->assertStringContainsString('.goose-working', $css);
         $this->assertStringContainsString('.analysis-step-arrival', $css);

@@ -1421,10 +1421,12 @@ if (workspace) {
     const minimizeButton = document.querySelector('[data-analysis-minimize]');
     const restoreButton = document.querySelector('[data-analysis-restore]');
     const analysisSteps = overlay?.querySelector('[data-analysis-steps]');
+    const analysisElapsed = overlay?.querySelector('[data-analysis-elapsed]');
     const initialStateVersion = Number(workspace.dataset.eventStateVersion);
     const initialPlanStatus = workspace.dataset.eventPlanStatus;
     let analysisTaskId = null;
     let analysisMinimized = false;
+    let analysisStartedAt = null;
 
     const activeAnalysisStages = ['waiting_for_quiet', 'waiting_for_images', 'summarizing'];
     const analysisScrollBehavior = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
@@ -1437,6 +1439,27 @@ if (workspace) {
         completed_with_warnings: 'Гусь усе розгріб, але є нюанси',
         failed: 'Гусь перечепився',
     })[stage] ?? 'Гусь працює';
+
+    const formatAnalysisElapsed = (totalSeconds) => {
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        const clock = [minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':');
+
+        return hours > 0 ? `${String(hours).padStart(2, '0')}:${clock}` : clock;
+    };
+
+    const updateAnalysisElapsed = () => {
+        if (! analysisElapsed) {
+            return;
+        }
+
+        const elapsedSeconds = analysisStartedAt === null
+            ? 0
+            : Math.max(0, Math.floor((Date.now() - analysisStartedAt) / 1000));
+
+        analysisElapsed.textContent = formatAnalysisElapsed(elapsedSeconds);
+    };
 
     const storedAnalysisSteps = (taskId) => {
         if (! taskId) {
@@ -1499,17 +1522,30 @@ if (workspace) {
         row.scrollIntoView({ block: 'nearest', behavior: analysisScrollBehavior() });
     };
 
-    const useAnalysisTask = (taskId) => {
-        if (! taskId || taskId === analysisTaskId || ! analysisSteps) {
+    const useAnalysisTask = (taskId, startedAt = null) => {
+        if (! taskId || ! analysisSteps) {
+            return;
+        }
+
+        const parsedStartedAt = Date.parse(startedAt ?? '');
+
+        if (taskId === analysisTaskId) {
+            if (! Number.isNaN(parsedStartedAt)) {
+                analysisStartedAt = parsedStartedAt;
+                updateAnalysisElapsed();
+            }
+
             return;
         }
 
         analysisTaskId = taskId;
+        analysisStartedAt = Number.isNaN(parsedStartedAt) ? Date.now() : parsedStartedAt;
         analysisSteps.replaceChildren();
         storedAnalysisSteps(taskId).forEach((message) => {
             appendAnalysisStep(message, { animate: false, persist: false });
         });
         analysisSteps.lastElementChild?.scrollIntoView({ block: 'nearest' });
+        updateAnalysisElapsed();
     };
 
     const setAnalysisButtons = (active) => {
@@ -1575,7 +1611,7 @@ if (workspace) {
         const title = analysisTitle(task.stage);
         const message = task.error || task.message || title;
 
-        useAnalysisTask(taskId);
+        useAnalysisTask(taskId, task.started_at);
         appendAnalysisStep(task.message);
 
         if (task.error) {
@@ -1744,8 +1780,10 @@ if (workspace) {
             progress: Number(overlay.dataset.analysisProgressValue ?? 0),
             message: overlay.dataset.analysisMessageValue,
             error: overlay.dataset.analysisErrorValue,
+            started_at: overlay.dataset.analysisStartedAt,
         });
     }
 
+    window.setInterval(updateAnalysisElapsed, 1000);
     window.setInterval(pollStatus, 2000);
 }

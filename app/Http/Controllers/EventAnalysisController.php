@@ -30,6 +30,7 @@ class EventAnalysisController extends Controller
                     $event->analysis_task_id,
                     $event->analysis_started_at,
                 ),
+                'started_at' => $event->analysis_started_at?->toISOString(),
             ], 202);
         }
 

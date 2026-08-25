@@ -50,6 +50,8 @@ return [
         'provider' => env('AI_PROVIDER', 'openai'),
         'model' => env('AI_MODEL', 'gpt-5.4-mini'),
         'api_key' => env('AI_API_KEY'),
+        'request_timeout' => (int) env('AI_REQUEST_TIMEOUT', 60),
+        'context_request_timeout' => (int) env('AI_CONTEXT_REQUEST_TIMEOUT', 75),
         'providers' => [
             'openai' => [
                 'base_url' => 'https://api.openai.com/v1',

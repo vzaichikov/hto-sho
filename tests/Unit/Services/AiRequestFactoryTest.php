@@ -61,6 +61,20 @@ class AiRequestFactoryTest extends TestCase
             && $request['model'] === 'qwen3.5:397b');
     }
 
+    public function test_it_uses_the_configured_default_and_explicit_request_timeouts(): void
+    {
+        config()->set([
+            'services.ai.provider' => 'openai',
+            'services.ai.api_key' => 'openai-secret',
+            'services.ai.request_timeout' => 55,
+        ]);
+
+        $factory = $this->app->make(AiRequestFactory::class);
+
+        $this->assertSame(55, $factory->make()->getOptions()['timeout']);
+        $this->assertSame(75, $factory->make(75)->getOptions()['timeout']);
+    }
+
     public function test_it_rejects_an_unsupported_provider(): void
     {
         config()->set([

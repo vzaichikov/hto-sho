@@ -9,11 +9,12 @@ use RuntimeException;
 
 final class AiRequestFactory
 {
-    public function make(): PendingRequest
+    public function make(?int $timeoutSeconds = null): PendingRequest
     {
         $provider = (string) config('services.ai.provider');
         $baseUrl = config("services.ai.providers.{$provider}.base_url");
         $apiKey = (string) config('services.ai.api_key');
+        $timeoutSeconds ??= (int) config('services.ai.request_timeout', 60);
 
         if (! is_string($baseUrl) || $baseUrl === '') {
             throw new InvalidArgumentException("Unsupported AI provider [{$provider}].");
@@ -28,7 +29,7 @@ final class AiRequestFactory
             ->asJson()
             ->withToken($apiKey)
             ->connectTimeout(10)
-            ->timeout(60);
+            ->timeout($timeoutSeconds);
     }
 
     public function model(): string

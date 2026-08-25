@@ -32,8 +32,9 @@ class EventContextSummaryJobTest extends TestCase
     {
         $job = new SummarizeEventContextJob(1, (string) Str::ulid());
 
-        $this->assertSame(150, $job->timeout);
+        $this->assertSame(170, $job->timeout);
         $this->assertTrue($job->failOnTimeout);
+        $this->assertGreaterThan(2 * config('services.ai.context_request_timeout'), $job->timeout);
         $this->assertLessThan(config('queue.connections.database.retry_after'), $job->timeout);
         $this->assertGreaterThanOrEqual(20, $job->tries);
     }
@@ -409,6 +410,85 @@ class EventContextSummaryJobTest extends TestCase
         )));
     }
 
+    public function test_repair_reuses_the_server_key_assigned_to_a_new_draft_question(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $source = EventSource::factory()->for($event)->create([
+            'text' => '24 серпня, 09:31, Роман: Леся, якщо встигне, торт. Це ще не фінальна обіцянка.',
+        ]);
+        $draft = $this->summaryPayload([$source->id]);
+        $draft['participants'] = [[
+            'name' => 'Леся',
+            'status' => 'confirmed',
+            'preferences' => [],
+            'restrictions' => [],
+            'allergies' => [],
+            'brings' => [],
+            'source_ids' => [$source->id],
+        ]];
+        $draft['restrictions'] = [];
+        $draft['unresolved_questions'] = [[
+            'question_key' => '__new__',
+            'question' => 'Чи підтвердила Леся торт?',
+            'impact' => 'Відповідь визначає, чи купувати торт.',
+            'blocking' => false,
+            'options' => [[
+                'label' => 'Купити про запас',
+                'description' => '',
+                'recommended' => true,
+            ], [
+                'label' => 'Уточнити в Лесі',
+                'description' => '',
+                'recommended' => false,
+            ], [
+                'label' => 'Не купувати',
+                'description' => '',
+                'recommended' => false,
+            ]],
+            'source_ids' => [$source->id],
+        ]];
+        $requestCount = 0;
+        $assignedQuestionKey = null;
+        Http::fake(function (Request $request) use (&$requestCount, &$assignedQuestionKey, $draft, $source) {
+            $requestCount++;
+
+            if ($requestCount === 1) {
+                return Http::response($this->openAiResponse($draft));
+            }
+
+            $userData = json_decode(
+                (string) data_get($request->data(), 'input.1.content.0.text'),
+                true,
+                flags: JSON_THROW_ON_ERROR,
+            );
+            $repaired = $userData['draft_context'];
+            $assignedQuestionKey = $repaired['unresolved_questions'][0]['key'];
+            $repaired['unresolved_questions'][0]['question_key'] = $assignedQuestionKey;
+            unset($repaired['unresolved_questions'][0]['key']);
+            $repaired['shopping_requirements'] = [[
+                'name' => 'торт',
+                'quantity' => null,
+                'unit' => null,
+                'constraints' => ['умовний внесок Лесі ще не підтверджений'],
+                'source_ids' => [$source->id],
+            ]];
+
+            return Http::response($this->openAiResponse($repaired));
+        });
+
+        (new SummarizeEventContextJob($event->id, $taskId))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $event->refresh();
+        $this->assertSame(2, $requestCount);
+        $this->assertIsString($assignedQuestionKey);
+        $this->assertStringStartsWith('q_', $assignedQuestionKey);
+        $this->assertSame($assignedQuestionKey, $event->state['unresolved_questions'][0]['key']);
+        $this->assertSame(EventAnalysisStage::Completed, $event->analysis_stage);
+    }
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -461,10 +541,48 @@ class EventContextSummaryJobTest extends TestCase
             ->handle($this->app->make(ContextAnalysisService::class), $this->app->make(HarnessRecorder::class));
         $this->assertSame(1, $event->contextVersions()->count());
         Http::assertSent(function (Request $request): bool {
-            $prompt = $request['input'][0]['content'][0]['text'];
+            $userJson = $request['input'][1]['content'][0]['text'];
 
-            return mb_strpos($prompt, 'Спочатку: зустріч у суботу.')
-                < mb_strpos($prompt, 'Уточнення: перенесли на неділю.');
+            return $request['input'][0]['role'] === 'system'
+                && $request['input'][1]['role'] === 'user'
+                && mb_strpos($userJson, 'Спочатку: зустріч у суботу.')
+                    < mb_strpos($userJson, 'Уточнення: перенесли на неділю.');
+        });
+    }
+
+    public function test_ollama_summary_also_receives_system_rules_and_separate_user_json(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        $source = EventSource::factory()->for($event)->create([
+            'text' => 'Оля бере овочі.',
+        ]);
+        config()->set('services.ai.provider', 'ollama');
+        Http::fake([
+            'https://ollama.com/v1/chat/completions' => Http::response([
+                'choices' => [[
+                    'message' => [
+                        'content' => json_encode(
+                            $this->summaryPayload([$source->id]),
+                            JSON_UNESCAPED_UNICODE,
+                        ),
+                    ],
+                ]],
+            ]),
+        ]);
+
+        (new SummarizeEventContextJob($event->id, $taskId))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $this->assertSame(EventAnalysisStage::Completed, $event->refresh()->analysis_stage);
+        Http::assertSent(function (Request $request) use ($source): bool {
+            $userJson = (string) data_get($request->data(), 'messages.1.content.0.text');
+
+            return data_get($request->data(), 'messages.0.role') === 'system'
+                && data_get($request->data(), 'messages.1.role') === 'user'
+                && str_contains($userJson, '"source_batches"')
+                && str_contains($userJson, '"source_id": '.$source->id);
         });
     }
 
@@ -539,36 +657,37 @@ class EventContextSummaryJobTest extends TestCase
         Http::assertSentCount(1);
         /** @var Request $request */
         $request = Http::recorded()->first()[0];
-        $prompt = $request['input'][0]['content'][0]['text'];
-        $laterPosition = mb_strpos($prompt, '"source_id": '.$laterInFirstBatch->id);
-        $olderPosition = mb_strpos($prompt, '"source_id": '.$olderInFirstBatch->id);
+        $systemPrompt = $request['input'][0]['content'][0]['text'];
+        $userJson = $request['input'][1]['content'][0]['text'];
+        $laterPosition = mb_strpos($userJson, '"source_id": '.$laterInFirstBatch->id);
+        $olderPosition = mb_strpos($userJson, '"source_id": '.$olderInFirstBatch->id);
 
-        $this->assertStringContainsString('"upload_batch": "'.$firstBatch.'"', $prompt);
-        $this->assertStringContainsString('"visible_time": "12:50"', $prompt);
-        $this->assertStringContainsString('"visible_time": "11:50"', $prompt);
-        $this->assertStringContainsString('"source_id": '.$oldScreenshotUploadedLast->id, $prompt);
-        $this->assertStringContainsString('"message_timeline": null', $prompt);
-        $this->assertStringContainsString('position означає лише порядок передавання файлів', $prompt);
-        $this->assertStringContainsString('Пізніше завантажений скриншот з явно старішою датою лишається старішим', $prompt);
-        $this->assertStringContainsString('це не warning і не unresolved question', $prompt);
-        $this->assertStringContainsString('чужа репліка цього не робить', $prompt);
-        $this->assertStringContainsString('«Більше не беру» або «треба купити» теж не є brings', $prompt);
-        $this->assertStringContainsString('потім «Тарас ніби бере вугілля; це ще не фінально»', $prompt);
-        $this->assertStringContainsString('цей товар не може одночасно бути у participants.brings', $prompt);
-        $this->assertStringContainsString('Не приписуй алергію Тарасу без явного тексту', $prompt);
-        $this->assertStringContainsString('не робить Олю алергіком', $prompt);
-        $this->assertStringContainsString('закриває питання про точний алерген', $prompt);
-        $this->assertStringContainsString('Фінальний summary також описує лише актуальний стан', $prompt);
-        $this->assertStringContainsString('додає ці brings лише Олі, ніколи Саші', $prompt);
-        $this->assertStringContainsString('повинна мати цю річ у participants.brings саме цієї людини', $prompt);
-        $this->assertStringContainsString('shopping_requirements є структурованим доказовим переліком', $prompt);
-        $this->assertStringContainsString('Якщо джерело назвало товар, але не назвало його кількість, quantity=null', $prompt);
-        $this->assertStringContainsString('перенеси до shopping_requirements кожну його позицію без винятків', $prompt);
-        $this->assertStringContainsString('не додавай механічно до constraints кожної спільної покупки', $prompt);
-        $this->assertStringContainsString('Пізніша агрегована кількість для всієї групи не стирає person-level атрибуцію', $prompt);
-        $this->assertStringContainsString('якщо товар лишився у shopping_requirements або summary, але зникло відоме авторство бажання', $prompt);
-        $this->assertStringContainsString('додай unresolved question про імена решти 3', $prompt);
-        $this->assertStringContainsString('Скорочене формулювання не скасовує відомих деталей', $prompt);
+        $this->assertStringContainsString('"upload_batch": "'.$firstBatch.'"', $userJson);
+        $this->assertStringContainsString('"visible_time": "12:50"', $userJson);
+        $this->assertStringContainsString('"visible_time": "11:50"', $userJson);
+        $this->assertStringContainsString('"source_id": '.$oldScreenshotUploadedLast->id, $userJson);
+        $this->assertStringContainsString('"message_timeline": null', $userJson);
+        $this->assertStringContainsString('position означає лише порядок передавання файлів', $systemPrompt);
+        $this->assertStringContainsString('Пізніше завантажений скриншот з явно старішою датою лишається старішим', $systemPrompt);
+        $this->assertStringContainsString('це не warning і не unresolved question', $systemPrompt);
+        $this->assertStringContainsString('чужа репліка цього не робить', $systemPrompt);
+        $this->assertStringContainsString('«Більше не беру» або «треба купити» теж не є brings', $systemPrompt);
+        $this->assertStringContainsString('потім «Тарас ніби бере вугілля; це ще не фінально»', $systemPrompt);
+        $this->assertStringContainsString('цей товар не може одночасно бути у participants.brings', $systemPrompt);
+        $this->assertStringContainsString('Не приписуй алергію Тарасу без явного тексту', $systemPrompt);
+        $this->assertStringContainsString('не робить Олю алергіком', $systemPrompt);
+        $this->assertStringContainsString('закриває питання про точний алерген', $systemPrompt);
+        $this->assertStringContainsString('Фінальний summary також описує лише актуальний стан', $systemPrompt);
+        $this->assertStringContainsString('додає ці brings лише Олі, ніколи Саші', $systemPrompt);
+        $this->assertStringContainsString('повинна мати цю річ у participants.brings саме цієї людини', $systemPrompt);
+        $this->assertStringContainsString('shopping_requirements є структурованим доказовим переліком', $systemPrompt);
+        $this->assertStringContainsString('Якщо джерело назвало товар, але не назвало його кількість, quantity=null', $systemPrompt);
+        $this->assertStringContainsString('перенеси до shopping_requirements кожну його позицію без винятків', $systemPrompt);
+        $this->assertStringContainsString('не додавай механічно до constraints кожної спільної покупки', $systemPrompt);
+        $this->assertStringContainsString('Пізніша агрегована кількість для всієї групи не стирає person-level атрибуцію', $systemPrompt);
+        $this->assertStringContainsString('якщо товар лишився у shopping_requirements або summary, але зникло відоме авторство бажання', $systemPrompt);
+        $this->assertStringContainsString('додай unresolved question про імена решти 3', $systemPrompt);
+        $this->assertStringContainsString('Скорочене формулювання не скасовує відомих деталей', $systemPrompt);
         $this->assertIsInt($laterPosition);
         $this->assertIsInt($olderPosition);
         $this->assertLessThan($olderPosition, $laterPosition);
@@ -600,13 +719,14 @@ class EventContextSummaryJobTest extends TestCase
         $event->refresh();
         $this->assertSame([$correction->id], $event->state['agreements'][0]['source_ids']);
         Http::assertSent(function (Request $request): bool {
-            $prompt = $request['input'][0]['content'][0]['text'];
+            $systemPrompt = $request['input'][0]['content'][0]['text'];
+            $userJson = $request['input'][1]['content'][0]['text'];
 
-            return str_contains($prompt, '"origin": "plan_correction"')
-                && str_contains($prompt, 'Води вдвічі менше.')
-                && str_contains($prompt, 'Збережи її актуальний зміст у agreements')
-                && ! str_contains($prompt, 'MUST_NOT_REACH_SUMMARY')
-                && ! str_contains($prompt, '"base_plan"');
+            return str_contains($userJson, '"origin": "plan_correction"')
+                && str_contains($userJson, 'Води вдвічі менше.')
+                && str_contains($systemPrompt, 'Збережи її актуальний зміст у agreements')
+                && ! str_contains($userJson, 'MUST_NOT_REACH_SUMMARY')
+                && ! str_contains($userJson, '"base_plan"');
         });
     }
 
@@ -764,18 +884,19 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertStringNotContainsString('алкоголь', Str::lower($event->state['unresolved_questions'][0]['question']));
         $this->assertStringStartsWith('q_', $event->state['unresolved_questions'][0]['key']);
         Http::assertSent(function (Request $request): bool {
-            $prompt = $request['input'][0]['content'][0]['text'];
+            $systemPrompt = $request['input'][0]['content'][0]['text'];
+            $userJson = $request['input'][1]['content'][0]['text'];
 
-            return str_contains($prompt, 'КОНТЕКСТ ОРГАНІЗАТОРА')
-                && str_contains($prompt, 'Хочемо пікнік на озері й щось нове від Гуся.')
-                && str_contains($prompt, '"alcohol_planned": true')
-                && str_contains($prompt, 'не питай, чи потрібен алкоголь')
-                && str_contains($prompt, 'Не проси організатора самому скласти точний список покупок')
-                && str_contains($prompt, 'назвати базові продукти для формату')
-                && str_contains($prompt, 'це робить застосунок')
-                && str_contains($prompt, 'ПАЧКИ ДЖЕРЕЛ:'."\n".'[]')
-                && str_contains($prompt, 'source_ids має бути порожнім масивом')
-                && str_contains($prompt, 'Не вигадуй учасників, кількості, алергії');
+            return str_contains($userJson, '"organizer_context"')
+                && str_contains($userJson, 'Хочемо пікнік на озері й щось нове від Гуся.')
+                && str_contains($userJson, '"alcohol_planned": true')
+                && str_contains($userJson, '"source_batches": []')
+                && str_contains($systemPrompt, 'не питай, чи потрібен алкоголь')
+                && str_contains($systemPrompt, 'Не проси організатора самому скласти точний список покупок')
+                && str_contains($systemPrompt, 'назвати базові продукти для формату')
+                && str_contains($systemPrompt, 'це робить застосунок')
+                && str_contains($systemPrompt, 'source_ids має бути порожнім масивом')
+                && str_contains($systemPrompt, 'Не вигадуй учасників, кількості, алергії');
         });
     }
 
@@ -877,12 +998,13 @@ class EventContextSummaryJobTest extends TestCase
                 && $entry->response_payload !== null,
         ));
         Http::assertSent(function (Request $request): bool {
-            $prompt = $request['input'][0]['content'][0]['text'];
+            $systemPrompt = $request['input'][0]['content'][0]['text'];
+            $userJson = $request['input'][1]['content'][0]['text'];
 
-            return str_contains($prompt, 'ЖУРНАЛ ПИТАНЬ:')
-                && str_contains($prompt, '"key": "q_names_current"')
-                && str_contains($prompt, 'Залишити без імен')
-                && str_contains($prompt, 'ніколи не повертай питання з answered');
+            return str_contains($userJson, '"question_ledger"')
+                && str_contains($userJson, '"key": "q_names_current"')
+                && str_contains($userJson, 'Залишити без імен')
+                && str_contains($systemPrompt, 'ніколи не повертай питання з answered');
         });
     }
 

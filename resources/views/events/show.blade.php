@@ -845,6 +845,7 @@
         data-analysis-overlay
         data-analysis-id="{{ $event->analysis_task_id }}"
         data-analysis-stage="{{ $event->analysis_stage?->value }}"
+        data-analysis-started-at="{{ $event->analysis_started_at?->toISOString() }}"
         data-analysis-progress-value="{{ $analysisProgress }}"
         data-analysis-message-value="{{ $analysisMessage }}"
         data-analysis-error-value="{{ $event->analysis_error }}"
@@ -856,15 +857,21 @@
                     <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Новий матеріал уже під крилом</p>
                     <h3 class="mt-1 font-display text-3xl leading-[1.1] sm:text-4xl" id="analysis-dialog-title">Гусь розгрібає контекст</h3>
                 </div>
-                <form method="dialog">
-                    <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-translate-y-0.5 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-analysis-minimize aria-label="Згорнути вікно контексту">−</button>
-                </form>
+                <div class="flex shrink-0 items-center gap-2 sm:gap-3">
+                    <p class="rounded-full bg-paper/75 px-3 py-2 text-xs font-extrabold tabular-nums text-green-dark sm:text-sm">
+                        <span class="sr-only sm:not-sr-only">Минуло </span><span data-analysis-elapsed aria-label="Минуло часу">00:00</span>
+                    </p>
+                    <form method="dialog">
+                        <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-translate-y-0.5 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-analysis-minimize aria-label="Згорнути вікно контексту">−</button>
+                    </form>
+                </div>
             </header>
 
             <div class="grid min-h-0 flex-1 grid-cols-[minmax(7.5rem,0.72fr)_minmax(0,1.28fr)] gap-3 p-3 sm:grid-cols-[minmax(15rem,0.85fr)_minmax(0,1.15fr)] sm:gap-6 sm:p-6">
-                <section class="relative flex min-h-0 items-center justify-center overflow-hidden rounded-[24px] bg-yellow/30 px-2 py-4 sm:px-5">
+                <section class="relative flex min-h-0 flex-col items-center justify-center overflow-hidden rounded-[24px] bg-yellow/30 px-2 py-4 sm:px-5">
                     <span class="absolute left-3 top-3 -rotate-2 rounded-sm bg-paper px-3 py-1 font-display text-base leading-[1.15] shadow-[2px_2px_0_#F7C84B] sm:left-5 sm:top-5 sm:text-xl">Не заважайте, він красивий</span>
                     <img class="goose-working h-[min(23rem,54dvh)] w-full max-w-[21rem] object-contain sm:h-[min(34rem,68dvh)]" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо працює з новим контекстом">
+                    <p class="relative z-10 -mt-2 max-w-sm rounded-2xl bg-paper/85 px-3 py-2 text-center text-xs font-bold leading-5 text-green-dark shadow-[2px_2px_0_#F7C84B] sm:text-sm">Великий чат може зайняти кілька хвилин. Вікно можна згорнути — Гусь не загубиться.</p>
                 </section>
 
                 <section class="flex min-h-0 flex-col rounded-[24px] bg-ink p-4 text-paper sm:p-6">
