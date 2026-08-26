@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\CartHarnessMode;
 use App\CartRunMode;
 use App\CartRunPhase;
 use App\CartRunStatus;
@@ -17,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'silpo_cart_reset_id',
     'harness_run_id',
     'mode',
+    'harness_mode',
     'status',
     'phase',
     'plan_state_version',
@@ -41,6 +43,7 @@ class EventCartRun extends Model
 
     protected $attributes = [
         'mode' => 'assisted',
+        'harness_mode' => 'orchestrated',
         'status' => 'running',
         'phase' => 'preparing',
         'cursor' => 0,
@@ -51,6 +54,7 @@ class EventCartRun extends Model
     {
         return [
             'mode' => CartRunMode::class,
+            'harness_mode' => CartHarnessMode::class,
             'status' => CartRunStatus::class,
             'phase' => CartRunPhase::class,
             'plan_state_version' => 'integer',

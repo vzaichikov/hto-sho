@@ -2,11 +2,13 @@
 
 namespace App\Actions;
 
+use App\CartHarnessMode;
 use App\CartRunPhase;
 use App\CartRunStatus;
 use App\CartSyncStatus;
 use App\Contracts\SilpoCartGateway;
 use App\Data\SilpoCartContextData;
+use App\Jobs\CommitAgenticEventCartRunJob;
 use App\Jobs\CommitEventCartRunJob;
 use App\Models\EventCartRun;
 use App\Services\GooseCartStatusService;
@@ -116,7 +118,11 @@ final class ConfirmEventCartRunAction
                 'cursor' => $lockedRun->cursor + 1,
             ]);
             $this->statuses->append($lockedRun, 'confirmation');
-            CommitEventCartRunJob::dispatch($lockedRun->id, $lockedRun->cursor)->afterCommit();
+            if ($lockedRun->harness_mode === CartHarnessMode::Agentic) {
+                CommitAgenticEventCartRunJob::dispatch($lockedRun->id, $lockedRun->cursor)->afterCommit();
+            } else {
+                CommitEventCartRunJob::dispatch($lockedRun->id, $lockedRun->cursor)->afterCommit();
+            }
 
             return [$lockedRun, null];
         });

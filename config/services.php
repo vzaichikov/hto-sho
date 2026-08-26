@@ -46,6 +46,14 @@ return [
         'timeout' => (int) env('SILPO_MCP_TIMEOUT', 20),
     ],
 
+    'silpo_cart_harness' => [
+        'mode' => env('SILPO_CART_HARNESS_MODE', 'orchestrated'),
+        'model' => env('SILPO_CART_AGENT_MODEL', 'gpt-5.6-luna'),
+        'reasoning_effort' => env('SILPO_CART_AGENT_REASONING_EFFORT', 'high'),
+        'request_timeout' => (int) env('SILPO_CART_AGENT_REQUEST_TIMEOUT', 150),
+        'max_tool_calls_per_need' => (int) env('SILPO_CART_AGENT_MAX_TOOL_CALLS_PER_NEED', 12),
+    ],
+
     'ai' => [
         'provider' => env('AI_PROVIDER', 'openai'),
         'model' => env('AI_MODEL', 'gpt-5.4-mini'),

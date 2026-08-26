@@ -565,7 +565,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ),
             'current_need' => $need,
             'all_needs' => collect(data_get($state, 'needs', []))->map(fn (array $item): array => Arr::only($item, [
-                'key', 'name', 'quantity', 'unit', 'status', 'selected_item',
+                'key', 'status',
             ]))->all(),
             'candidates' => collect(data_get($state, 'last_candidates', []))
                 ->map(fn (array $candidate): array => Arr::only($candidate, [

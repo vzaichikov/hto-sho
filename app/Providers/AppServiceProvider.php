@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Contracts\AgenticSilpoCartRunner;
 use App\Contracts\CartProductAgent;
 use App\Contracts\SilpoCartGateway;
 use App\Contracts\SilpoProfileGateway;
@@ -12,6 +13,7 @@ use App\Services\GooseCartStatusService;
 use App\Services\HarnessRecorder;
 use App\Services\McpSilpoCartGateway;
 use App\Services\McpSilpoProfileGateway;
+use App\Services\OpenAiSilpoCartRunner;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -24,6 +26,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(SilpoProfileGateway::class, McpSilpoProfileGateway::class);
         $this->app->bind(SilpoCartGateway::class, McpSilpoCartGateway::class);
         $this->app->bind(CartProductAgent::class, CartProductDecisionService::class);
+        $this->app->bind(AgenticSilpoCartRunner::class, OpenAiSilpoCartRunner::class);
         $this->app->bind(SilpoRouteIntentInterpreter::class, AiSilpoRouteIntentInterpreter::class);
         $this->app->bind(
             GooseCartStatusService::class,

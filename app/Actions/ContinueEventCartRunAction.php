@@ -2,9 +2,11 @@
 
 namespace App\Actions;
 
+use App\CartHarnessMode;
 use App\CartRunPhase;
 use App\CartRunStatus;
 use App\HarnessEntryKind;
+use App\Jobs\AdvanceAgenticEventCartRunJob;
 use App\Jobs\AdvanceEventCartRunJob;
 use App\Models\EventCartRun;
 use App\Services\CartQuantityCalculator;
@@ -82,7 +84,11 @@ final class ContinueEventCartRunAction
                 'cursor' => $lockedRun->cursor + 1,
             ]);
             $this->statuses->append($lockedRun, 'planning');
-            AdvanceEventCartRunJob::dispatch($lockedRun->id, $lockedRun->cursor)->afterCommit();
+            if ($lockedRun->harness_mode === CartHarnessMode::Agentic) {
+                AdvanceAgenticEventCartRunJob::dispatch($lockedRun->id, $lockedRun->cursor)->afterCommit();
+            } else {
+                AdvanceEventCartRunJob::dispatch($lockedRun->id, $lockedRun->cursor)->afterCommit();
+            }
 
             return $lockedRun;
         });

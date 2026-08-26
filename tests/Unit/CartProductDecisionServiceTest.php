@@ -6,6 +6,7 @@ use App\Services\CartProductDecisionService;
 use Illuminate\Support\Facades\Http;
 use ReflectionClass;
 use Tests\TestCase;
+use UnexpectedValueException;
 
 class CartProductDecisionServiceTest extends TestCase
 {
@@ -27,13 +28,87 @@ class CartProductDecisionServiceTest extends TestCase
         $service = $reflection->newInstanceWithoutConstructor();
         $schema = $reflection->getMethod('decisionSchema')->invoke($service);
 
+        $this->assertContains('need_key', $schema['required']);
         $this->assertContains('candidate_matches_required_product', $schema['required']);
         $this->assertContains('is_replacement', $schema['required']);
+        $this->assertSame(['type' => 'string'], data_get($schema, 'properties.need_key'));
         $this->assertSame(
             ['type' => 'boolean'],
             data_get($schema, 'properties.candidate_matches_required_product'),
         );
         $this->assertSame(['type' => 'boolean'], data_get($schema, 'properties.is_replacement'));
+    }
+
+    public function test_product_first_preparation_is_shared_by_both_harness_modes(): void
+    {
+        $reflection = new ReflectionClass(CartProductDecisionService::class);
+        $service = $reflection->newInstanceWithoutConstructor();
+        $promptMethod = $reflection->getMethod('preparationPrompt');
+        $repairPromptMethod = $reflection->getMethod('preparationRepairPrompt');
+
+        $productFirstPrompt = $promptMethod->invoke($service, [], ['items' => []]);
+        $productFirstRepairPrompt = $repairPromptMethod->invoke($service, [], [], [], []);
+
+        $this->assertStringContainsString('конкретну куповану харчову ідентичність', $productFirstPrompt);
+        $this->assertStringContainsString('ДО пошуку використай кулінарні знання', $productFirstPrompt);
+        $this->assertStringContainsString('не за фіксованою таблицею відповідностей', $productFirstPrompt);
+        $this->assertStringNotContainsString('name зберігає повну людську назву потреби', $productFirstPrompt);
+        $this->assertStringContainsString('не PHP-таблиці відповідностей', $productFirstRepairPrompt);
+    }
+
+    public function test_v1_uses_the_llm_food_identity_as_the_first_catalog_query(): void
+    {
+        config([
+            'services.ai.provider' => 'openai',
+            'services.ai.api_key' => 'test-key',
+            'services.ai.model' => 'test-model',
+        ]);
+        Http::fake([
+            '*' => Http::response([
+                'output' => [[
+                    'content' => [[
+                        'type' => 'output_text',
+                        'text' => json_encode([
+                            'needs' => [[
+                                'key' => 'model-key',
+                                'source_index' => 0,
+                                'name' => 'Ошийок свинячий охолоджений',
+                                'category' => 'food',
+                                'quantity' => 2.25,
+                                'unit' => 'кг',
+                                'note' => 'Для приготування свинячого шашлику.',
+                                'search_queries' => [
+                                    'свинячий ошийок',
+                                    'ошийок свинина',
+                                ],
+                            ]],
+                        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                    ]],
+                ]],
+            ]),
+        ]);
+
+        $preparation = app(CartProductDecisionService::class)->prepare([], [
+            'items' => [[
+                'name' => 'Свинина',
+                'category' => 'food',
+                'quantity' => 2.25,
+                'unit' => 'кг',
+                'note' => 'Для шашлику.',
+            ]],
+        ]);
+
+        $this->assertSame('Ошийок свинячий охолоджений', data_get($preparation->needs, '0.name'));
+        $this->assertSame('Ошийок свинячий охолоджений', data_get($preparation->needs, '0.search_query'));
+        $this->assertSame('Для приготування свинячого шашлику.', data_get($preparation->needs, '0.note'));
+        $this->assertTrue(data_get($preparation->needs, '0.retailer_identity_prepared'));
+        Http::assertSent(fn ($request): bool => str_contains(
+            (string) data_get($request->data(), 'instructions'),
+            'ДО пошуку використай кулінарні знання',
+        ) && str_contains(
+            (string) data_get($request->data(), 'input.0.content.0.text'),
+            'Для шашлику.',
+        ));
     }
 
     public function test_zero_result_search_intent_splits_product_name_and_purpose_in_one_llm_request(): void
@@ -147,6 +222,10 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertCount(8, $preparation->needs);
         $this->assertSame(range(0, 7), array_column($preparation->needs, 'source_index'));
         Http::assertSentCount(2);
+        $this->assertStringContainsString(
+            'конкретну куповану харчову ідентичність',
+            (string) data_get(Http::recorded()[0][0]->data(), 'instructions'),
+        );
         Http::assertSent(fn ($request): bool => str_contains(
             (string) data_get($request->data(), 'input.0.content.0.text'),
             '"source_index": 6',
@@ -190,6 +269,7 @@ class CartProductDecisionServiceTest extends TestCase
         $reflection = new ReflectionClass(CartProductDecisionService::class);
         $service = $reflection->newInstanceWithoutConstructor();
         $payload = [
+            'need_key' => 'n_01',
             'audit' => [
                 'covered_need_keys' => ['n_01', 'invented'],
                 'remaining_need_keys' => ['n_01'],
@@ -199,6 +279,7 @@ class CartProductDecisionServiceTest extends TestCase
         ];
 
         $normalized = $reflection->getMethod('normalizeDecisionPayload')->invoke($service, $payload, [
+            'current_need' => ['key' => 'n_01'],
             'all_needs' => [['key' => 'n_01'], ['key' => 'n_02']],
         ]);
 
@@ -206,6 +287,22 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertSame(['n_02'], data_get($normalized, 'audit.remaining_need_keys'));
         $this->assertNull(data_get($normalized, 'audit.revisit_need_key'));
         $this->assertNull(data_get($normalized, 'audit.revisit_query'));
+    }
+
+    public function test_decision_payload_rejects_a_different_need_key(): void
+    {
+        $reflection = new ReflectionClass(CartProductDecisionService::class);
+        $service = $reflection->newInstanceWithoutConstructor();
+
+        $this->expectException(UnexpectedValueException::class);
+        $this->expectExceptionMessage('Cart decision targeted a different need.');
+
+        $reflection->getMethod('normalizeDecisionPayload')->invoke($service, [
+            'need_key' => 'n_02',
+        ], [
+            'current_need' => ['key' => 'n_01'],
+            'all_needs' => [['key' => 'n_01'], ['key' => 'n_02']],
+        ]);
     }
 
     public function test_final_audit_adds_omitted_need_keys_to_the_remaining_partition(): void
@@ -499,6 +596,7 @@ class CartProductDecisionServiceTest extends TestCase
         $decision = [
             'action' => 'skip',
             'selected_product_id' => null,
+            'need_key' => 'n_01',
             'query' => null,
             'quantity' => null,
             'reason' => 'No suitable candidate.',

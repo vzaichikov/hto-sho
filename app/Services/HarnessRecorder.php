@@ -48,6 +48,17 @@ class HarnessRecorder
         $run->update(['event_id' => $event->id]);
     }
 
+    /** @param array<string, mixed> $metadata */
+    public function mergeMetadata(HarnessRun $run, array $metadata): void
+    {
+        $run->update([
+            'metadata' => [
+                ...($run->metadata ?? []),
+                ...$this->sanitizer->sanitize($metadata),
+            ],
+        ]);
+    }
+
     /**
      * @param  array<string, mixed>|null  $requestPayload
      * @param  array<string, mixed>|null  $responsePayload

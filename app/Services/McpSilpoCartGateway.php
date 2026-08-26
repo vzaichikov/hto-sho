@@ -220,7 +220,7 @@ final class McpSilpoCartGateway implements SilpoCartGateway
         bool $novaPoshta,
         ?HarnessRun $harnessRun = null,
     ): array {
-        $arguments = ['limit' => 1000];
+        $arguments = ['limit' => 500];
 
         if ($pickup) {
             $arguments['hasPickup'] = true;

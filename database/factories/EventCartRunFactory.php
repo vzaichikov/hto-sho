@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\CartHarnessMode;
 use App\CartRunMode;
 use App\CartRunPhase;
 use App\CartRunStatus;
@@ -26,6 +27,7 @@ class EventCartRunFactory extends Factory
         return [
             'event_id' => Event::factory()->ready(),
             'mode' => CartRunMode::Assisted,
+            'harness_mode' => CartHarnessMode::Orchestrated,
             'status' => CartRunStatus::Running,
             'phase' => CartRunPhase::Preparing,
             'plan_state_version' => 1,

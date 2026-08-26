@@ -50,6 +50,7 @@ class McpSilpoCartGatewayTest extends TestCase
                         'silpo_find_nova_poshta_offices',
                         'silpo_get_available_delivery_types',
                         'silpo_get_time_slots',
+                        'silpo_list_branches',
                     ])->map(fn (string $name): array => [
                         'name' => $name,
                         'inputSchema' => [
@@ -110,6 +111,10 @@ class McpSilpoCartGatewayTest extends TestCase
                 ], [
                     'deliveryType' => 'B2B',
                     'branchId' => 'branch-2',
+                ]]],
+                'silpo_list_branches' => ['branches' => [[
+                    'branchId' => 'branch-1',
+                    'name' => 'Сільпо на Хрещатику',
                 ]]],
                 default => ['updated' => true],
             };
@@ -543,6 +548,31 @@ class McpSilpoCartGatewayTest extends TestCase
         )->sole()[0];
         $this->assertSame('settlement-1', data_get($officeCall->data(), 'params.arguments.settlementId'));
         $this->assertSame('поштомат 28122', data_get($officeCall->data(), 'params.arguments.title'));
+    }
+
+    public function test_fulfilment_branch_search_respects_the_silpo_limit_and_compatibility_filters(): void
+    {
+        $gateway = $this->app->make(McpSilpoCartGateway::class);
+
+        $pickupBranches = $gateway->getFulfilmentBranches('secret-token', true, false);
+        $novaPoshtaBranches = $gateway->getFulfilmentBranches('secret-token', false, true);
+
+        $this->assertSame('branch-1', data_get($pickupBranches, '0.branchId'));
+        $this->assertSame('branch-1', data_get($novaPoshtaBranches, '0.branchId'));
+
+        $branchCalls = Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'params.name') === 'silpo_list_branches',
+        )->values();
+
+        $this->assertCount(2, $branchCalls);
+        $this->assertSame([
+            'limit' => 500,
+            'hasPickup' => true,
+        ], data_get($branchCalls[0][0]->data(), 'params.arguments'));
+        $this->assertSame([
+            'limit' => 500,
+            'hasNP' => true,
+        ], data_get($branchCalls[1][0]->data(), 'params.arguments'));
     }
 
     public function test_expired_slot_refresh_copies_the_route_verifies_read_back_and_replay_is_idempotent(): void

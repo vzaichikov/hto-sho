@@ -22,12 +22,8 @@ final class CartCandidateSuitability
         array $eventContext,
         array $shoppingPlan,
     ): bool {
-        $needText = $this->text([
-            data_get($need, 'name'),
-            data_get($need, 'product_name'),
-            data_get($need, 'purpose'),
-            data_get($need, 'note'),
-        ]);
+        $needIdentityText = $this->needIdentityText($need);
+        $needText = $this->needIntentText($need);
         $productText = $this->text([
             data_get($candidate, 'name'),
             data_get($candidate, 'slug'),
@@ -47,6 +43,10 @@ final class CartCandidateSuitability
             ? $this->structuredText(data_get($candidate, 'details'))
             : '';
         $candidateEvidenceText = $this->text([$candidateText, $detailText]);
+
+        if (! $this->preservesRequiredPreparationState($need, $candidateText)) {
+            return false;
+        }
 
         if ($this->containsAny($policyText, ['без арахіс', 'нічого з арахіс'])) {
             $statesPeanutAbsence = $this->containsAny($candidateEvidenceText, [
@@ -73,7 +73,7 @@ final class CartCandidateSuitability
             return false;
         }
 
-        if ($this->isProduceNeed($needText)
+        if ($this->isProduceNeed($needIdentityText)
             && $this->containsAny($candidateText, [
                 'свин', 'ялов', 'телят', 'курят', 'індич', 'ковбас', 'сосиск', 'кабанос',
                 'мʼяс', "м'яс", 'риб', 'кревет', 'бекон', 'шинка', 'балик', 'паштет',
@@ -108,7 +108,7 @@ final class CartCandidateSuitability
             return false;
         }
 
-        if ($this->isProduceNeed($needText)
+        if ($this->isProduceNeed($needIdentityText)
             && (float) data_get($need, 'quantity', 0) >= 0.5
             && ! $this->sharesNeedIdentityTerm($need, $candidateText)
             && $this->containsAny($candidateText, [
@@ -152,7 +152,7 @@ final class CartCandidateSuitability
             }
         }
 
-        if (($this->isProduceNeed($needText)
+        if (($this->isProduceNeed($needIdentityText)
             || $this->containsAny($needText, [
                 'свіж', 'для грил', 'на мангал', 'для мангал', 'салатні лист', 'листя салат', 'зелень',
             ]))
@@ -170,7 +170,7 @@ final class CartCandidateSuitability
             return false;
         }
 
-        if ($this->isProduceNeed($needText)
+        if ($this->isProduceNeed($needIdentityText)
             && $this->containsAny($productText, ['салат'])
             && ! $this->isLeafySaladCandidate($productText)) {
             return false;
@@ -258,11 +258,7 @@ final class CartCandidateSuitability
         bool $modelReplacement = false,
     ): array {
         $selectable = $this->allows($need, $candidate, $eventContext, $shoppingPlan);
-        $candidateText = $this->text([
-            data_get($candidate, 'name'),
-            data_get($candidate, 'slug'),
-        ]);
-        $match = ! $modelReplacement && $this->sharesNeedIdentityTerm($need, $candidateText)
+        $match = ! $modelReplacement
             ? CartProductEvidence::MATCH_EXACT
             : CartProductEvidence::MATCH_SAME_ROLE;
         $safety = CartProductEvidence::SAFETY_NOT_REQUIRED;
@@ -304,10 +300,13 @@ final class CartCandidateSuitability
     /** @param array<string, mixed> $need @param array<string, mixed> $candidate */
     public function isExactIdentityCandidate(array $need, array $candidate): bool
     {
-        return $this->sharesNeedIdentityTerm($need, $this->text([
+        $candidateText = $this->text([
             data_get($candidate, 'name'),
             data_get($candidate, 'slug'),
-        ]));
+        ]);
+
+        return $this->preservesRequiredPreparationState($need, $candidateText)
+            && $this->sharesNeedIdentityTerm($need, $candidateText);
     }
 
     /** @param array<string, mixed> $need @param array<int, array<string, mixed>> $candidates */
@@ -321,12 +320,7 @@ final class CartCandidateSuitability
     /** @param array<string, mixed> $need @param array<string, mixed> $candidate */
     public function allowsProductReuseForNeed(array $need, array $candidate): bool
     {
-        $needText = $this->text([
-            data_get($need, 'name'),
-            data_get($need, 'product_name'),
-            data_get($need, 'purpose'),
-            data_get($need, 'note'),
-        ]);
+        $needIdentityText = $this->needIdentityText($need);
         $candidateText = $this->text([
             data_get($candidate, 'name'),
             data_get($candidate, 'slug'),
@@ -338,10 +332,10 @@ final class CartCandidateSuitability
             data_get($candidate, 'catalog_scope.label'),
         ]));
         $exactNeedIdentity = $this->sharesNeedIdentityTerm($need, $candidateText)
-            || array_intersect($this->scopeRoots($needText), $scopeIdentityRoots) !== [];
+            || array_intersect($this->scopeRoots($needIdentityText), $scopeIdentityRoots) !== [];
         $hasReachedRoleFallback = count(data_get($need, 'browse_attempts', [])) >= 1;
 
-        return $this->isProduceNeed($needText)
+        return $this->isProduceNeed($needIdentityText)
             && $this->isProduceNeed($candidateText)
             && data_get($candidate, 'catalog_scope.type') === 'category'
             && data_get($candidate, 'catalog_scope.matched') === true
@@ -409,11 +403,8 @@ final class CartCandidateSuitability
             data_get($need, 'name'),
             data_get($need, 'search_query'),
             ...data_get($need, 'search_queries', []),
+            ...collect(data_get($need, 'browse_attempts', []))->pluck('slug')->all(),
         ], 3);
-        $contextRootWeights = $this->scopeRootWeights([
-            data_get($need, 'note'),
-            data_get($need, 'category'),
-        ], 1);
         $attemptedScopes = collect(data_get($need, 'browse_attempts', []))
             ->map(fn (mixed $attempt): string => is_array($attempt)
                 ? data_get($attempt, 'type').':'.data_get($attempt, 'slug')
@@ -460,14 +451,13 @@ final class CartCandidateSuitability
             ->reject(fn (array $scope): bool => $attemptedScopes->contains(
                 data_get($scope, 'type').':'.data_get($scope, 'slug'),
             ))
-            ->map(function (array $scope) use ($contextRootWeights, $identityRootWeights, $need, $scopeIndex): array {
+            ->map(function (array $scope) use ($identityRootWeights, $need, $scopeIndex): array {
                 $scopeRoots = $this->scopeRoots($this->text([
                     data_get($scope, 'slug'),
                     data_get($scope, 'label'),
                 ]));
                 $score = collect($scopeRoots)->sum(
-                    fn (string $root): int => (int) data_get($identityRootWeights, $root, 0)
-                        + (int) data_get($contextRootWeights, $root, 0),
+                    fn (string $root): int => (int) data_get($identityRootWeights, $root, 0),
                 );
 
                 return [
@@ -523,14 +513,10 @@ final class CartCandidateSuitability
      */
     private function catalogScopeAllowsNeed(array $need, array $scope, array $scopeIndex = []): bool
     {
-        $needText = $this->text([
-            data_get($need, 'name'),
-            data_get($need, 'product_name'),
-            data_get($need, 'purpose'),
-            data_get($need, 'note'),
-        ]);
+        $needIdentityText = $this->needIdentityText($need);
+        $needText = $this->needIntentText($need);
         $scopeText = $this->catalogScopePathText($scope, $scopeIndex);
-        $requiresRawForm = $this->isProduceNeed($needText) || $this->containsAny($needText, [
+        $requiresRawForm = $this->isProduceNeed($needIdentityText) || $this->containsAny($needText, [
             'свіж', 'сирий', 'сира', 'грил', 'мангал', 'шашлик', 'стейк',
         ]);
 
@@ -543,7 +529,7 @@ final class CartCandidateSuitability
         }
 
         if (data_get($scope, 'type') === 'category'
-            && $this->isProduceNeed($needText)
+            && $this->isProduceNeed($needIdentityText)
             && ! Str::contains($scopeText, ['frukty-ovochi'])) {
             return false;
         }
@@ -561,14 +547,9 @@ final class CartCandidateSuitability
      */
     private function fallbackCatalogScopeScore(array $need, array $scope, array $scopeIndex): int
     {
-        $needText = $this->text([
-            data_get($need, 'name'),
-            data_get($need, 'product_name'),
-            data_get($need, 'purpose'),
-            data_get($need, 'note'),
-        ]);
+        $needIdentityText = $this->needIdentityText($need);
 
-        if (data_get($scope, 'type') !== 'category' || ! $this->isProduceNeed($needText)) {
+        if (data_get($scope, 'type') !== 'category' || ! $this->isProduceNeed($needIdentityText)) {
             return 0;
         }
 
@@ -678,8 +659,11 @@ final class CartCandidateSuitability
                 return (string) array_key_first($tokens);
             });
 
-        return $lexicalQueries
-            ->concat($declaredQueries)
+        $orderedQueries = data_get($need, 'retailer_identity_prepared') === true
+            ? $declaredQueries->concat($lexicalQueries)
+            : $lexicalQueries->concat($declaredQueries);
+
+        return $orderedQueries
             ->unique(fn (string $query): string => Str::lower($query))
             ->values()
             ->all();
@@ -688,17 +672,11 @@ final class CartCandidateSuitability
     /** @param array<string, mixed> $need */
     private function allowsBroadProduceRoleCandidate(array $need): bool
     {
-        $needText = $this->text([
-            data_get($need, 'name'),
-            data_get($need, 'product_name'),
-            data_get($need, 'purpose'),
-            data_get($need, 'note'),
-        ]);
+        $needText = $this->needIntentText($need);
         $latestAttempt = collect(data_get($need, 'attempts', []))->last();
         $latestQuery = is_array($latestAttempt) ? (string) data_get($latestAttempt, 'query', '') : '';
 
         return data_get($need, 'category', 'food') === 'food'
-            && $this->containsAny($needText, ['овоч'])
             && $this->containsAny($needText, [
                 'свіж', 'сирий', 'сира', 'грил', 'мангал', 'салат',
             ])
@@ -801,6 +779,40 @@ final class CartCandidateSuitability
             'свин', 'pork', 'ялов', 'beef', 'теля', 'veal', 'курят', 'курин', 'chicken',
             'індич', 'turkey', 'баранин', 'lamb', 'мʼяс', "м'яс", 'meat',
         ]);
+    }
+
+    /** @param array<string, mixed> $need */
+    private function preservesRequiredPreparationState(array $need, string $candidateText): bool
+    {
+        $identityText = $this->needIdentityText($need);
+        $intentText = $this->needIntentText($need);
+        $requiresUnpreparedMeat = $this->isRawMeat($identityText)
+            && ! $this->hasCompositeFoodMarkers($identityText)
+            && ($this->containsAny($identityText, [
+                'сирий', 'сира', 'сире', 'сирого', 'охолодж', 'свіж', 'raw', 'fresh',
+            ]) || $this->containsAny($intentText, [
+                'без маринад', 'не маринован', 'без копчен', 'не копчен',
+                'для грил', 'на грил', 'для мангал', 'на мангал', 'шашлик',
+            ]));
+
+        if (! $requiresUnpreparedMeat) {
+            return true;
+        }
+
+        $preparationMarkerGroups = [
+            ['маринован', 'маринад', 'seasoned', 'приправлен'],
+            ['копчен', 'smoked'],
+            ['панірован', 'breaded', 'coated'],
+            ['варен', 'cooked', 'запечен', 'смажен', 'готов', 'напівфабрикат'],
+            ['ковбас', 'сосиск', 'sausage'],
+            ['шашлик'],
+            ['фарш', 'minced'],
+        ];
+
+        return collect($preparationMarkerGroups)->every(
+            fn (array $markers): bool => ! $this->containsAny($candidateText, $markers)
+                || $this->containsAny($identityText, $markers),
+        );
     }
 
     private function hasCompositeFoodMarkers(string $text): bool
@@ -918,6 +930,26 @@ final class CartCandidateSuitability
             ->filter(fn (mixed $value): bool => is_scalar($value))
             ->map(fn (mixed $value): string => (string) $value)
             ->implode(' '));
+    }
+
+    /** @param array<string, mixed> $need */
+    private function needIdentityText(array $need): string
+    {
+        return $this->text([
+            filled(data_get($need, 'product_name'))
+                ? data_get($need, 'product_name')
+                : data_get($need, 'name'),
+        ]);
+    }
+
+    /** @param array<string, mixed> $need */
+    private function needIntentText(array $need): string
+    {
+        return $this->text([
+            $this->needIdentityText($need),
+            data_get($need, 'purpose'),
+            data_get($need, 'note'),
+        ]);
     }
 
     private function structuredText(mixed $value): string

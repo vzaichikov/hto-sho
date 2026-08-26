@@ -27,6 +27,9 @@ class HarnessPayloadSanitizer
         'birthday',
         'checkout',
         'loyalty',
+        'cart_id',
+        'shoppingcartid',
+        'shopping_cart',
     ];
 
     public function sanitize(mixed $value): mixed

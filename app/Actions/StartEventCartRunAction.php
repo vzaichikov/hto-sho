@@ -2,6 +2,7 @@
 
 namespace App\Actions;
 
+use App\CartHarnessMode;
 use App\CartRunMode;
 use App\CartRunPhase;
 use App\CartRunStatus;
@@ -11,9 +12,11 @@ use App\Data\ConfirmedSilpoFulfilmentData;
 use App\Exceptions\SilpoCartUnavailableException;
 use App\HarnessEntryKind;
 use App\HarnessRunType;
+use App\Jobs\AdvanceAgenticEventCartRunJob;
 use App\Jobs\AdvanceEventCartRunJob;
 use App\Models\Event;
 use App\Models\EventCartRun;
+use App\Services\CartHarnessConfiguration;
 use App\Services\GooseCartStatusService;
 use App\Services\HarnessRecorder;
 use App\Services\SilpoCartLock;
@@ -33,6 +36,7 @@ final class StartEventCartRunAction
         private readonly HarnessRecorder $harnessRecorder,
         private readonly SilpoCartResetGuard $resetGuard,
         private readonly SilpoCartLock $lock,
+        private readonly CartHarnessConfiguration $harnessConfiguration,
     ) {}
 
     public function execute(
@@ -82,11 +86,25 @@ final class StartEventCartRunAction
             );
         }
 
+        $harnessMode = $this->harnessConfiguration->mode();
+        $this->harnessConfiguration->assertReady($harnessMode);
+        $harnessMetadata = [
+            'mode' => $mode->value,
+            'harness_mode' => $harnessMode->value,
+            'plan_state_version' => $event->state_version,
+        ];
+
+        if ($harnessMode === CartHarnessMode::Agentic) {
+            $harnessMetadata['configured_model'] = $this->harnessConfiguration->model();
+            $harnessMetadata['reasoning_effort'] = $this->harnessConfiguration->reasoningEffort();
+            $harnessMetadata['configured_reasoning_effort'] = $this->harnessConfiguration->reasoningEffort();
+        }
+
         $harnessRun = $this->harnessRecorder->start(
             event: $event,
             type: HarnessRunType::SilpoCart,
             correlationId: (string) Str::ulid(),
-            metadata: ['mode' => $mode->value, 'plan_state_version' => $event->state_version],
+            metadata: $harnessMetadata,
         );
 
         try {
@@ -99,7 +117,7 @@ final class StartEventCartRunAction
                 throw new RuntimeException('Маршрут змінився просто перед стартом. Гусь просить перевірити його ще раз.');
             }
 
-            $catalogScopes = $cart === null
+            $catalogScopes = $cart === null || $harnessMode === CartHarnessMode::Agentic
                 ? ['categories' => [], 'sets' => []]
                 : $this->silpo->getCatalogScopes($connection->access_token, $cart, $harnessRun);
         } catch (Throwable $throwable) {
@@ -121,7 +139,7 @@ final class StartEventCartRunAction
             );
         }
 
-        return DB::transaction(function () use ($event, $mode, $cart, $catalogScopes, $harnessRun, $reset): EventCartRun {
+        return DB::transaction(function () use ($event, $mode, $harnessMode, $cart, $catalogScopes, $harnessRun, $reset): EventCartRun {
             $lockedEvent = Event::query()->lockForUpdate()->findOrFail($event->id);
             $this->guardPlan($lockedEvent);
 
@@ -158,6 +176,7 @@ final class StartEventCartRunAction
                 'silpo_cart_reset_id' => $lockedReset->id,
                 'harness_run_id' => $harnessRun->id,
                 'mode' => $mode,
+                'harness_mode' => $harnessMode,
                 'status' => CartRunStatus::Running,
                 'phase' => CartRunPhase::Preparing,
                 'plan_state_version' => $lockedEvent->state_version,
@@ -193,7 +212,11 @@ final class StartEventCartRunAction
                 'cart_sync_error' => null,
             ]);
 
-            AdvanceEventCartRunJob::dispatch($run->id, $run->cursor)->afterCommit();
+            if ($harnessMode === CartHarnessMode::Agentic) {
+                AdvanceAgenticEventCartRunJob::dispatch($run->id, $run->cursor)->afterCommit();
+            } else {
+                AdvanceEventCartRunJob::dispatch($run->id, $run->cursor)->afterCommit();
+            }
 
             return $run;
         });

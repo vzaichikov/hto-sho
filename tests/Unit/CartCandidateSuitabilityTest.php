@@ -28,6 +28,54 @@ class CartCandidateSuitabilityTest extends TestCase
         ));
     }
 
+    public function test_retailer_facing_raw_pork_identity_rejects_prepared_catalog_forms(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'Ошийок свинячий охолоджений',
+            'note' => 'Для приготування свинячого шашлику без маринаду.',
+        ];
+        $rawPork = ['name' => 'Свинячий ошийок домашній'];
+        $marinatedPork = ['name' => 'Свинячий шашлик маринований з ошийка'];
+        $smokedPork = ['name' => 'Ошийок свинячий сирокопчений, нарізка'];
+
+        $this->assertTrue($suitability->allows($need, $rawPork, [], []));
+        $this->assertTrue($suitability->isExactIdentityCandidate($need, $rawPork));
+        $this->assertFalse($suitability->allows($need, $marinatedPork, [], []));
+        $this->assertFalse($suitability->isExactIdentityCandidate($need, $marinatedPork));
+        $this->assertFalse($suitability->allows($need, $smokedPork, [], []));
+        $this->assertFalse($suitability->isExactIdentityCandidate($need, $smokedPork));
+    }
+
+    public function test_relational_note_does_not_reclassify_the_need_or_redirect_catalog_scope(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'свинина для шашлику',
+            'note' => 'Основний вид мʼяса; готувати окремо від овочів і халумі.',
+            'search_query' => 'свиняча лопатка',
+            'search_queries' => ['свинина шашлик', 'свиняча шия', 'свинячий ошийок', 'свинина для гриля'],
+            'quantity' => 2.2,
+            'unit' => 'кг',
+        ];
+        $rawCandidate = [
+            'name' => 'Свиняча фермерська лопатка без кістки охолоджена',
+            'slug' => 'svyniacha-fermerska-lopatka-bez-kistky-okholodzhena',
+            'weighted' => true,
+            'stock' => 47.5,
+        ];
+
+        $this->assertTrue($suitability->allows($need, $rawCandidate, [], []));
+        $this->assertSame('svynyna-4413', data_get($suitability->nextCatalogScope($need, [
+            'categories' => [
+                ['type' => 'category', 'slug' => 'mini-ovochi-4827', 'depth' => 2],
+                ['type' => 'category', 'slug' => 'ovochi-4808', 'depth' => 1],
+                ['type' => 'category', 'slug' => 'svynyna-4413', 'depth' => 1],
+            ],
+            'sets' => [],
+        ]), 'slug'));
+    }
+
     public function test_it_does_not_require_a_known_cut_name_for_raw_pork_from_the_matching_category(): void
     {
         $suitability = new CartCandidateSuitability;
@@ -123,6 +171,34 @@ class CartCandidateSuitabilityTest extends TestCase
         ];
 
         $this->assertSame('свинина', $suitability->nextSearchQuery($need));
+    }
+
+    public function test_prepared_retailer_aliases_are_tried_before_derived_single_word_queries(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'свиняча шийка свіжа',
+            'product_name' => 'свиняча шийка',
+            'search_query' => 'свиняча шийка',
+            'search_queries' => [
+                'свиняча шийка',
+                'свиняча шийка свіжа',
+                'шийка свиняча охолоджена',
+                'свинина шийна частина',
+                'свинячий ошийок',
+            ],
+            'retailer_identity_prepared' => true,
+            'attempts' => [
+                ['query' => 'свиняча шийка свіжа'],
+                ['query' => 'свиняча шийка'],
+            ],
+        ];
+
+        $this->assertSame('шийка свиняча охолоджена', $suitability->nextSearchQuery($need));
+        $need['attempts'][] = ['query' => 'шийка свиняча охолоджена'];
+        $this->assertSame('свинина шийна частина', $suitability->nextSearchQuery($need));
+        $need['attempts'][] = ['query' => 'свинина шийна частина'];
+        $this->assertSame('свинячий ошийок', $suitability->nextSearchQuery($need));
     }
 
     public function test_semantic_meat_replacement_stays_model_driven_while_php_keeps_stock_checks(): void
@@ -428,13 +504,15 @@ class CartCandidateSuitabilityTest extends TestCase
         $this->assertTrue($suitability->allows($need, $candidate, [], []));
         $this->assertSame(
             CartProductEvidence::MATCH_SAME_ROLE,
-            $suitability->evidence($need, $candidate, [], [])['match'],
+            $suitability->evidence($need, $candidate, [], [], null, true)['match'],
         );
         $this->assertStringContainsString('Заміна для «огірки»', (string) $suitability->evidence(
             $need,
             $candidate,
             [],
             [],
+            null,
+            true,
         )['review_note']);
         $this->assertFalse($suitability->allows($need, [
             'name' => 'Часник',
@@ -477,7 +555,7 @@ class CartCandidateSuitabilityTest extends TestCase
         $this->assertTrue($suitability->allows($need, $candidate, [], []));
         $this->assertSame(
             CartProductEvidence::MATCH_SAME_ROLE,
-            $suitability->evidence($need, $candidate, [], [])['match'],
+            $suitability->evidence($need, $candidate, [], [], null, true)['match'],
         );
     }
 

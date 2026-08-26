@@ -65,6 +65,7 @@ final readonly class CartAgentPreparationData
                     false,
                 ),
                 'search_query' => Str::squish((string) $need['name']),
+                'retailer_identity_prepared' => true,
                 'status' => 'pending',
                 'attempts' => [],
                 'inspected_products' => [],
