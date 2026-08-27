@@ -28,6 +28,132 @@ class CartCandidateSuitabilityTest extends TestCase
         ));
     }
 
+    public function test_ollama_candidate_gate_does_not_reclassify_products_from_ukrainian_word_fragments(): void
+    {
+        $suitability = new CartCandidateSuitability;
+
+        $this->assertTrue($suitability->allowsOllamaCandidate([
+            'name' => 'печериці',
+            'quantity' => 0.5,
+            'unit' => 'кг',
+        ], [
+            'name' => 'Гриби печериці',
+            'available' => true,
+            'weighted' => true,
+            'stock' => 5.95,
+        ]));
+        $this->assertTrue($suitability->allowsOllamaCandidate([
+            'name' => 'соус часниковий',
+            'quantity' => 1,
+            'unit' => 'упаковки',
+        ], [
+            'name' => 'Соус часниковий рослинний',
+            'available' => true,
+            'weighted' => false,
+            'stock' => 5,
+        ]));
+        $this->assertTrue($suitability->allowsOllamaCandidate([
+            'name' => 'лід',
+            'quantity' => 2,
+            'unit' => 'кг',
+        ], [
+            'name' => 'Лід коктейльний',
+            'available' => true,
+            'weighted' => false,
+            'display_ratio' => '1кг',
+            'stock' => 20,
+        ]));
+    }
+
+    public function test_ollama_candidate_gate_retains_catalog_availability_and_stock_constraints(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = ['name' => 'сирий продукт', 'quantity' => 2, 'unit' => 'кг'];
+
+        $this->assertFalse($suitability->allowsOllamaCandidate($need, [
+            'available' => false,
+            'weighted' => true,
+            'stock' => 10,
+        ]));
+        $this->assertFalse($suitability->allowsOllamaCandidate($need, [
+            'available' => true,
+            'weighted' => true,
+            'stock' => 1,
+        ]));
+    }
+
+    public function test_ollama_positive_evidence_flag_rejects_an_unverified_selection(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'точно маркований напій',
+            'category' => 'alcohol',
+            'quantity' => 1,
+            'unit' => 'шт',
+            'requires_positive_evidence' => true,
+        ];
+        $candidate = [
+            'name' => 'Напій з неповною карткою',
+            'available' => true,
+            'weighted' => false,
+            'stock' => 5,
+        ];
+
+        $unverified = $suitability->ollamaEvidence(
+            $need,
+            $candidate,
+            [],
+            CartProductEvidence::SAFETY_UNVERIFIED,
+        );
+        $verified = $suitability->ollamaEvidence(
+            $need,
+            $candidate,
+            [],
+            CartProductEvidence::SAFETY_VERIFIED,
+        );
+
+        $this->assertFalse($unverified['selectable']);
+        $this->assertSame(CartProductEvidence::SAFETY_UNVERIFIED, $unverified['safety']);
+        $this->assertTrue($verified['selectable']);
+        $this->assertSame(CartProductEvidence::SAFETY_VERIFIED, $verified['safety']);
+    }
+
+    public function test_ollama_uses_model_safety_judgment_only_after_product_details_exist(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'соус',
+            'note' => 'Потрібне позитивне підтвердження відсутності арахісу.',
+            'quantity' => 1,
+            'unit' => 'шт',
+            'requires_positive_evidence' => true,
+        ];
+        $candidate = [
+            'name' => 'Соус із повною карткою',
+            'available' => true,
+            'weighted' => false,
+            'stock' => 5,
+        ];
+
+        $withoutDetails = $suitability->ollamaEvidence(
+            $need,
+            $candidate,
+            ['summary' => 'Алергія на арахіс.'],
+            CartProductEvidence::SAFETY_VERIFIED,
+        );
+        $withDetails = $suitability->ollamaEvidence(
+            $need,
+            [...$candidate, 'details' => ['ingredients' => 'Повний склад перевірено моделлю.']],
+            ['summary' => 'Алергія на арахіс.'],
+            CartProductEvidence::SAFETY_VERIFIED,
+        );
+
+        $this->assertFalse($withoutDetails['selectable']);
+        $this->assertSame(CartProductEvidence::SAFETY_UNVERIFIED, $withoutDetails['safety']);
+        $this->assertTrue($withDetails['selectable']);
+        $this->assertSame(CartProductEvidence::SAFETY_VERIFIED, $withDetails['safety']);
+    }
+
     public function test_retailer_facing_raw_pork_identity_rejects_prepared_catalog_forms(): void
     {
         $suitability = new CartCandidateSuitability;

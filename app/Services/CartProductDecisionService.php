@@ -10,6 +10,7 @@ use App\Data\CartAgentSearchIntentData;
 use App\HarnessEntryKind;
 use App\Models\HarnessRun;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use JsonException;
 use RuntimeException;
@@ -19,6 +20,14 @@ use UnexpectedValueException;
 final class CartProductDecisionService implements CartProductAgent
 {
     private const PREPARATION_BATCH_SIZE = 6;
+
+    /** @var array<int, string> */
+    private const OLLAMA_LEXICAL_SCHEMAS = [
+        'cart_agent_search_intent',
+        'cart_agent_decision',
+        'cart_agent_decision_repair',
+        'cart_agent_evidence_requirements',
+    ];
 
     private const USER_DATA_DELIMITER = '--- USER DATA ---';
 
@@ -69,7 +78,7 @@ final class CartProductDecisionService implements CartProductAgent
         }
 
         try {
-            return CartAgentPreparationData::from(['needs' => $needs], $planItems);
+            $preparation = CartAgentPreparationData::from(['needs' => $needs], $planItems);
         } catch (ValidationException|UnexpectedValueException $exception) {
             $repairPrompt = $this->preparationRepairPrompt(
                 $eventContext,
@@ -88,11 +97,18 @@ final class CartProductDecisionService implements CartProductAgent
                 'Виправлення структури пошуку товарів',
             ));
 
-            return CartAgentPreparationData::from(
+            $preparation = CartAgentPreparationData::from(
                 ['needs' => data_get($repaired, 'needs', [])],
                 $planItems,
             );
         }
+
+        return $this->withOllamaEvidenceRequirements(
+            $preparation,
+            $eventContext,
+            $shoppingPlan,
+            $harnessRun,
+        );
     }
 
     public function diversifySearch(
@@ -145,6 +161,7 @@ PROMPT;
 - quantity та unit описують загальну потребу події, а не кількість упаковок;
 PROMPT;
         $prompt .= "\n".$this->preparationNamingRules();
+        $prompt .= $this->ollamaPreparationGuidance();
         $prompt .= <<<'PROMPT'
 
 - рольова заміна зберігає категорію та призначення: один свіжий салатний овоч може замінити інший, один безцукровий безалкогольний напій — інший; не кодуй конкретні пари замін і не змінюй вид мʼяса, заборону алкоголю, сирий стан або відомі алергени;
@@ -205,6 +222,7 @@ PROMPT;
 - розподіли quantity одного plan item між його потребами; застосунок нормалізує суму точно до плану;
 PROMPT;
         $prompt .= "\n".$this->preparationRepairNamingRules();
+        $prompt .= $this->ollamaPreparationGuidance();
         $prompt .= <<<'PROMPT'
 
 - виведи лише JSON за схемою.
@@ -236,6 +254,113 @@ PROMPT;
 - name називає конкретну куповану харчову ідентичність і придатну форму та є першим прямим пошуком; якщо plan item описує страву або приготування, використай кулінарні знання для вибору реального продукту, не повторюй його призначення як товарну назву й не вигадуй складники рецепта;
 - збережи прямо названий вид продукту, стан, обмеження та вихідне призначення у note; кулінарний намір може вимагати модельного вибору придатного сирого відрубу чи форми названого виду, але не PHP-таблиці відповідностей;
 - кожен search_queries містить 2–6 різних коротких назв тієї самої купованої їжі, синонімів, придатних відрубів/форм або допустимих рольових альтернатив без кількості й негативних інструкцій;
+PROMPT;
+    }
+
+    private function ollamaPreparationGuidance(): string
+    {
+        if (config('services.ai.provider') !== 'ollama') {
+            return '';
+        }
+
+        return <<<'PROMPT'
+
+
+ДОДАТКОВА САМОПЕРЕВІРКА ДЛЯ OLLAMA:
+- для багатослівної товарної ідентичності серед перших трьох search_queries додай найкоротший самостійний каталожний головний іменник;
+- коли це може змінити лексичний пошук, додай окремий варіант іншого граматичного числа або порядку слів без додавання нової властивості;
+- кожен запит є самостійним варіантом, а не попереднім невдалим запитом із ще одним словом;
+- перед виводом перевір, що name називає те, що людина фізично кладе в кошик, а спосіб приготування чи роль лишається у note.
+PROMPT;
+    }
+
+    /**
+     * @param  array<string, mixed>  $eventContext
+     * @param  array<string, mixed>  $shoppingPlan
+     */
+    private function withOllamaEvidenceRequirements(
+        CartAgentPreparationData $preparation,
+        array $eventContext,
+        array $shoppingPlan,
+        ?HarnessRun $harnessRun,
+    ): CartAgentPreparationData {
+        if (config('services.ai.provider') !== 'ollama') {
+            return $preparation;
+        }
+
+        $prompt = <<<'PROMPT'
+Класифікуй лише суворість доказів для вже підготовлених товарних потреб. Не обирай товари й не змінюй назви, кількості або запити.
+
+Для кожного key поверни requires_positive_evidence=true лише коли авторитетний контекст події або батьківська позиція плану прямо вимагає позитивно підтвердити точне числове значення, склад, маркування чи іншу властивість і не дозволяє невизначеність або перевірку людиною після вибору. Успадковуй таку вимогу до кожної декомпозованої потреби з тим самим source_index. Загальна обережність, побажання, звичайна відповідність назві або дозволене видиме застереження означають false.
+
+Поверни кожен переданий key рівно один раз. Виведи лише JSON за схемою.
+PROMPT;
+        $prompt .= "\n\n".self::USER_DATA_DELIMITER;
+        $prompt .= "\n\nКОНТЕКСТ ПОДІЇ:\n".$this->json($eventContext);
+        $prompt .= "\n\nПОГОДЖЕНИЙ ПЛАН:\n".$this->json($shoppingPlan);
+        $prompt .= "\n\nПІДГОТОВЛЕНІ ПОТРЕБИ:\n".$this->json(
+            collect($preparation->needs)
+                ->map(fn (array $need): array => [
+                    'key' => data_get($need, 'key'),
+                    'source_index' => data_get($need, 'source_index'),
+                    'name' => data_get($need, 'name'),
+                    'note' => data_get($need, 'note'),
+                ])
+                ->all(),
+        );
+        $decoded = $this->decodedPayload($this->send(
+            $this->requestPayload(
+                $prompt,
+                'cart_agent_evidence_requirements',
+                $this->evidenceRequirementsSchema(),
+            ),
+            $harnessRun,
+            'Класифікація вимог до доказів',
+        ));
+        $validated = Validator::make($decoded, [
+            'needs' => ['required', 'array', 'size:'.count($preparation->needs)],
+            'needs.*.key' => ['required', 'string', 'max:80'],
+            'needs.*.requires_positive_evidence' => ['required', 'boolean'],
+        ])->validate();
+        $requirements = collect($validated['needs'])
+            ->keyBy('key');
+        $expectedKeys = collect($preparation->needs)->pluck('key');
+
+        if ($requirements->keys()->sort()->values()->all() !== $expectedKeys->sort()->values()->all()) {
+            throw new UnexpectedValueException('Evidence classification must contain every prepared need key exactly once.');
+        }
+
+        return new CartAgentPreparationData(
+            collect($preparation->needs)
+                ->map(fn (array $need): array => [
+                    ...$need,
+                    'requires_positive_evidence' => (bool) data_get(
+                        $requirements,
+                        $need['key'].'.requires_positive_evidence',
+                    ),
+                ])
+                ->all(),
+        );
+    }
+
+    private function ollamaDecisionGuidance(): string
+    {
+        if (config('services.ai.provider') !== 'ollama') {
+            return '';
+        }
+
+        return <<<'PROMPT'
+
+
+ДОДАТКОВА ПЕРЕВІРКА ДЛЯ OLLAMA:
+- candidates можуть містити лексичний шум, тому самостійно перевір семантичну ідентичність, фізичну форму, призначення та жорсткі обмеження кожного кандидата;
+- не вважай два написання різними товарами лише через іншу абетку, транслітерацію, відмінок, однину чи множину;
+- за наявності сумісного точного кандидата select його замість нового retry; повертай лише ID, який є саме в поточному candidates;
+- загальна quantity потреби не є вимогою до розміру однієї упаковки, якщо current_need прямо не задає окреме обмеження фасування; можна взяти кілька цілих упаковок;
+- current_need.requires_positive_evidence=true є мінімальною підказкою, але самостійно перечитай product_constraints і current_need: якщо авторитетна вимога прямо забороняє невизначеність та вимагає позитивного доказу властивості, застосуй той самий режим навіть за помилкового false;
+- у режимі позитивного доказу safety_evidence=unverified не виконує потребу: спочатку inspect, а за відсутності позитивного доказу обери іншого кандидата або новий запит; не перекладай таку перевірку на людину після select;
+- у режимі позитивного доказу не роби retry або skip, доки в поточному candidates є ще не перевірені точні кандидати; перевіряй різні перспективні SKU до дозволеного ліміту й не узагальнюй результат inspect одного бренду на весь масив;
+- коли кілька кандидатів однаково точно й безпечно покривають потребу, обирай розумний дешевший варіант; бюджетна межа цього тестового сценарію не є причиною пропускати сумісний обовʼязковий товар.
 PROMPT;
     }
 
@@ -324,6 +449,7 @@ PROMPT;
 - це не ручне виправлення списку: рішення все одно має спиратися лише на current_need і catalog candidates.
 PROMPT;
         }
+        $prompt .= $this->ollamaDecisionGuidance();
         $prompt .= "\n\n".self::USER_DATA_DELIMITER;
         $prompt .= "\n\nСТАН КРОКУ:\n".$this->json($context);
         $payload = $this->requestPayload($prompt, 'cart_agent_decision', $this->decisionSchema());
@@ -461,11 +587,17 @@ PROMPT;
         }
 
         return [
-            'model' => $this->requestFactory->model(),
+            'model' => $this->modelForRequest($schemaName),
             'messages' => [
                 [
                     'role' => 'system',
-                    'content' => [['type' => 'text', 'text' => $instructions."\nПоверни лише один валідний JSON object."]],
+                    'content' => [[
+                        'type' => 'text',
+                        'text' => $instructions
+                            ."\nПоверни лише один валідний JSON object без Markdown-огорожі."
+                            ."\nОБОВʼЯЗКОВА JSON SCHEMA ({$schemaName}):\n"
+                            .json_encode($schema, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                    ]],
                 ],
                 [
                     'role' => 'user',
@@ -474,6 +606,20 @@ PROMPT;
             ],
             'response_format' => ['type' => 'json_object'],
         ];
+    }
+
+    private function modelForRequest(string $schemaName): string
+    {
+        $primaryModel = $this->requestFactory->model();
+
+        if (config('services.ai.provider') !== 'ollama'
+            || ! in_array($schemaName, self::OLLAMA_LEXICAL_SCHEMAS, true)) {
+            return $primaryModel;
+        }
+
+        $lexicalModel = (string) config('services.ai.lexical_model');
+
+        return $lexicalModel !== '' ? $lexicalModel : $primaryModel;
     }
 
     /** @return array{0: string, 1: string} */
@@ -538,12 +684,17 @@ PROMPT;
     private function decodedPayload(Response $response): array
     {
         $responsePayload = $response->json();
-        $raw = config('services.ai.provider') === 'openai'
+        $provider = (string) config('services.ai.provider');
+        $raw = $provider === 'openai'
             ? $this->openAiOutputText($responsePayload)
             : data_get($responsePayload, 'choices.0.message.content');
 
         if (! is_string($raw) || $raw === '') {
             throw new RuntimeException('AI provider did not return a cart decision.');
+        }
+
+        if ($provider === 'ollama') {
+            $raw = $this->ollamaJsonObject($raw);
         }
 
         try {
@@ -557,6 +708,17 @@ PROMPT;
         }
 
         return $decoded;
+    }
+
+    private function ollamaJsonObject(string $raw): string
+    {
+        $trimmed = trim($raw);
+
+        if (preg_match('/```(?:json)?\s*(\{.*\})\s*```/su', $trimmed, $matches) === 1) {
+            return trim($matches[1]);
+        }
+
+        return $trimmed;
     }
 
     /** @param array<string, mixed> $payload */
@@ -693,6 +855,32 @@ PROMPT;
                                 'maxItems' => 6,
                                 'items' => ['type' => 'string'],
                             ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function evidenceRequirementsSchema(): array
+    {
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['needs'],
+            'properties' => [
+                'needs' => [
+                    'type' => 'array',
+                    'minItems' => 1,
+                    'maxItems' => 60,
+                    'items' => [
+                        'type' => 'object',
+                        'additionalProperties' => false,
+                        'required' => ['key', 'requires_positive_evidence'],
+                        'properties' => [
+                            'key' => ['type' => 'string'],
+                            'requires_positive_evidence' => ['type' => 'boolean'],
                         ],
                     ],
                 ],

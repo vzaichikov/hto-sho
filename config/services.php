@@ -57,6 +57,7 @@ return [
     'ai' => [
         'provider' => env('AI_PROVIDER', 'openai'),
         'model' => env('AI_MODEL', 'gpt-5.4-mini'),
+        'lexical_model' => env('AI_LEXICAL_MODEL'),
         'api_key' => env('AI_API_KEY'),
         'request_timeout' => (int) env('AI_REQUEST_TIMEOUT', 60),
         'context_request_timeout' => (int) env('AI_CONTEXT_REQUEST_TIMEOUT', 75),
@@ -66,6 +67,8 @@ return [
             ],
             'ollama' => [
                 'base_url' => 'https://ollama.com/v1',
+                'api_key' => env('OLLAMA_AI_API_KEY', env('AI_API_KEY')),
+                'cart_job_timeout' => (int) env('OLLAMA_AI_CART_JOB_TIMEOUT', 900),
             ],
         ],
     ],

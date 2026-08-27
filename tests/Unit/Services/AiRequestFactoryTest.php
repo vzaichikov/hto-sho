@@ -46,7 +46,8 @@ class AiRequestFactoryTest extends TestCase
         config()->set([
             'services.ai.provider' => 'ollama',
             'services.ai.model' => 'qwen3.5:397b',
-            'services.ai.api_key' => 'ollama-secret',
+            'services.ai.api_key' => 'openai-secret',
+            'services.ai.providers.ollama.api_key' => 'ollama-secret',
         ]);
 
         $factory = $this->app->make(AiRequestFactory::class);

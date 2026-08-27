@@ -59,8 +59,26 @@ class EventCartRunTest extends TestCase
     {
         parent::setUp();
 
-        config(['services.silpo_cart_harness.mode' => 'orchestrated']);
+        config([
+            'services.ai.provider' => 'openai',
+            'services.silpo_cart_harness.mode' => 'orchestrated',
+        ]);
         Queue::fake();
+    }
+
+    public function test_ollama_cart_job_timeout_does_not_change_the_openai_timeout(): void
+    {
+        $openAiJob = new AdvanceEventCartRunJob(1, 0);
+
+        config([
+            'services.ai.provider' => 'ollama',
+            'services.ai.providers.ollama.cart_job_timeout' => 900,
+        ]);
+
+        $ollamaJob = new AdvanceEventCartRunJob(1, 0);
+
+        $this->assertSame(80, $openAiJob->timeout);
+        $this->assertSame(900, $ollamaJob->timeout);
     }
 
     public function test_missing_cart_stops_before_a_run_and_tells_the_user_to_prepare_silpo(): void
@@ -3105,6 +3123,67 @@ class EventCartRunTest extends TestCase
         $this->assertNull(data_get($run->state, 'needs.0.product_name'));
     }
 
+    public function test_ollama_search_exposes_catalog_candidates_before_model_semantic_adjudication(): void
+    {
+        config(['services.ai.provider' => 'ollama']);
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'mushrooms',
+            'name' => 'печериці',
+            'category' => 'food',
+            'quantity' => 0.5,
+            'unit' => 'кг',
+            'search_query' => 'печериці',
+            'search_queries' => ['гриби печериці', 'печериці свіжі'],
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'phase' => CartRunPhase::Searching,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+            ],
+            'staged_items' => [],
+        ]);
+        $gateway = new FakeCartGateway($cart);
+        $gateway->searchResults['печериці'] = [[
+            ...$this->waterProduct(),
+            'id' => 'fresh-mushrooms',
+            'name' => 'Гриби печериці',
+            'slug' => 'gryby-pecherytsi',
+            'weighted' => true,
+            'step' => 0.1,
+            'stock' => 5,
+            'displayRatio' => '100г',
+        ]];
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(
+                new CartAgentPreparationData([]),
+                [],
+                $this->audit([], ['mushrooms'], false),
+            ),
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Deciding, $run->phase);
+        $this->assertSame('fresh-mushrooms', data_get($run->state, 'last_candidates.0.product_id'));
+    }
+
     public function test_role_replacement_cannot_bypass_an_available_exact_identity_candidate(): void
     {
         [$owner, $event] = $this->eventWithPlan();
@@ -3182,6 +3261,153 @@ class EventCartRunTest extends TestCase
         $this->assertSame([], $run->staged_items);
         $this->assertSame(CartRunPhase::Deciding, $run->phase);
         $this->assertSame(['sweet-pepper'], collect(data_get($run->state, 'last_candidates'))->pluck('product_id')->all());
+    }
+
+    public function test_ollama_model_can_select_a_semantically_exact_candidate_across_scripts(): void
+    {
+        config(['services.ai.provider' => 'ollama']);
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'cola',
+            'name' => 'кола',
+            'category' => 'soft_drinks',
+            'quantity' => 2,
+            'unit' => 'л',
+            'note' => 'Загальний обʼєм, не розмір однієї пляшки.',
+        ];
+        $cocaCola = [
+            'product_id' => 'coca-cola',
+            'name' => 'Напій Coca-Cola безалкогольний сильногазований',
+            'slug' => 'napii-coca-cola-bezalkoholnyi',
+            'price' => 67.99,
+            'stock' => 20.0,
+            'available' => true,
+            'weighted' => false,
+            'step' => 1.0,
+            'display_ratio' => '1,25л',
+        ];
+        $cyrillicRootCandidate = [
+            ...$cocaCola,
+            'product_id' => 'pepsi-cola',
+            'name' => 'Напій Pepsi Пепсі-Кола',
+            'slug' => 'napii-pepsi-pepsi-kola',
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Deciding,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+                'last_candidates' => [$cyrillicRootCandidate, $cocaCola],
+            ],
+            'staged_items' => [],
+        ]);
+        $decision = new CartAgentDecisionData(
+            action: 'select',
+            selectedProductId: 'coca-cola',
+            query: null,
+            quantity: 2,
+            reason: 'Точна семантична відповідність незалежно від абетки.',
+            question: null,
+            audit: $this->audit(['cola'], [], true),
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(
+                new CartAgentPreparationData([]),
+                [$decision],
+                $this->audit(['cola'], [], true),
+            ),
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Auditing, $run->phase);
+        $this->assertSame('coca-cola', data_get($run->staged_items, '0.product_id'));
+        $this->assertSame(CartProductEvidence::MATCH_EXACT, data_get($run->staged_items, '0.match_evidence'));
+    }
+
+    public function test_ollama_invalid_inspection_does_not_fail_the_cart_run(): void
+    {
+        config(['services.ai.provider' => 'ollama']);
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'strict-product',
+            'requires_positive_evidence' => true,
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Deciding,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+                'last_candidates' => [[
+                    'product_id' => 'current-water',
+                    'name' => 'Вода питна',
+                    'slug' => 'voda-pytna',
+                    'price' => 30.0,
+                    'stock' => 20.0,
+                    'available' => true,
+                    'weighted' => false,
+                    'step' => 1.0,
+                    'display_ratio' => '1л',
+                ]],
+            ],
+            'staged_items' => [],
+        ]);
+        $decision = new CartAgentDecisionData(
+            action: 'inspect',
+            selectedProductId: 'not-a-current-candidate',
+            query: null,
+            quantity: null,
+            reason: 'Inspect a candidate ID that is not in the current batch.',
+            question: null,
+            audit: $this->audit([], ['strict-product'], false),
+            candidateMatchesRequiredProduct: false,
+            safetyEvidence: CartProductEvidence::SAFETY_UNVERIFIED,
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(
+                new CartAgentPreparationData([]),
+                [$decision],
+                $this->audit([], ['strict-product'], false),
+            ),
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunStatus::Running, $run->status);
+        $this->assertSame(CartRunPhase::Deciding, $run->phase);
+        $this->assertSame(1, data_get($run->state, 'needs.0.invalid_inspection_count'));
     }
 
     public function test_search_filters_a_ready_marinade_for_an_event_that_forbids_it(): void

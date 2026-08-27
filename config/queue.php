@@ -40,7 +40,9 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 180),
+            'retry_after' => env('AI_PROVIDER', 'openai') === 'ollama'
+                ? (int) env('OLLAMA_AI_QUEUE_RETRY_AFTER', 1000)
+                : (int) env('DB_QUEUE_RETRY_AFTER', 180),
             'after_commit' => false,
         ],
 

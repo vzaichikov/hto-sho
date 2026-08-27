@@ -47,6 +47,7 @@ final readonly class CartAgentPreparationData
             'needs.*.note' => ['present', 'string', 'max:1000'],
             'needs.*.search_queries' => ['required', 'array', 'min:2', 'max:6'],
             'needs.*.search_queries.*' => ['required', 'string', 'max:160'],
+            'needs.*.requires_positive_evidence' => ['sometimes', 'boolean'],
         ])->validate();
 
         $needs = collect($validated['needs'])->values();

@@ -243,6 +243,75 @@ final class CartCandidateSuitability
     }
 
     /**
+     * Ollama decisions receive the complete lean candidate batch and own semantic
+     * compatibility. PHP retains only catalog-state constraints here so Ukrainian
+     * inflection, transliteration, or a word fragment cannot hide a valid product
+     * before the model sees it.
+     *
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $candidate
+     */
+    public function allowsOllamaCandidate(array $need, array $candidate): bool
+    {
+        return data_get($candidate, 'available') !== false
+            && $this->hasSufficientStock($need, $candidate);
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $candidate
+     * @param  array<string, mixed>  $eventContext
+     * @return array{selectable: bool, match: string, safety: string, review_note: ?string}
+     */
+    public function ollamaEvidence(
+        array $need,
+        array $candidate,
+        array $eventContext,
+        ?string $modelSafetyEvidence = null,
+        bool $modelReplacement = false,
+    ): array {
+        $match = ! $modelReplacement
+            ? CartProductEvidence::MATCH_EXACT
+            : CartProductEvidence::MATCH_SAME_ROLE;
+        $safety = CartProductEvidence::SAFETY_NOT_REQUIRED;
+
+        if ($this->requiresInspection($need, $eventContext)) {
+            $safety = array_key_exists('details', $candidate)
+                && $modelSafetyEvidence === CartProductEvidence::SAFETY_VERIFIED
+                    ? CartProductEvidence::SAFETY_VERIFIED
+                    : CartProductEvidence::SAFETY_UNVERIFIED;
+        }
+
+        if ($safety === CartProductEvidence::SAFETY_NOT_REQUIRED
+            && ! $this->isClearlySimpleFood($need, $candidate)
+            && in_array($modelSafetyEvidence, [
+                CartProductEvidence::SAFETY_VERIFIED,
+                CartProductEvidence::SAFETY_UNVERIFIED,
+            ], true)) {
+            $safety = $modelSafetyEvidence;
+        }
+
+        $notes = [];
+
+        if ($match === CartProductEvidence::MATCH_SAME_ROLE) {
+            $notes[] = 'Заміна для «'.data_get($need, 'name').'»: найближчий доступний товар у тій самій ролі.';
+        }
+
+        if ($safety === CartProductEvidence::SAFETY_UNVERIFIED) {
+            $notes[] = '❓ Гусь не знайшов повних даних про алергени чи склад на сторінці товару. Перевірте паковання перед подачею.';
+        }
+
+        return [
+            'selectable' => $this->allowsOllamaCandidate($need, $candidate)
+                && (data_get($need, 'requires_positive_evidence') !== true
+                    || $safety === CartProductEvidence::SAFETY_VERIFIED),
+            'match' => $match,
+            'safety' => $safety,
+            'review_note' => $notes === [] ? null : implode(' ', $notes),
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $need
      * @param  array<string, mixed>  $candidate
      * @param  array<string, mixed>  $eventContext

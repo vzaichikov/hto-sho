@@ -43,6 +43,10 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
         public readonly int $runId,
         public readonly int $expectedCursor,
     ) {
+        if ($this->usesOllamaProvider()) {
+            $this->timeout = (int) config('services.ai.providers.ollama.cart_job_timeout', 900);
+        }
+
         $this->onQueue('ai-events');
     }
 
@@ -217,7 +221,8 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 SilpoCartContextData::fromRunContext($run->cart_context),
             ))
             ->filter(fn (array $product): bool => $product['product_id'] !== '')
-            ->filter(fn (array $product): bool => $candidateSuitability->allows(
+            ->filter(fn (array $product): bool => $this->candidateIsAllowed(
+                $candidateSuitability,
                 $need,
                 $product,
                 data_get($state, 'event_context', []),
@@ -381,7 +386,8 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 return $candidate;
             })
             ->filter(fn (array $product): bool => $product['product_id'] !== '')
-            ->filter(fn (array $product): bool => $candidateSuitability->allows(
+            ->filter(fn (array $product): bool => $this->candidateIsAllowed(
+                $candidateSuitability,
                 $need,
                 $product,
                 data_get($state, 'event_context', []),
@@ -873,7 +879,8 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        if (! $candidateSuitability->isExactIdentityCandidate($need, $candidate)
+        if (! $this->usesOllamaProvider()
+            && ! $candidateSuitability->isExactIdentityCandidate($need, $candidate)
             && $candidateSuitability->hasExactIdentityCandidate(
                 $need,
                 data_get($state, 'last_candidates', []),
@@ -904,15 +911,24 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             $candidateForValidation['details'] = $inspectedDetails;
         }
 
-        $evidence = $candidateSuitability->evidence(
-            $need,
-            $candidateForValidation,
-            data_get($state, 'event_context', []),
-            data_get($state, 'plan_snapshot', []),
-            $decision->safetyEvidence,
-            $decision->isReplacement
-                && ! $candidateSuitability->isExactIdentityCandidate($need, $candidate),
-        );
+        $modelReplacement = $decision->isReplacement
+            && ! $candidateSuitability->isExactIdentityCandidate($need, $candidate);
+        $evidence = $this->usesOllamaProvider()
+            ? $candidateSuitability->ollamaEvidence(
+                $need,
+                $candidateForValidation,
+                data_get($state, 'event_context', []),
+                $decision->safetyEvidence,
+                $modelReplacement,
+            )
+            : $candidateSuitability->evidence(
+                $need,
+                $candidateForValidation,
+                data_get($state, 'event_context', []),
+                data_get($state, 'plan_snapshot', []),
+                $decision->safetyEvidence,
+                $modelReplacement,
+            );
 
         if (! $evidence['selectable']) {
             $state['last_candidates'] = collect(data_get($state, 'last_candidates', []))
@@ -1029,6 +1045,31 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
         }
 
         return "{$product} вибрано для {$needName}: товар відповідає потрібній ролі та пройшов перевірки доступності й відомих заборон.";
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $candidate
+     * @param  array<string, mixed>  $eventContext
+     * @param  array<string, mixed>  $shoppingPlan
+     */
+    private function candidateIsAllowed(
+        CartCandidateSuitability $candidateSuitability,
+        array $need,
+        array $candidate,
+        array $eventContext,
+        array $shoppingPlan,
+    ): bool {
+        if ($this->usesOllamaProvider()) {
+            return $candidateSuitability->allowsOllamaCandidate($need, $candidate);
+        }
+
+        return $candidateSuitability->allows($need, $candidate, $eventContext, $shoppingPlan);
+    }
+
+    private function usesOllamaProvider(): bool
+    {
+        return config('services.ai.provider') === 'ollama';
     }
 
     /** @param array<string, mixed> $state */
@@ -1168,16 +1209,29 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
         CartCandidateSuitability $candidateSuitability,
     ): void {
         $inspectedProducts = collect(data_get($need, 'inspected_products', []));
+        $candidate = collect(data_get($state, 'last_candidates', []))
+            ->firstWhere('product_id', $decision->selectedProductId);
 
         if (! $inspectedProducts->contains($decision->selectedProductId)
             && $inspectedProducts->count() < 3) {
-            $this->inspectCandidate($run, $state, $currentIndex, $need, $decision);
+            if (! $this->usesOllamaProvider()
+                || (is_array($candidate) && filled(data_get($candidate, 'slug')))) {
+                $this->inspectCandidate($run, $state, $currentIndex, $need, $decision);
 
-            return;
+                return;
+            }
+
+            $state['needs'][$currentIndex]['invalid_inspection_count'] = (int) data_get(
+                $need,
+                'invalid_inspection_count',
+                0,
+            ) + 1;
         }
 
         $state['last_candidates'] = collect(data_get($state, 'last_candidates', []))
-            ->reject(fn (array $candidate): bool => data_get($candidate, 'product_id') === $decision->selectedProductId)
+            ->reject(fn (array $candidate): bool => data_get($candidate, 'product_id') === $decision->selectedProductId
+                || ($this->usesOllamaProvider()
+                    && $inspectedProducts->contains(data_get($candidate, 'product_id'))))
             ->values()
             ->all();
         $state['last_details'] = null;

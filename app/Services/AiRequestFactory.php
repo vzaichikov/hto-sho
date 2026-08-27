@@ -13,7 +13,9 @@ final class AiRequestFactory
     {
         $provider = (string) config('services.ai.provider');
         $baseUrl = config("services.ai.providers.{$provider}.base_url");
-        $apiKey = (string) config('services.ai.api_key');
+        $apiKey = $provider === 'ollama'
+            ? (string) config('services.ai.providers.ollama.api_key')
+            : (string) config('services.ai.api_key');
         $timeoutSeconds ??= (int) config('services.ai.request_timeout', 60);
 
         if (! is_string($baseUrl) || $baseUrl === '') {

@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Data\CartAgentPreparationData;
 use App\Services\CartProductDecisionService;
 use Illuminate\Support\Facades\Http;
 use ReflectionClass;
@@ -166,23 +167,27 @@ class CartProductDecisionServiceTest extends TestCase
         config([
             'services.ai.provider' => 'ollama',
             'services.ai.providers.ollama.base_url' => 'https://ollama.test/v1',
-            'services.ai.api_key' => 'test-key',
+            'services.ai.providers.ollama.api_key' => 'test-key',
             'services.ai.model' => 'test-model',
+            'services.ai.lexical_model' => 'gemma4:31b',
         ]);
         Http::fake([
             '*' => Http::response([
                 'choices' => [[
-                    'message' => ['content' => json_encode([
+                    'message' => ['content' => "```json\n".json_encode([
                         'product_name' => 'перець',
                         'purpose' => 'для гриля',
-                    ], JSON_THROW_ON_ERROR)],
+                    ], JSON_THROW_ON_ERROR)."\n```"],
                 ]],
             ]),
         ]);
 
-        app(CartProductDecisionService::class)->diversifySearch([
+        $intent = app(CartProductDecisionService::class)->diversifySearch([
             'name' => 'untrusted-user-data-sentinel',
         ]);
+
+        $this->assertSame('перець', $intent->productName);
+        $this->assertSame('для гриля', $intent->purpose);
 
         Http::assertSent(function ($request): bool {
             $payload = $request->data();
@@ -191,12 +196,124 @@ class CartProductDecisionServiceTest extends TestCase
 
             return data_get($payload, 'messages.0.role') === 'system'
                 && data_get($payload, 'messages.1.role') === 'user'
+                && data_get($payload, 'model') === 'gemma4:31b'
                 && str_contains($systemText, 'Прямий пошук Сільпо')
                 && str_contains($systemText, 'Поверни лише один валідний JSON object')
+                && str_contains($systemText, '"required":["product_name","purpose"]')
                 && ! str_contains($systemText, 'untrusted-user-data-sentinel')
                 && str_contains($userText, 'untrusted-user-data-sentinel')
                 && ! str_contains($userText, 'Поверни лише');
         });
+    }
+
+    public function test_openai_ignores_the_ollama_lexical_model_split(): void
+    {
+        config([
+            'services.ai.provider' => 'openai',
+            'services.ai.api_key' => 'test-key',
+            'services.ai.model' => 'openai-primary-model',
+            'services.ai.lexical_model' => 'gemma4:31b',
+        ]);
+        Http::fake([
+            '*' => Http::response([
+                'output' => [[
+                    'content' => [[
+                        'type' => 'output_text',
+                        'text' => json_encode([
+                            'product_name' => 'перець',
+                            'purpose' => 'для гриля',
+                        ], JSON_THROW_ON_ERROR),
+                    ]],
+                ]],
+            ]),
+        ]);
+
+        app(CartProductDecisionService::class)->diversifySearch([
+            'name' => 'перець для гриля',
+        ]);
+
+        Http::assertSent(fn ($request): bool => data_get($request->data(), 'model') === 'openai-primary-model');
+    }
+
+    public function test_ollama_uses_the_primary_model_outside_lexical_cart_requests(): void
+    {
+        config([
+            'services.ai.provider' => 'ollama',
+            'services.ai.model' => 'qwen3.5:397b',
+            'services.ai.lexical_model' => 'gemma4:31b',
+        ]);
+        $reflection = new ReflectionClass(CartProductDecisionService::class);
+        $service = app(CartProductDecisionService::class);
+        $modelForRequest = $reflection->getMethod('modelForRequest');
+
+        $this->assertSame('qwen3.5:397b', $modelForRequest->invoke($service, 'cart_agent_preparation'));
+        $this->assertSame('qwen3.5:397b', $modelForRequest->invoke($service, 'cart_agent_audit'));
+        $this->assertSame('gemma4:31b', $modelForRequest->invoke($service, 'cart_agent_search_intent'));
+        $this->assertSame('gemma4:31b', $modelForRequest->invoke($service, 'cart_agent_decision'));
+        $this->assertSame('gemma4:31b', $modelForRequest->invoke($service, 'cart_agent_decision_repair'));
+    }
+
+    public function test_ollama_adds_generic_catalog_language_guidance_without_changing_openai_prompts(): void
+    {
+        $service = app(CartProductDecisionService::class);
+        $reflection = new ReflectionClass($service);
+        $preparationPrompt = $reflection->getMethod('preparationPrompt');
+        $decisionGuidance = $reflection->getMethod('ollamaDecisionGuidance');
+
+        config(['services.ai.provider' => 'ollama']);
+        $ollamaPrompt = $preparationPrompt->invoke($service, [], ['items' => []]);
+
+        $this->assertStringContainsString('найкоротший самостійний каталожний головний іменник', $ollamaPrompt);
+        $this->assertStringContainsString('іншого граматичного числа', $ollamaPrompt);
+        $this->assertStringContainsString('іншу абетку, транслітерацію', $decisionGuidance->invoke($service));
+        $this->assertStringContainsString('самостійно перечитай product_constraints', $decisionGuidance->invoke($service));
+        $this->assertStringContainsString('safety_evidence=unverified не виконує потребу', $decisionGuidance->invoke($service));
+        $this->assertStringContainsString('не узагальнюй результат inspect одного бренду', $decisionGuidance->invoke($service));
+
+        config(['services.ai.provider' => 'openai']);
+        $openAiPrompt = $preparationPrompt->invoke($service, [], ['items' => []]);
+
+        $this->assertStringNotContainsString('ДОДАТКОВА САМОПЕРЕВІРКА ДЛЯ OLLAMA', $openAiPrompt);
+        $this->assertSame('', $decisionGuidance->invoke($service));
+    }
+
+    public function test_ollama_classifies_positive_evidence_in_a_separate_lexical_request(): void
+    {
+        config([
+            'services.ai.provider' => 'ollama',
+            'services.ai.providers.ollama.base_url' => 'https://ollama.test/v1',
+            'services.ai.providers.ollama.api_key' => 'test-key',
+            'services.ai.model' => 'qwen3.5:397b',
+            'services.ai.lexical_model' => 'gemma4:31b',
+        ]);
+        Http::fake([
+            '*' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => json_encode([
+                        'needs' => [
+                            ['key' => 'n_01', 'requires_positive_evidence' => true],
+                            ['key' => 'n_02', 'requires_positive_evidence' => false],
+                        ],
+                    ], JSON_THROW_ON_ERROR)],
+                ]],
+            ]),
+        ]);
+        $preparation = new CartAgentPreparationData([
+            ['key' => 'n_01', 'source_index' => 0, 'name' => 'Перший товар', 'note' => ''],
+            ['key' => 'n_02', 'source_index' => 1, 'name' => 'Другий товар', 'note' => ''],
+        ]);
+        $service = app(CartProductDecisionService::class);
+        $method = (new ReflectionClass($service))->getMethod('withOllamaEvidenceRequirements');
+
+        $classified = $method->invoke($service, $preparation, [], ['items' => []], null);
+
+        $this->assertTrue(data_get($classified->needs, '0.requires_positive_evidence'));
+        $this->assertFalse(data_get($classified->needs, '1.requires_positive_evidence'));
+        Http::assertSent(fn ($request): bool => data_get($request->data(), 'model') === 'gemma4:31b'
+            && str_contains(
+                (string) data_get($request->data(), 'messages.0.content.0.text'),
+                'cart_agent_evidence_requirements',
+            ));
     }
 
     public function test_preparation_batches_large_plans_without_renumbering_source_indexes(): void
