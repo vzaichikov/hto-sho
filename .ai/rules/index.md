@@ -11,6 +11,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | tests/Fixtures/AiProductLogic/** | .ai/rules/ai-product-logic.md |
 | {app/{Jobs,Services}/**/*Cart*.php,config/goose_cart_phrases.php} | .ai/rules/app-jobs-services.md |
 | {app,config,database,resources,routes,tests}/** | .ai/rules/appconfigdatabaseresourcesroutestests.md |
+| {bootstrap/app.php,.env,keys.env,.gitignore} | .ai/rules/bootstrap.md |
 | {vite.config.js,resources/css/**,resources/fonts/**,resources/views/components/layouts/**} | .ai/rules/components-layouts.md |
 | resources/views/{components,events}/** | .ai/rules/componentsevents.md |
 | app/{Contracts,Data,Jobs,Services}/**/*Cart*.php | .ai/rules/contracts-data-jobs-services.md |
