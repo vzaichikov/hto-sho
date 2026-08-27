@@ -220,6 +220,9 @@ class SilpoRouteIntentInterpreterTest extends TestCase
         $this->assertSame('system', data_get($request->data(), 'messages.0.role'));
         $this->assertSame('user', data_get($request->data(), 'messages.1.role'));
         $this->assertStringContainsString('Це лише витяг наміру', $systemInstructions);
+        $this->assertStringContainsString('ОБОВʼЯЗКОВА JSON SCHEMA (silpo_route_intent)', $systemInstructions);
+        $this->assertStringContainsString('"address_query"', $systemInstructions);
+        $this->assertStringContainsString('"requested_time_from"', $systemInstructions);
         $this->assertStringNotContainsString('untrusted-route-sentinel', $systemInstructions);
         $this->assertStringContainsString('untrusted-route-sentinel', $userJson);
         $this->assertStringNotContainsString('поверни лише JSON', Str::lower($userJson));

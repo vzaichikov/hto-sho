@@ -92,7 +92,13 @@ PROMPT;
             'messages' => [
                 [
                     'role' => 'system',
-                    'content' => [['type' => 'text', 'text' => $instructions]],
+                    'content' => [[
+                        'type' => 'text',
+                        'text' => $instructions
+                            ."\nПоверни лише один валідний JSON object без Markdown-огорожі."
+                            ."\nОБОВʼЯЗКОВА JSON SCHEMA (silpo_route_intent):\n"
+                            .json_encode($this->schema(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                    ]],
                 ],
                 [
                     'role' => 'user',
