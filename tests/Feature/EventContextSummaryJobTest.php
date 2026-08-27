@@ -577,12 +577,16 @@ class EventContextSummaryJobTest extends TestCase
 
         $this->assertSame(EventAnalysisStage::Completed, $event->refresh()->analysis_stage);
         Http::assertSent(function (Request $request) use ($source): bool {
+            $systemPrompt = (string) data_get($request->data(), 'messages.0.content.0.text');
             $userJson = (string) data_get($request->data(), 'messages.1.content.0.text');
 
             return data_get($request->data(), 'messages.0.role') === 'system'
                 && data_get($request->data(), 'messages.1.role') === 'user'
+                && str_contains($systemPrompt, 'ОБОВʼЯЗКОВА JSON SCHEMA (event_context)')
+                && str_contains($systemPrompt, '"required":["summary","participants","restrictions","agreements","shopping_requirements","warnings","unresolved_questions","source_ids"]')
                 && str_contains($userJson, '"source_batches"')
-                && str_contains($userJson, '"source_id": '.$source->id);
+                && str_contains($userJson, '"source_id": '.$source->id)
+                && data_get($request->data(), 'response_format.type') === 'json_object';
         });
     }
 

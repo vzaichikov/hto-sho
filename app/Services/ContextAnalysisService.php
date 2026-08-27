@@ -397,7 +397,10 @@ PROMPT;
                     'role' => 'system',
                     'content' => [[
                         'type' => 'text',
-                        'text' => $instructions."\nПоверни лише один валідний JSON object, що точно відповідає описаній схемі.",
+                        'text' => $instructions
+                            ."\nПоверни лише один валідний JSON object без Markdown-огорожі."
+                            ."\nОБОВʼЯЗКОВА JSON SCHEMA ({$schemaName}):\n"
+                            .json_encode($schema, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                     ]],
                 ],
                 [
