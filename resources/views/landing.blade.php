@@ -90,7 +90,6 @@
 
         <div class="hero-scene" aria-label="Гусь Шо розбирає чат про шашлики">
           <span class="doodle doodle-one" aria-hidden="true">♡</span>
-          <span class="doodle doodle-two" aria-hidden="true">⌁</span>
           <img
             class="hero-goose"
             src="{{ asset('images/brand/goose-sho.png') }}"
