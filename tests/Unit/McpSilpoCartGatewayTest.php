@@ -184,6 +184,57 @@ class McpSilpoCartGatewayTest extends TestCase
         $this->assertSame([30, 30], $limits);
     }
 
+    public function test_ready_cart_reads_call_known_tools_without_listing_the_manifest(): void
+    {
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(function (Request $request) {
+            $payload = $request->data();
+            $method = $payload['method'] ?? null;
+
+            if ($method === 'notifications/initialized') {
+                return Http::response('', 202);
+            }
+
+            if ($method === 'initialize') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'protocolVersion' => ProtocolVersion::LATEST->value,
+                        'capabilities' => [],
+                        'serverInfo' => ['name' => 'silpo-test', 'version' => '1.0.0'],
+                    ],
+                ]);
+            }
+
+            if ($method === 'tools/call'
+                && data_get($payload, 'params.name') === 'silpo_get_my_shopping_cart') {
+                return Http::response([
+                    'jsonrpc' => '2.0',
+                    'id' => $payload['id'],
+                    'result' => [
+                        'content' => [['type' => 'text', 'text' => 'Resource not found']],
+                        'isError' => true,
+                    ],
+                ]);
+            }
+
+            return Http::response('', 500);
+        });
+
+        $cart = $this->app->make(McpSilpoCartGateway::class)
+            ->getReadyCart('secret-token');
+
+        $this->assertNull($cart);
+        $this->assertCount(0, Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'method') === 'tools/list',
+        ));
+        $this->assertCount(1, Http::recorded(
+            fn (Request $request): bool => data_get($request->data(), 'params.name') === 'silpo_get_my_shopping_cart',
+        ));
+    }
+
     public function test_cart_reset_requires_the_live_clear_schema_and_calls_snapshot_clear_then_immediate_readback(): void
     {
         $cleared = false;

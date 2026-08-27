@@ -370,7 +370,6 @@ final class McpSilpoCartGateway implements SilpoCartGateway
         $client = $this->client($accessToken);
 
         try {
-            $this->assertRequiredTools($client, $harnessRun);
             $cartState = $this->readCartState($client, $harnessRun);
 
             if ($cartState === null) {
