@@ -684,9 +684,10 @@
             >
                 <div class="flex h-full min-h-0 flex-col">
                     <header class="flex items-start justify-between gap-4 border-b-2 border-ink/10 bg-yellow/35 px-5 py-4 sm:px-7">
-                        <div>
+                        <div class="min-w-0">
                             <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Перед походом у Сільпо</p>
                             <h3 class="mt-1 font-display text-3xl leading-[1.1] sm:text-4xl" id="silpo-dialog-title">Новий похід — чистий кошик</h3>
+                            <x-harness-ai-labels class="mt-2" />
                         </div>
                         <form method="dialog">
                             <button class="grid size-10 shrink-0 place-items-center rounded-full border-2 border-ink bg-paper text-xl font-bold transition hover:-translate-y-0.5 hover:bg-yellow focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="button" data-silpo-dialog-close data-silpo-dialog-minimize aria-label="Згорнути вікно кошика">−</button>
@@ -853,9 +854,10 @@
     >
         <div class="flex h-full min-h-0 flex-col">
             <header class="flex items-start justify-between gap-4 border-b-2 border-ink/10 bg-yellow/35 px-5 py-4 sm:px-7">
-                <div>
+                <div class="min-w-0">
                     <p class="text-xs font-bold uppercase tracking-[0.16em] text-green-dark">Новий матеріал уже під крилом</p>
                     <h3 class="mt-1 font-display text-3xl leading-[1.1] sm:text-4xl" id="analysis-dialog-title">Гусь розгрібає контекст</h3>
+                    <x-harness-ai-labels class="mt-2" />
                 </div>
                 <div class="flex shrink-0 items-center gap-2 sm:gap-3">
                     <p class="rounded-full bg-paper/75 px-3 py-2 text-xs font-extrabold tabular-nums text-green-dark sm:text-sm">

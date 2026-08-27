@@ -204,8 +204,16 @@ class ContextHarnessTest extends TestCase
 
     public function test_compact_materials_are_newest_first_and_ui_keeps_polling_and_reduced_motion_hooks(): void
     {
+        config()->set([
+            'services.ai.provider' => 'ollama',
+            'services.ai.model' => 'qwen3.5:397b',
+            'services.ai.lexical_model' => 'gemma4:31b',
+        ]);
+
         $user = User::factory()->create();
-        $event = Event::factory()->for($user)->create();
+        $event = Event::factory()->for($user)->create([
+            'shopping_plan' => ['items' => []],
+        ]);
         EventSource::factory()->for($event)->create([
             'text' => 'Спочатку домовились про суботу.',
             'content_hash' => hash('sha256', 'older'),
@@ -217,7 +225,7 @@ class ContextHarnessTest extends TestCase
             'created_at' => now(),
         ]);
 
-        $this->actingAs($user)
+        $response = $this->actingAs($user)
             ->get(route('events.show', $event))
             ->assertOk()
             ->assertSeeInOrder(['Потім перенесли на неділю.', 'Спочатку домовились про суботу.'])
@@ -232,8 +240,12 @@ class ContextHarnessTest extends TestCase
             ->assertSee('Великий чат може зайняти кілька хвилин.')
             ->assertSee('data-source-card', escape: false)
             ->assertSee('Що Гусь уже бачив')
+            ->assertSee('data-harness-ai-labels', escape: false)
+            ->assertSeeInOrder(['Провайдер', 'Ollama', 'Модель', 'qwen3.5:397b', 'Лексика', 'gemma4:31b'])
             ->assertSeeInOrder(['Контекст', 'Питання', 'Список', 'Сільпо'])
             ->assertDontSee('Гусь, розгреби все');
+
+        $this->assertSame(2, substr_count($response->getContent(), 'data-harness-ai-labels'));
 
         $javascript = file_get_contents(resource_path('js/app.js'));
         $css = file_get_contents(resource_path('css/app.css'));
