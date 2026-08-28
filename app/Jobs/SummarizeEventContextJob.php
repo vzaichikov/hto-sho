@@ -32,7 +32,7 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
-    public int $timeout = 170;
+    public int $timeout = 380;
 
     public bool $failOnTimeout = true;
 
@@ -418,11 +418,15 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
             return $evidence;
         }
 
+        $messageTimeline = $source->imageExtraction?->message_timeline;
+
         return [
             ...$evidence,
             'classification' => $source->imageExtraction?->classification?->value,
-            'ocr_text' => $source->imageExtraction?->ocr_text,
-            'message_timeline' => $source->imageExtraction?->message_timeline,
+            ...($messageTimeline === null || $messageTimeline === []
+                ? ['ocr_text' => $source->imageExtraction?->ocr_text]
+                : []),
+            'message_timeline' => $messageTimeline,
             'source_summary' => $source->imageExtraction?->source_summary,
         ];
     }

@@ -61,7 +61,7 @@ return [
         'api_key' => env('AI_API_KEY'),
         'request_timeout' => (int) env('AI_REQUEST_TIMEOUT', 60),
         'image_request_timeout' => (int) env('AI_IMAGE_REQUEST_TIMEOUT', 150),
-        'context_request_timeout' => (int) env('AI_CONTEXT_REQUEST_TIMEOUT', 75),
+        'context_request_timeout' => (int) env('AI_CONTEXT_REQUEST_TIMEOUT', 180),
         'providers' => [
             'openai' => [
                 'base_url' => 'https://api.openai.com/v1',

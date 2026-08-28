@@ -32,7 +32,7 @@ class EventContextSummaryJobTest extends TestCase
     {
         $job = new SummarizeEventContextJob(1, (string) Str::ulid());
 
-        $this->assertSame(170, $job->timeout);
+        $this->assertSame(380, $job->timeout);
         $this->assertTrue($job->failOnTimeout);
         $this->assertGreaterThan(2 * config('services.ai.context_request_timeout'), $job->timeout);
         $this->assertLessThan(config('queue.connections.database.retry_after'), $job->timeout);
@@ -707,12 +707,22 @@ class EventContextSummaryJobTest extends TestCase
         $userJson = $request['input'][0]['content'][0]['text'];
         $laterPosition = mb_strpos($userJson, '"source_id": '.$laterInFirstBatch->id);
         $olderPosition = mb_strpos($userJson, '"source_id": '.$olderInFirstBatch->id);
+        $evidenceSources = collect(json_decode($userJson, true, 512, JSON_THROW_ON_ERROR)['source_batches'])
+            ->flatMap(fn (array $batch): array => $batch['sources'])
+            ->keyBy('source_id');
 
         $this->assertStringContainsString('"upload_batch": "'.$firstBatch.'"', $userJson);
         $this->assertStringContainsString('"visible_time": "12:50"', $userJson);
         $this->assertStringContainsString('"visible_time": "11:50"', $userJson);
         $this->assertStringContainsString('"source_id": '.$oldScreenshotUploadedLast->id, $userJson);
         $this->assertStringContainsString('"message_timeline": null', $userJson);
+        $this->assertArrayNotHasKey('ocr_text', $evidenceSources->get($laterInFirstBatch->id));
+        $this->assertArrayNotHasKey('ocr_text', $evidenceSources->get($olderInFirstBatch->id));
+        $this->assertArrayNotHasKey('ocr_text', $evidenceSources->get($nextDay->id));
+        $this->assertSame(
+            "Іра\nЗустрічаємось о 14:00.\n18.08.2026 09:00",
+            $evidenceSources->get($oldScreenshotUploadedLast->id)['ocr_text'],
+        );
         $this->assertStringContainsString('position означає лише порядок передавання файлів', $systemPrompt);
         $this->assertStringContainsString('Пізніше завантажений скриншот з явно старішою датою лишається старішим', $systemPrompt);
         $this->assertStringContainsString('це не warning і не unresolved question', $systemPrompt);
