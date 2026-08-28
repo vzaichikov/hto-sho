@@ -81,6 +81,7 @@ const eventCreateForm = document.querySelector('[data-event-create]');
 if (eventCreateForm) {
     const titleInput = eventCreateForm.querySelector('[data-create-title]');
     const descriptionInput = eventCreateForm.querySelector('[data-create-description]');
+    const budgetInput = eventCreateForm.querySelector('[data-create-budget]');
     const stepPanels = Array.from(eventCreateForm.querySelectorAll('[data-create-step]'));
     const stepIndicators = Array.from(document.querySelectorAll('[data-create-step-indicator]'));
     const stepLine = document.querySelector('[data-create-step-line]');
@@ -90,19 +91,24 @@ if (eventCreateForm) {
     const requestError = eventCreateForm.querySelector('[data-create-request-error]');
     const serverError = document.querySelector('[data-create-server-error]');
     const descriptionCount = eventCreateForm.querySelector('[data-create-description-count]');
+    const fieldInputs = {
+        title: titleInput,
+        description: descriptionInput,
+        budget_amount: budgetInput,
+    };
     let currentStep = Number(eventCreateForm.dataset.initialStep) === 2 ? 2 : 1;
 
     const fieldError = (field) => eventCreateForm.querySelector(`[data-create-error="${field}"]`);
 
     const setFieldError = (field, message = '') => {
         const error = fieldError(field);
-        const input = field === 'title' ? titleInput : descriptionInput;
+        const input = fieldInputs[field];
 
         if (error) {
             error.textContent = message;
         }
 
-        input.toggleAttribute('aria-invalid', message !== '');
+        input?.toggleAttribute('aria-invalid', message !== '');
     };
 
     const setStep = (step) => {
@@ -180,6 +186,33 @@ if (eventCreateForm) {
         return true;
     };
 
+    const validateBudget = () => {
+        if (budgetInput.validity.badInput || (budgetInput.value !== '' && ! Number.isFinite(budgetInput.valueAsNumber))) {
+            setFieldError('budget_amount', 'Бюджет має бути числом. Без фінансового сюрреалізму.');
+            budgetInput.focus();
+
+            return false;
+        }
+
+        if (budgetInput.value !== '' && budgetInput.valueAsNumber < 0) {
+            setFieldError('budget_amount', 'Бюджет не може бути відʼємним. Навіть Гусь так не вміє.');
+            budgetInput.focus();
+
+            return false;
+        }
+
+        if (budgetInput.value !== '' && budgetInput.valueAsNumber > 9999999999.99) {
+            setFieldError('budget_amount', 'Бюджет завеликий. Тут уже потрібен не Гусь, а казначейство.');
+            budgetInput.focus();
+
+            return false;
+        }
+
+        setFieldError('budget_amount');
+
+        return true;
+    };
+
     const showRequestError = (message = '') => {
         requestError.textContent = message;
         requestError.classList.toggle('hidden', message === '');
@@ -227,6 +260,7 @@ if (eventCreateForm) {
         setFieldError('description');
         descriptionCount.textContent = descriptionInput.value.length;
     });
+    budgetInput.addEventListener('input', () => setFieldError('budget_amount'));
 
     eventCreateForm.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -239,6 +273,12 @@ if (eventCreateForm) {
         }
 
         if (! validateDescription()) {
+            setStep(2);
+
+            return;
+        }
+
+        if (! validateBudget()) {
             setStep(2);
 
             return;
@@ -266,10 +306,12 @@ if (eventCreateForm) {
             if (response.status === 422 && payload.errors) {
                 const titleMessage = payload.errors.title?.[0] ?? '';
                 const descriptionMessage = payload.errors.description?.[0] ?? '';
+                const budgetMessage = payload.errors.budget_amount?.[0] ?? '';
                 setFieldError('title', titleMessage);
                 setFieldError('description', descriptionMessage);
+                setFieldError('budget_amount', budgetMessage);
                 setStep(titleMessage ? 1 : 2);
-                (titleMessage ? titleInput : descriptionInput).focus();
+                (titleMessage ? titleInput : descriptionMessage ? descriptionInput : budgetInput).focus();
 
                 return;
             }

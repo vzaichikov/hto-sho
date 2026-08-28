@@ -55,6 +55,8 @@ class EventCreationTest extends TestCase
             ->assertSee('Мені є 18 років, і ми будемо пити алкоголь.')
             ->assertSee('Гусь попереджає, що надмірне вживання алкоголю шкідливе для вашого здоровʼя.')
             ->assertSee('data-create-alcohol-planned', escape: false)
+            ->assertSee('Бюджет, ₴')
+            ->assertSee('data-create-budget', escape: false)
             ->assertSee('data-event-create', escape: false)
             ->assertSee('data-create-checking', escape: false)
             ->assertSee('aria-live="assertive"', escape: false)
@@ -72,13 +74,34 @@ class EventCreationTest extends TestCase
             ->post(route('events.store'), [
                 'title' => 'Пікнік для своїх',
                 'description' => '   ',
+                'budget_amount' => '2750.50',
             ]);
 
         $response
             ->assertOk()
             ->assertSee('value="Пікнік для своїх"', escape: false)
+            ->assertSee('value="2750.50"', escape: false)
             ->assertSee('data-initial-step="2"', escape: false)
             ->assertSee('Підкиньте Гусю хоч кілька слів про задум.');
+        $this->assertSame(0, Event::query()->whereBelongsTo($user)->count());
+        Http::assertNothingSent();
+    }
+
+    public function test_budget_must_be_a_non_negative_number(): void
+    {
+        $user = User::factory()->create();
+        $this->clearCreationLimit($user);
+
+        $this->actingAs($user)
+            ->postJson(route('events.store'), [
+                'title' => 'Пікнік для своїх',
+                'description' => 'Пікнік на озері.',
+                'budget_amount' => -1,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrorFor('budget_amount')
+            ->assertJsonPath('errors.budget_amount.0', 'Бюджет не може бути відʼємним. Навіть Гусь так не вміє.');
+
         $this->assertSame(0, Event::query()->whereBelongsTo($user)->count());
         Http::assertNothingSent();
     }
@@ -126,6 +149,7 @@ class EventCreationTest extends TestCase
         $response = $this->actingAs($user)->postJson(route('events.store'), [
             'title' => 'Наша пригода',
             'description' => $description,
+            'budget_amount' => '4200.50',
             'alcohol_planned' => true,
         ]);
 
@@ -135,6 +159,7 @@ class EventCreationTest extends TestCase
             ->assertJsonPath('redirect', route('events.show', $event));
         $this->assertSame('Наша пригода', $event->title);
         $this->assertSame($description, $event->description);
+        $this->assertSame('4200.50', $event->budget_amount);
         $this->assertTrue($event->alcohol_planned);
         $this->assertSame(1, $event->evidence_version);
         $this->assertSame(EventStatus::Processing, $event->status);
@@ -258,11 +283,13 @@ class EventCreationTest extends TestCase
             ->post(route('events.store'), [
                 'title' => 'Пікнік без паніки',
                 'description' => 'Пікнік на озері.',
+                'budget_amount' => '3456.78',
             ])
             ->assertStatus(503)
             ->assertSee('Гусь завис над задумом. Нічого не зберегли — спробуйте ще раз.')
             ->assertSee('value="Пікнік без паніки"', escape: false)
             ->assertSee('Пікнік на озері.')
+            ->assertSee('value="3456.78"', escape: false)
             ->assertSee('data-initial-step="2"', escape: false);
 
         $this->assertSame(0, Event::query()->whereBelongsTo($user)->count());

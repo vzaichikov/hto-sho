@@ -1,8 +1,9 @@
 @php
     $formValues = $form ?? [];
-    $step = $initialStep ?? ($errors->has('description') || isset($failureMessage) ? 2 : 1);
+    $step = $initialStep ?? ($errors->hasAny(['description', 'budget_amount']) || isset($failureMessage) ? 2 : 1);
     $titleValue = old('title', $formValues['title'] ?? '');
     $descriptionValue = old('description', $formValues['description'] ?? '');
+    $budgetAmountValue = old('budget_amount', $formValues['budget_amount'] ?? '');
     $alcoholPlannedValue = (bool) old('alcohol_planned', $formValues['alcohol_planned'] ?? false);
 @endphp
 
@@ -89,6 +90,29 @@
                         </div>
                         <p class="mt-2 min-h-5 text-sm font-semibold text-orange-dark" id="event-description-error" data-create-error="description">{{ $errors->first('description') }}</p>
 
+                        <div class="mt-5">
+                            <div class="flex items-baseline justify-between gap-3">
+                                <label class="block text-sm font-extrabold" for="event-budget-amount">Бюджет, ₴</label>
+                                <span class="text-xs font-bold text-muted">необовʼязково</span>
+                            </div>
+                            <input
+                                class="mt-2 w-full rounded-2xl border-2 border-ink/15 bg-canvas px-4 py-4 text-base font-bold outline-none transition placeholder:text-muted/55 focus:border-green focus:ring-4 focus:ring-green/15"
+                                id="event-budget-amount"
+                                name="budget_amount"
+                                type="number"
+                                min="0"
+                                max="9999999999.99"
+                                step="0.01"
+                                inputmode="decimal"
+                                placeholder="Наприклад, 3000"
+                                value="{{ $budgetAmountValue }}"
+                                aria-describedby="event-budget-help event-budget-error"
+                                data-create-budget
+                            >
+                            <p class="mt-2 text-xs leading-5 text-muted" id="event-budget-help">Якщо ще не вирішили — лишайте порожнім. Гусь не домалює суму зі стелі.</p>
+                            <p class="mt-2 min-h-5 text-sm font-semibold text-orange-dark" id="event-budget-error" data-create-error="budget_amount">{{ $errors->first('budget_amount') }}</p>
+                        </div>
+
                         <div class="mt-5 rounded-2xl border-2 border-ink/15 bg-yellow/20 p-4 transition focus-within:border-green focus-within:ring-4 focus-within:ring-green/15">
                             <input type="hidden" name="alcohol_planned" value="0">
                             <label class="flex cursor-pointer items-start gap-3" for="event-alcohol-planned">
@@ -133,7 +157,7 @@
             <aside class="relative min-h-72 overflow-hidden border-t-2 border-ink bg-yellow/35 p-6 lg:min-h-full lg:border-l-2 lg:border-t-0 lg:p-7">
                 <span class="inline-block -rotate-2 rounded-sm bg-paper px-3 py-1 font-display text-lg">Без допиту з пристрастю</span>
                 <p class="mt-5 max-w-64 text-sm font-semibold leading-6">Назва — щоб упізнати подію. Задум — щоб Гусь розумів, у який бік клювати список.</p>
-                <p class="mt-4 max-w-60 text-xs leading-5 text-muted">Людей, алергії, бюджет і домовленості можна додати пізніше з чату. Невідоме так і лишиться невідомим — без магічних цифр зі стелі.</p>
+                <p class="mt-4 max-w-60 text-xs leading-5 text-muted">Людей, алергії й домовленості можна додати пізніше з чату. Невідоме так і лишиться невідомим — без магічних цифр зі стелі.</p>
                 <span class="absolute right-7 top-6 rotate-12 font-display text-4xl text-green" aria-hidden="true">♡</span>
                 <img class="absolute -bottom-24 right-0 w-48 drop-shadow-xl sm:right-8 sm:w-56 lg:-bottom-20 lg:-right-8 lg:w-64" src="{{ asset('images/brand/goose-sho.png') }}" alt="" aria-hidden="true">
             </aside>

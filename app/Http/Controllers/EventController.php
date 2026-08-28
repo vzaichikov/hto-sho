@@ -189,7 +189,7 @@ class EventController extends Controller
 
         return response()->view('events.create', [
             'failureMessage' => $message,
-            'form' => $request->only(['title', 'description', 'alcohol_planned']),
+            'form' => $request->only(['title', 'description', 'budget_amount', 'alcohol_planned']),
             'initialStep' => 2,
         ], 503);
     }

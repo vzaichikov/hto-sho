@@ -21,6 +21,7 @@ class StoreEventRequest extends FormRequest
         return [
             'title' => ['required', 'string', 'max:120'],
             'description' => ['required', 'string', 'max:500'],
+            'budget_amount' => ['nullable', 'numeric', 'min:0', 'max:9999999999.99'],
             'alcohol_planned' => ['required', 'boolean'],
         ];
     }
@@ -35,6 +36,9 @@ class StoreEventRequest extends FormRequest
             'title.max' => 'Назва розігналася далі 120 символів. Трошки підріжте.',
             'description.required' => 'Підкиньте Гусю хоч кілька слів про задум.',
             'description.max' => 'Гусь просив коротко: до 500 символів, будь ласка.',
+            'budget_amount.numeric' => 'Бюджет має бути числом. Без фінансового сюрреалізму.',
+            'budget_amount.min' => 'Бюджет не може бути відʼємним. Навіть Гусь так не вміє.',
+            'budget_amount.max' => 'Бюджет завеликий. Тут уже потрібен не Гусь, а казначейство.',
         ];
     }
 

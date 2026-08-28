@@ -12,7 +12,7 @@ class CreateEventAction
     public function __construct(private readonly StartEventAnalysisAction $startAnalysis) {}
 
     /**
-     * @param  array{title: string, description: string, alcohol_planned: bool}  $attributes
+     * @param  array{title: string, description: string, budget_amount?: int|float|string|null, alcohol_planned: bool}  $attributes
      */
     public function execute(User $user, array $attributes): Event
     {
