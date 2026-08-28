@@ -36,7 +36,49 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertTrue($job->failOnTimeout);
         $this->assertGreaterThan(2 * config('services.ai.context_request_timeout'), $job->timeout);
         $this->assertLessThan(config('queue.connections.database.retry_after'), $job->timeout);
-        $this->assertGreaterThanOrEqual(20, $job->tries);
+        $this->assertSame(0, $job->tries);
+        $this->assertSame(7200, $job->uniqueFor);
+        $this->assertGreaterThan(now()->addMinutes(119), $job->retryUntil());
+        $this->assertLessThan(now()->addMinutes(121), $job->retryUntil());
+    }
+
+    public function test_waiting_for_unfinished_images_releases_within_the_time_budget(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+        EventSource::factory()->for($event)->create([
+            'type' => EventSourceType::Image,
+            'status' => EventSourceStatus::Processing,
+            'text' => null,
+            'processed_at' => null,
+        ]);
+        $job = (new SummarizeEventContextJob($event->id, $taskId))
+            ->withFakeQueueInteractions();
+
+        $job->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $job->assertReleased(delay: 5);
+        $this->assertSame(EventAnalysisStage::WaitingForImages, $event->refresh()->analysis_stage);
+        Http::assertNothingSent();
+    }
+
+    public function test_terminal_failure_hides_the_internal_exception_from_the_customer(): void
+    {
+        [$event, $taskId] = $this->activeEvent(1);
+
+        (new SummarizeEventContextJob($event->id, $taskId))->failed(
+            new \RuntimeException('App\\Jobs\\SummarizeEventContextJob has been attempted too many times.'),
+        );
+
+        $event->refresh();
+        $this->assertSame(EventAnalysisStage::Failed, $event->analysis_stage);
+        $this->assertSame(
+            'Гусь не зміг зібрати контекст цього разу. Усі матеріали збережені — спробуйте запустити аналіз ще раз.',
+            $event->analysis_error,
+        );
+        $this->assertStringNotContainsString('App\\Jobs', $event->analysis_error);
     }
 
     public function test_complete_named_roster_cannot_reopen_a_participant_names_question(): void

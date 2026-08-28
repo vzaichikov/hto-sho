@@ -94,7 +94,12 @@ PROMPT;
         );
 
         return ImageExtractionData::from($this->decodedPayload(
-            $this->send($payload, $harnessRun, 'OCR та класифікація зображення'),
+            $this->send(
+                $payload,
+                $harnessRun,
+                'OCR та класифікація зображення',
+                timeoutSeconds: (int) config('services.ai.image_request_timeout', 150),
+            ),
         ));
     }
 

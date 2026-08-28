@@ -42,6 +42,14 @@ class ImageExtractionJobTest extends TestCase
     public function test_one_vision_request_classifies_ocrs_and_summarizes_an_image(): void
     {
         [$extraction, $source] = $this->queuedImage();
+        $requestTimeout = null;
+        Http::globalMiddleware(function (callable $handler) use (&$requestTimeout): callable {
+            return function ($request, array $options) use ($handler, &$requestTimeout) {
+                $requestTimeout = $options['timeout'] ?? null;
+
+                return $handler($request, $options);
+            };
+        });
         Http::fake([
             'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse([
                 'classification' => 'chat_screenshot',
@@ -71,6 +79,7 @@ class ImageExtractionJobTest extends TestCase
         $this->assertFalse($extraction->message_timeline[0]['is_quoted']);
         $this->assertSame(EventSourceStatus::Processed, $source->status);
         $this->assertSame(EventSourceInclusion::Included, $source->inclusion);
+        $this->assertSame(150, $requestTimeout);
         Http::assertSentCount(1);
         Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.openai.com/v1/responses'
             && $request['text']['format']['strict'] === true
@@ -82,6 +91,17 @@ class ImageExtractionJobTest extends TestCase
             && str_contains($request['instructions'], 'короткі повідомлення «Я буду», «О 15:00» чи «Беру лід» можуть бути chat_screenshot')
             && str_contains($request['instructions'], 'пиши з легкою самоіронією від «Гуся Шо»')
             && str_starts_with($request['input'][0]['content'][1]['image_url'], 'data:image/png;base64,'));
+    }
+
+    public function test_image_timeout_fits_the_queue_visibility_budget(): void
+    {
+        $job = new ProcessImageExtractionJob(1);
+
+        $this->assertSame(150, config('services.ai.image_request_timeout'));
+        $this->assertSame(170, $job->timeout);
+        $this->assertSame(900, $job->uniqueFor);
+        $this->assertGreaterThan(config('services.ai.image_request_timeout'), $job->timeout);
+        $this->assertLessThan(config('queue.connections.database.retry_after'), $job->timeout);
     }
 
     public function test_irrelevant_image_is_processed_but_dismissed_with_a_reason(): void

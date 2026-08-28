@@ -25,11 +25,11 @@ class ProcessImageExtractionJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
-    public int $timeout = 90;
+    public int $timeout = 170;
 
     public int $tries = 3;
 
-    public int $uniqueFor = 300;
+    public int $uniqueFor = 900;
 
     /** @var array<int, int> */
     public array $backoff = [10, 30, 60];

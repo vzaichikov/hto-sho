@@ -1469,6 +1469,7 @@ if (workspace) {
     let analysisTaskId = null;
     let analysisMinimized = false;
     let analysisStartedAt = null;
+    let analysisTerminalStateKey = null;
 
     const activeAnalysisStages = ['waiting_for_quiet', 'waiting_for_images', 'summarizing'];
     const analysisScrollBehavior = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
@@ -1511,9 +1512,24 @@ if (workspace) {
         try {
             const stored = JSON.parse(window.sessionStorage.getItem(analysisStorageKey(taskId)) ?? '[]');
 
-            return Array.isArray(stored)
-                ? stored.filter((message) => typeof message === 'string' && message.trim() !== '').slice(-100)
-                : [];
+            if (! Array.isArray(stored)) {
+                return [];
+            }
+
+            const seenMessages = new Set();
+
+            return stored
+                .filter((message) => typeof message === 'string' && message.trim() !== '')
+                .filter((message) => {
+                    if (seenMessages.has(message)) {
+                        return false;
+                    }
+
+                    seenMessages.add(message);
+
+                    return true;
+                })
+                .slice(-100);
         } catch {
             return [];
         }
@@ -1539,7 +1555,10 @@ if (workspace) {
     const appendAnalysisStep = (message, { animate = true, persist = true } = {}) => {
         const normalizedMessage = typeof message === 'string' ? message.trim() : '';
 
-        if (! analysisSteps || normalizedMessage === '' || analysisSteps.lastElementChild?.textContent === normalizedMessage) {
+        const alreadyShown = Array.from(analysisSteps?.children ?? [])
+            .some((row) => row.textContent === normalizedMessage);
+
+        if (! analysisSteps || normalizedMessage === '' || alreadyShown) {
             return;
         }
 
@@ -1582,6 +1601,7 @@ if (workspace) {
 
         analysisTaskId = taskId;
         analysisStartedAt = Number.isNaN(parsedStartedAt) ? Date.now() : parsedStartedAt;
+        analysisTerminalStateKey = null;
         analysisSteps.replaceChildren();
         storedAnalysisSteps(taskId).forEach((message) => {
             appendAnalysisStep(message, { animate: false, persist: false });
@@ -1654,6 +1674,15 @@ if (workspace) {
         const message = task.error || task.message || title;
 
         useAnalysisTask(taskId, task.started_at);
+        const terminalStateKey = active
+            ? null
+            : [taskId, task.stage, task.error ?? ''].join('|');
+
+        if (terminalStateKey !== null && terminalStateKey === analysisTerminalStateKey) {
+            return;
+        }
+
+        analysisTerminalStateKey = terminalStateKey;
         appendAnalysisStep(task.message);
 
         if (task.error) {

@@ -17,6 +17,7 @@ use App\Models\HarnessRun;
 use App\PlanGenerationStatus;
 use App\Services\ContextAnalysisService;
 use App\Services\HarnessRecorder;
+use DateTimeInterface;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -35,9 +36,9 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
 
     public bool $failOnTimeout = true;
 
-    public int $tries = 30;
+    public int $tries = 0;
 
-    public int $uniqueFor = 600;
+    public int $uniqueFor = 7200;
 
     /** @var array<int, int> */
     public array $backoff = [10, 30, 60];
@@ -52,6 +53,11 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
     public function uniqueId(): string
     {
         return $this->eventId.':'.$this->taskId;
+    }
+
+    public function retryUntil(): DateTimeInterface
+    {
+        return now()->addHours(2);
     }
 
     public function handle(ContextAnalysisService $analysis, HarnessRecorder $harnessRecorder): void
@@ -298,11 +304,9 @@ class SummarizeEventContextJob implements ShouldBeUnique, ShouldQueue
                 'finished_at' => now(),
             ]);
 
-        $this->markFailed(mb_substr(
-            $exception?->getMessage() ?? 'Не вдалося скласти підсумок.',
-            0,
-            2000,
-        ));
+        $this->markFailed(
+            'Гусь не зміг зібрати контекст цього разу. Усі матеріали збережені — спробуйте запустити аналіз ще раз.',
+        );
     }
 
     private function hasUnfinishedImages(Event $event): bool

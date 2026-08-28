@@ -251,6 +251,8 @@ class ContextHarnessTest extends TestCase
         $css = file_get_contents(resource_path('css/app.css'));
         $this->assertStringContainsString('setInterval(pollStatus, 2000)', $javascript);
         $this->assertStringContainsString('window.sessionStorage', $javascript);
+        $this->assertStringContainsString('analysisTerminalStateKey', $javascript);
+        $this->assertStringContainsString('seenMessages = new Set()', $javascript);
         $this->assertStringContainsString('overlay.showModal()', $javascript);
         $this->assertStringContainsString('formatAnalysisElapsed', $javascript);
         $this->assertStringContainsString('setInterval(updateAnalysisElapsed, 1000)', $javascript);
