@@ -41,8 +41,15 @@ class EventStatusController extends Controller
                 : 15 + (int) round(($terminalImages / $totalImages) * 55);
         }
 
+        $activeUploadBatches = $event->sources
+            ->where('type', EventSourceType::Image)
+            ->whereIn('status', [EventSourceStatus::Pending, EventSourceStatus::Processing])
+            ->pluck('upload_batch')
+            ->unique();
         $sources = $event->sources->map(fn ($source): array => [
             'id' => $source->id,
+            'type' => $source->type->value,
+            'active_batch' => $activeUploadBatches->contains($source->upload_batch),
             'status' => $source->status->value,
             'status_label' => $source->status->label(),
             'inclusion' => $source->inclusion->value,

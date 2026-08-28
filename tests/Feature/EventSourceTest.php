@@ -234,7 +234,11 @@ class EventSourceTest extends TestCase
             'state_version' => 2,
             'evidence_version' => 3,
         ]);
-        EventSource::factory()->for($event)->create(['status' => EventSourceStatus::Pending]);
+        EventSource::factory()->for($event)->create([
+            'type' => EventSourceType::Image,
+            'text' => null,
+            'status' => EventSourceStatus::Pending,
+        ]);
 
         $this->actingAs($owner)
             ->getJson(route('events.status', $event))
@@ -242,6 +246,8 @@ class EventSourceTest extends TestCase
             ->assertJsonPath('status', 'processing')
             ->assertJsonPath('state_version', 2)
             ->assertJsonPath('sources_count', 1)
+            ->assertJsonPath('sources.0.type', 'image')
+            ->assertJsonPath('sources.0.active_batch', true)
             ->assertJsonPath('source_counts.pending', 1)
             ->assertJsonPath('evidence_version', 3)
             ->assertJsonPath('has_unanalyzed_changes', true)

@@ -1480,6 +1480,8 @@ if (workspace) {
     const restoreButton = document.querySelector('[data-analysis-restore]');
     const analysisSteps = overlay?.querySelector('[data-analysis-steps]');
     const analysisElapsed = overlay?.querySelector('[data-analysis-elapsed]');
+    const analysisCurrentWorkTitle = overlay?.querySelector('[data-analysis-current-work-title]');
+    const analysisCurrentWorkDetail = overlay?.querySelector('[data-analysis-current-work-detail]');
     const initialStateVersion = Number(workspace.dataset.eventStateVersion);
     const initialPlanStatus = workspace.dataset.eventPlanStatus;
     let analysisTaskId = null;
@@ -1487,13 +1489,14 @@ if (workspace) {
     let analysisStartedAt = null;
     let analysisTerminalStateKey = null;
 
-    const activeAnalysisStages = ['waiting_for_quiet', 'waiting_for_images', 'summarizing'];
+    const activeAnalysisStages = ['waiting_for_quiet', 'waiting_for_images', 'summarizing', 'planning'];
     const analysisScrollBehavior = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
     const analysisStorageKey = (taskId) => `hto-sho:analysis:${taskId}:steps`;
     const analysisTitle = (stage) => ({
         waiting_for_quiet: 'Гусь слухає новий контекст',
         waiting_for_images: 'Гусь читає картинки',
         summarizing: 'Гусь складає все докупи',
+        planning: 'Гусь складає список',
         completed: 'Гусь усе розгріб',
         completed_with_warnings: 'Гусь усе розгріб, але є нюанси',
         failed: 'Гусь перечепився',
@@ -1675,13 +1678,101 @@ if (workspace) {
         minimizedOverlay.querySelector('img')?.classList.toggle('goose-working', active);
     };
 
-    const setOverlay = (task) => {
+    const taskPresentation = (task, status) => {
+        const contextIsReady = ['completed', 'completed_with_warnings'].includes(task.stage);
+        const planIsBuilding = ['pending', 'processing'].includes(status.plan_generation_status);
+
+        if (! contextIsReady || ! planIsBuilding) {
+            return task;
+        }
+
+        return {
+            ...task,
+            stage: 'planning',
+            progress: 94,
+            message: 'Контекст уже готовий. Тепер Гусь складає зрозумілий список покупок.',
+        };
+    };
+
+    const updateCurrentWork = (task, status) => {
+        if (! analysisCurrentWorkTitle || ! analysisCurrentWorkDetail) {
+            return;
+        }
+
+        const sources = Array.isArray(status.sources) ? status.sources : [];
+        const imageSources = sources.filter((source) => source.type === 'image');
+        const activeBatchImages = imageSources.filter((source) => source.active_batch === true);
+        const currentImages = activeBatchImages.length > 0
+            ? activeBatchImages
+            : imageSources.filter((source) => ['pending', 'processing'].includes(source.status));
+        const processingImages = currentImages.filter((source) => source.status === 'processing');
+        const processedImages = currentImages.filter((source) => source.status === 'processed').length;
+        const failedImages = currentImages.filter((source) => source.status === 'failed').length;
+        const pendingImages = currentImages.filter((source) => source.status === 'pending').length;
+        let title = 'Тримає матеріали під крилом';
+        let detail = 'Стежить, щоб нічого не загубилося.';
+
+        if (task.stage === 'waiting_for_quiet') {
+            title = 'Чекає останні кілька секунд';
+            detail = sources.length > 0
+                ? `Уже прийнято матеріалів: ${sources.length}.`
+                : 'Дає останньому повідомленню спокійно долетіти.';
+        } else if (task.stage === 'waiting_for_images') {
+            if (processingImages.length === 1) {
+                const currentImage = currentImages.findIndex((source) => source.id === processingImages[0].id) + 1;
+                title = `Читає картинку ${currentImage} із ${currentImages.length}`;
+            } else if (processingImages.length > 1) {
+                title = `Читає картинки одночасно: ${processingImages.length}`;
+            } else {
+                title = 'Готує наступну картинку';
+            }
+
+            const progressParts = currentImages.length > 0
+                ? [`Розібрано ${processedImages} із ${currentImages.length}`]
+                : ['Усі нові картинки вже розібрано'];
+
+            if (pendingImages > 0) {
+                progressParts.push(`чекають ${pendingImages}`);
+            }
+
+            if (failedImages > 0) {
+                progressParts.push(`не піддалися ${failedImages}`);
+            }
+
+            detail = `${progressParts.join(' · ')}.`;
+        } else if (task.stage === 'summarizing') {
+            title = 'Зводить усе в одну картину';
+            detail = Number.isFinite(Number(status.included_sources_count))
+                ? `Матеріалів у роботі: ${Number(status.included_sources_count)}.`
+                : 'Звіряє людей, обмеження й домовленості.';
+        } else if (task.stage === 'planning') {
+            title = 'Складає список покупок';
+            detail = 'Звіряє кількості, обмеження й те, хто що приносить.';
+        } else if (task.stage === 'failed') {
+            title = 'Зупинився й нічого не вигадує';
+            detail = 'Матеріали збережені — можна буде спробувати ще раз.';
+        } else if (['completed', 'completed_with_warnings'].includes(task.stage)) {
+            title = 'Усе важливе вже зібрано';
+            detail = 'Контекст і список готові до вашого перегляду.';
+        }
+
+        if (analysisCurrentWorkTitle.textContent !== title) {
+            analysisCurrentWorkTitle.textContent = title;
+        }
+
+        if (analysisCurrentWorkDetail.textContent !== detail) {
+            analysisCurrentWorkDetail.textContent = detail;
+        }
+    };
+
+    const setOverlay = (task, status = {}) => {
         if (! overlay || ! task) {
             closeAnalysisExperience();
 
             return;
         }
 
+        task = taskPresentation(task, status);
         const taskId = task.id ?? task.task_id ?? analysisTaskId;
         const active = activeAnalysisStages.includes(task.stage);
         const failed = task.stage === 'failed';
@@ -1690,6 +1781,7 @@ if (workspace) {
         const message = task.error || task.message || title;
 
         useAnalysisTask(taskId, task.started_at);
+        updateCurrentWork(task, status);
         const terminalStateKey = active
             ? null
             : [taskId, task.stage, task.error ?? ''].join('|');
@@ -1771,7 +1863,7 @@ if (workspace) {
 
             const data = await response.json();
             const sourceFinished = data.sources.some(applySourceStatus);
-            setOverlay(data.full_task);
+            setOverlay(data.full_task, data);
 
             const statusBadge = document.querySelector('[data-event-status-badge]');
 
@@ -1868,6 +1960,8 @@ if (workspace) {
             message: overlay.dataset.analysisMessageValue,
             error: overlay.dataset.analysisErrorValue,
             started_at: overlay.dataset.analysisStartedAt,
+        }, {
+            plan_generation_status: initialPlanStatus,
         });
     }
 

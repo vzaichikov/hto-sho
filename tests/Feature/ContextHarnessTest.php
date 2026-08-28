@@ -235,9 +235,13 @@ class ContextHarnessTest extends TestCase
             ->assertSee('data-analysis-restore', escape: false)
             ->assertSee('data-analysis-steps', escape: false)
             ->assertSee('data-analysis-elapsed', escape: false)
+            ->assertSee('data-analysis-current-work', escape: false)
+            ->assertSee('data-analysis-current-work-title', escape: false)
+            ->assertSee('data-analysis-current-work-detail', escape: false)
             ->assertSee('Гусь розгрібає контекст')
             ->assertSee('Не заважайте, він красивий')
-            ->assertSee('Великий чат може зайняти кілька хвилин.')
+            ->assertSee('Зараз у лапах')
+            ->assertSee('Вікно можна згорнути — Гусь не загубиться.')
             ->assertSee('data-source-card', escape: false)
             ->assertSee('Що Гусь уже бачив')
             ->assertSee('data-harness-ai-labels', escape: false)
@@ -256,6 +260,10 @@ class ContextHarnessTest extends TestCase
         $this->assertStringContainsString('overlay.showModal()', $javascript);
         $this->assertStringContainsString('formatAnalysisElapsed', $javascript);
         $this->assertStringContainsString('setInterval(updateAnalysisElapsed, 1000)', $javascript);
+        $this->assertStringContainsString('taskPresentation', $javascript);
+        $this->assertStringContainsString('updateCurrentWork', $javascript);
+        $this->assertStringContainsString("source.type === 'image'", $javascript);
+        $this->assertStringContainsString("stage: 'planning'", $javascript);
         $this->assertStringContainsString('prefers-reduced-motion: reduce', $css);
         $this->assertStringContainsString('.goose-working', $css);
         $this->assertStringContainsString('.analysis-step-arrival', $css);

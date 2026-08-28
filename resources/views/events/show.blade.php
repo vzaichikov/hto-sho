@@ -903,10 +903,15 @@
             </header>
 
             <div class="grid min-h-0 flex-1 grid-cols-[minmax(7.5rem,0.72fr)_minmax(0,1.28fr)] gap-3 p-3 sm:grid-cols-[minmax(15rem,0.85fr)_minmax(0,1.15fr)] sm:gap-6 sm:p-6">
-                <section class="relative flex min-h-0 flex-col items-center justify-center overflow-hidden rounded-[24px] bg-yellow/30 px-2 py-4 sm:px-5">
+                <section class="relative flex min-h-0 flex-col items-center justify-center gap-3 overflow-hidden rounded-[24px] bg-yellow/30 px-2 py-4 sm:px-5">
                     <span class="absolute left-3 top-3 -rotate-2 rounded-sm bg-paper px-3 py-1 font-display text-base leading-[1.15] shadow-[2px_2px_0_#F7C84B] sm:left-5 sm:top-5 sm:text-xl">Не заважайте, він красивий</span>
-                    <img class="goose-working h-[min(23rem,54dvh)] w-full max-w-[21rem] object-contain sm:h-[min(34rem,68dvh)]" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо працює з новим контекстом">
-                    <p class="relative z-10 -mt-2 max-w-sm rounded-2xl bg-paper/85 px-3 py-2 text-center text-xs font-bold leading-5 text-green-dark shadow-[2px_2px_0_#F7C84B] sm:text-sm">Великий чат може зайняти кілька хвилин. Вікно можна згорнути — Гусь не загубиться.</p>
+                    <img class="goose-working min-h-0 w-full max-w-[21rem] flex-1 object-contain pt-7 sm:max-h-[34rem] sm:pt-10" src="{{ asset('images/brand/goose-sho.png') }}" alt="Гусь Шо працює з новим контекстом">
+                    <div class="relative z-10 w-full max-w-sm rounded-[20px] border-2 border-ink/10 bg-paper/90 p-3 text-left shadow-[3px_3px_0_#F7C84B] sm:p-4" data-analysis-current-work aria-live="polite" aria-atomic="true">
+                        <p class="text-[0.65rem] font-extrabold uppercase tracking-[0.14em] text-green-dark sm:text-xs">Зараз у лапах</p>
+                        <p class="mt-1 text-xs font-extrabold leading-5 sm:text-base" data-analysis-current-work-title>Приймає матеріали</p>
+                        <p class="mt-1 text-[0.65rem] leading-4 text-muted sm:text-sm sm:leading-5" data-analysis-current-work-detail>Точний крок зʼявиться за мить.</p>
+                    </div>
+                    <p class="relative z-10 hidden max-w-sm text-center text-xs font-bold leading-5 text-green-dark sm:block">Вікно можна згорнути — Гусь не загубиться.</p>
                 </section>
 
                 <section class="flex min-h-0 flex-col rounded-[24px] bg-ink p-4 text-paper sm:p-6">
