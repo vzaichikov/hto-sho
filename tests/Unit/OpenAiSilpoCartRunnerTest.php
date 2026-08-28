@@ -68,6 +68,10 @@ class OpenAiSilpoCartRunnerTest extends TestCase
                     (string) data_get($payload, 'instructions'),
                     'current_need.search_queries у переданому порядку',
                 )
+                && str_contains(
+                    (string) data_get($payload, 'instructions'),
+                    'limit від 1 до 30',
+                )
                 && data_get($payload, 'tools.0.allowed_tools') === [
                     'silpo_find_products_batch',
                     'silpo_get_products',
@@ -261,6 +265,65 @@ class OpenAiSilpoCartRunnerTest extends TestCase
             json_decode((string) data_get($repairPayload, 'input.5.content.0.text'), true),
             'instruction',
         ));
+    }
+
+    public function test_automatic_mode_skips_after_repair_repeats_an_invalid_catalog_contract(): void
+    {
+        $context = $this->selectionContext();
+        $context['mode'] = 'auto';
+        $context['current_need'] = [
+            ...$context['current_need'],
+            'name' => 'Кукурудза цукрова свіжа в качанах',
+            'category' => 'food',
+            'quantity' => 6,
+            'unit' => 'качанів',
+            'search_queries' => ['кукурудза свіжа качан', 'качани кукурудзи'],
+        ];
+        $context['all_needs'] = [$context['current_need']];
+        $initialResponse = $this->freshCornSelectionResponse();
+        $repairResponse = $this->freshCornSelectionResponse(action: 'skip');
+        $repairArguments = json_decode(
+            (string) data_get($repairResponse, 'output.1.arguments'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $repairArguments['limit'] = 100;
+        $repairResponse['output'][1]['arguments'] = json_encode($repairArguments, JSON_THROW_ON_ERROR);
+        Http::fakeSequence()
+            ->push($initialResponse)
+            ->push($repairResponse);
+
+        $result = app(OpenAiSilpoCartRunner::class)->selectNeed(
+            'silpo-secret-token',
+            $this->cart(),
+            $context,
+        );
+
+        $this->assertNull($result->selectedItem);
+        $this->assertSame(2, $result->toolCallCount);
+        $this->assertSame('Кукурудза цукрова свіжа в качанах', data_get($result->attempts, '0.query'));
+        $this->assertFalse($result->audit->complete);
+        $this->assertSame(['n_01'], $result->audit->remainingNeedKeys);
+        $this->assertStringContainsString('після повторної перевірки', $result->warnings[0]);
+        Http::assertSentCount(2);
+        $repairPayload = Http::recorded()[1][0]->data();
+        $feedback = json_decode(
+            (string) data_get($repairPayload, 'input.5.content.0.text'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $this->assertStringContainsString(
+            'preparation-state conflict',
+            (string) data_get($feedback, 'validation_error'),
+        );
+        $this->assertStringContainsString(
+            'fresh or unprepared',
+            (string) data_get($feedback, 'validation_error'),
+        );
+        $this->assertStringContainsString(
+            'validation_error — це авторитетний feedback',
+            (string) data_get($repairPayload, 'instructions'),
+        );
     }
 
     public function test_later_native_batch_search_accepts_bounded_variants_for_the_same_need(): void
@@ -501,6 +564,54 @@ class OpenAiSilpoCartRunnerTest extends TestCase
                 ],
             ],
         ];
+    }
+
+    /** @return array<string, mixed> */
+    private function freshCornSelectionResponse(string $action = 'select'): array
+    {
+        $response = $this->selectionResponse('corn-grill');
+        $arguments = json_decode(
+            (string) data_get($response, 'output.1.arguments'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $arguments['products'] = ['Кукурудза цукрова свіжа в качанах'];
+        $response['output'][1]['arguments'] = json_encode($arguments, JSON_THROW_ON_ERROR);
+        $output = json_decode(
+            (string) data_get($response, 'output.1.output'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $output['queries'][0]['query'] = 'Кукурудза цукрова свіжа в качанах';
+        $output['queries'][0]['products'][0] = [
+            ...$output['queries'][0]['products'][0],
+            'id' => 'corn-grill',
+            'name' => 'Кукурудза Huercasa гриль',
+            'slug' => 'kukurudza-huercasa-gryl',
+            'stock' => 16,
+            'displayRatio' => '400 г',
+        ];
+        $response['output'][1]['output'] = json_encode($output, JSON_THROW_ON_ERROR);
+        $decision = $this->decision('corn-grill');
+        $decision['action'] = $action;
+        $decision['reason'] = $action === 'skip'
+            ? 'Fresh corn was unavailable, so the need is skipped.'
+            : 'Use the packaged grill corn as a replacement.';
+
+        if ($action === 'skip') {
+            $decision['selected_product_id'] = null;
+            $decision['quantity'] = null;
+            $decision['audit']['complete'] = false;
+            $decision['audit']['covered_need_keys'] = [];
+            $decision['audit']['remaining_need_keys'] = ['n_01'];
+            $decision['audit']['enough_for_people'] = false;
+            $decision['audit']['revisit_need_key'] = 'n_01';
+            $decision['audit']['revisit_query'] = 'Кукурудза цукрова свіжа в качанах';
+        }
+
+        $response['output'][3]['content'][0]['text'] = json_encode($decision, JSON_THROW_ON_ERROR);
+
+        return $response;
     }
 
     /** @return array<string, mixed> */

@@ -90,6 +90,15 @@ final class OpenAiSilpoCartRunner implements AgenticSilpoCartRunner
             $remainingToolCalls = $availableToolCalls - count($calls);
 
             if ($remainingToolCalls < 1 && ! $hasProvenExactCandidate) {
+                if ($this->isAutomaticMode($context)) {
+                    return $this->automaticSkipAfterFailedRepair(
+                        calls: $calls,
+                        fallbackCalls: [],
+                        cart: $cart,
+                        context: $context,
+                    );
+                }
+
                 throw $exception;
             }
 
@@ -121,16 +130,29 @@ final class OpenAiSilpoCartRunner implements AgenticSilpoCartRunner
             $repairCalls = $this->mcpCalls($repairResponse);
             $allCalls = [...$calls, ...$repairCalls];
 
-            if ($usedToolCalls + count($allCalls) > $this->configuration->maxToolCallsPerNeed()) {
-                throw new UnexpectedValueException('Agentic catalog tool-call budget was exceeded.');
-            }
+            try {
+                if ($usedToolCalls + count($allCalls) > $this->configuration->maxToolCallsPerNeed()) {
+                    throw new UnexpectedValueException('Agentic catalog tool-call budget was exceeded.');
+                }
 
-            $result = $this->needResult(
-                $repairResponse,
-                $canReuseCatalogEvidence ? $allCalls : $repairCalls,
-                $cart,
-                $context,
-            );
+                $result = $this->needResult(
+                    $repairResponse,
+                    $canReuseCatalogEvidence ? $allCalls : $repairCalls,
+                    $cart,
+                    $context,
+                );
+            } catch (UnexpectedValueException $repairException) {
+                if (! $this->isAutomaticMode($context)) {
+                    throw $repairException;
+                }
+
+                return $this->automaticSkipAfterFailedRepair(
+                    calls: $allCalls,
+                    fallbackCalls: $canReuseCatalogEvidence ? $calls : $repairCalls,
+                    cart: $cart,
+                    context: $context,
+                );
+            }
 
             return new AgenticCartNeedResultData(
                 selectedItem: $result->selectedItem,
@@ -294,10 +316,11 @@ final class OpenAiSilpoCartRunner implements AgenticSilpoCartRunner
 1. Перший MCP call завжди silpo_find_products_batch з підготовленою retailer-facing current_need.name без перефразування, products має рівно один рядок, route/timeslot копіюй дослівно з catalog_context. Вихідну роль у меню збережено в current_need.note та shopping_plan — не повертай її в пошуковий рядок.
 2. Оціни весь результат. Якщо точний придатний товар є, не шукай рольову заміну.
 3. Лише за нульового або непридатного результату спочатку спробуй ще не використані current_need.search_queries у переданому порядку, потім власні незалежні позитивні запити, category/set browsing або replacements. Після першого точного call один silpo_find_products_batch може містити до 6 лексичних варіантів, але всі вони мають стосуватися лише current_need.
-4. Для алергенів, складу, gluten-free чи іншої неочевидної безпеки викликай silpo_get_product_details для вже знайденого slug. Явний конфлікт або may-contain відхиляй; відсутність даних позначай safety_evidence=unverified.
-5. Не занижуй потребу до stock. Не вигадуй ID, ціну, залишок, фасування, безпеку чи доступність.
-6. Вибери один product_id лише з MCP output цієї сесії. Якщо придатного немає, action=ask в assisted mode або action=skip в automatic mode.
-7. Не викликай cart/account mutation tools; вони не надані.
+4. Для кожного silpo_find_products_batch і silpo_get_products передавай цілий limit від 1 до 30. Ніколи не використовуй limit понад 30.
+5. Для алергенів, складу, gluten-free чи іншої неочевидної безпеки викликай silpo_get_product_details для вже знайденого slug. Явний конфлікт або may-contain відхиляй; відсутність даних позначай safety_evidence=unverified.
+6. Не занижуй потребу до stock. Не вигадуй ID, ціну, залишок, фасування, безпеку чи доступність.
+7. Вибери один product_id лише з MCP output цієї сесії. Якщо придатного немає, action=ask в assisted mode або action=skip в automatic mode.
+8. Не викликай cart/account mutation tools; вони не надані.
 
 quantity — бажана абсолютна кількість товару; застосунок перерахує її за планом, фасуванням, step і stock. is_replacement=true лише для видимої рольової заміни. Поверни лише JSON за схемою.
 PROMPT;
@@ -311,7 +334,11 @@ PROMPT;
             default => 'Попередні MCP calls не є локально допустимим доказом. Повтори повний discovery з нуля: перший call має бути silpo_find_products_batch з рівно одним рядком current_need.name. Наступний batch може містити до 6 лексичних варіантів, але всі вони мають стосуватися лише цієї самої потреби.',
         };
 
-        return $this->selectionInstructions()."\n\nВиправлення після локальної валідації:\n{$repairRule}";
+        return $this->selectionInstructions()."\n\nВиправлення після локальної валідації:\n"
+            .'Останній runtime JSON містить validation_error — це авторитетний feedback застосунку. '
+            .'Виправ саме названу помилку, не повторюй відхилений product_id або невалідні MCP arguments. '
+            .'Якщо коректного вибору немає, поверни action=skip в automatic mode або action=ask в assisted mode.'
+            ."\n{$repairRule}";
     }
 
     private function auditInstructions(): string
@@ -385,6 +412,7 @@ PROMPT;
 
         $eventContext = data_get($context, 'event_context', []);
         $shoppingPlan = data_get($context, 'shopping_plan', []);
+        $this->assertSelectableCandidate($need, $candidate, $cart, $context);
         $selectableCandidates = collect($evidence['candidates'])
             ->filter(fn (array $product): bool => data_get($product, 'available') === true
                 && (float) data_get($product, 'stock', 0) > 0
@@ -468,6 +496,178 @@ PROMPT;
             audit: $decision->audit,
             toolCallCount: count($calls),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $candidate
+     * @param  array<string, mixed>  $context
+     */
+    private function assertSelectableCandidate(
+        array $need,
+        array $candidate,
+        SilpoCartContextData $cart,
+        array $context,
+    ): void {
+        $productName = Str::limit(Str::squish((string) data_get($candidate, 'name', 'selected product')), 160);
+        $needName = Str::limit(Str::squish((string) data_get($need, 'name', 'current need')), 160);
+        $retryGuidance = 'Do not select it again; choose another MCP-observed product, '
+            .'or return action=skip in automatic mode / action=ask in assisted mode.';
+
+        if (data_get($candidate, 'available') !== true) {
+            throw new UnexpectedValueException(
+                "Selected product [{$productName}] is unavailable for need [{$needName}]. {$retryGuidance}",
+            );
+        }
+
+        if ((float) data_get($candidate, 'stock', 0) <= 0) {
+            throw new UnexpectedValueException(
+                "Selected product [{$productName}] has no positive stock for need [{$needName}]. {$retryGuidance}",
+            );
+        }
+
+        if (data_get($candidate, 'company_id') !== $cart->companyId
+            || data_get($candidate, 'branch_id') !== $cart->branchId) {
+            throw new UnexpectedValueException(
+                "Selected product [{$productName}] belongs to a different Silpo route for need [{$needName}]. {$retryGuidance}",
+            );
+        }
+
+        if (! $this->candidateSuitability->allows(
+            $need,
+            $candidate,
+            data_get($context, 'event_context', []),
+            data_get($context, 'shopping_plan', []),
+        )) {
+            throw new UnexpectedValueException(
+                $this->candidateSuitabilityFeedback($need, $candidate, $retryGuidance),
+            );
+        }
+
+        if (! $this->hasAggregateStockCapacity(
+            $need,
+            $candidate,
+            data_get($context, 'staged_items', []),
+        )) {
+            throw new UnexpectedValueException(
+                "Selected product [{$productName}] cannot cover the required aggregate quantity for need [{$needName}]. {$retryGuidance}",
+            );
+        }
+
+        if (collect(data_get($context, 'staged_items', []))->contains('product_id', $candidate['product_id'])
+            && ! $this->candidateSuitability->allowsProductReuseForNeed($need, $candidate)) {
+            throw new UnexpectedValueException(
+                "Selected product [{$productName}] cannot be reused for need [{$needName}]. {$retryGuidance}",
+            );
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $candidate
+     */
+    private function candidateSuitabilityFeedback(
+        array $need,
+        array $candidate,
+        string $retryGuidance,
+    ): string {
+        $needName = Str::limit(Str::squish((string) data_get($need, 'name', 'current need')), 160);
+        $productName = Str::limit(Str::squish((string) data_get($candidate, 'name', 'selected product')), 160);
+        $needText = Str::lower(collect([
+            data_get($need, 'name'),
+            data_get($need, 'product_name'),
+            data_get($need, 'purpose'),
+            data_get($need, 'note'),
+        ])->filter()->implode(' '));
+        $candidateText = Str::lower(collect([
+            data_get($candidate, 'name'),
+            data_get($candidate, 'slug'),
+        ])->filter()->implode(' '));
+        $requiresFreshOrUnprepared = Str::contains($needText, [
+            'свіж', 'сирий', 'сира', 'сире', 'охолодж', 'fresh', 'raw',
+        ]);
+        $isPrepared = Str::contains($candidateText, [
+            'гриль', 'готов', 'варен', 'запечен', 'смажен', 'маринован', 'копчен',
+            'grill', 'cooked', 'prepared', 'marinated', 'smoked',
+        ]);
+
+        if ($requiresFreshOrUnprepared && $isPrepared) {
+            return "Selected product [{$productName}] has a preparation-state conflict with need [{$needName}]: "
+                ."the need requires a fresh or unprepared product, but the product is marked as prepared. {$retryGuidance}";
+        }
+
+        return "Selected product [{$productName}] does not satisfy the identity, preparation-state, or safety constraints "
+            ."for need [{$needName}]. {$retryGuidance}";
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $calls
+     * @param  array<int, array<string, mixed>>  $fallbackCalls
+     * @param  array<string, mixed>  $context
+     */
+    private function automaticSkipAfterFailedRepair(
+        array $calls,
+        array $fallbackCalls,
+        SilpoCartContextData $cart,
+        array $context,
+    ): AgenticCartNeedResultData {
+        $needKey = (string) data_get($context, 'current_need.key');
+        $needName = Str::limit(
+            Str::squish((string) data_get($context, 'current_need.name', 'цю позицію')),
+            160,
+        );
+        $warning = "Гусь не знайшов придатного товару для «{$needName}» після повторної перевірки.";
+
+        return new AgenticCartNeedResultData(
+            selectedItem: null,
+            attempts: $this->recoverCatalogAttempts($calls, $fallbackCalls, $cart, $context),
+            warnings: [$warning],
+            question: $warning,
+            audit: new CartAgentAuditData(
+                complete: false,
+                coveredNeedKeys: [],
+                remainingNeedKeys: $needKey !== '' ? [$needKey] : [],
+                enoughForPeople: false,
+                warnings: [$warning],
+                revisitNeedKey: $needKey !== '' ? $needKey : null,
+                revisitQuery: $needName,
+                question: null,
+            ),
+            toolCallCount: count($calls),
+        );
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $calls
+     * @param  array<int, array<string, mixed>>  $fallbackCalls
+     * @param  array<string, mixed>  $context
+     * @return array<int, array{query: string, raw_total_found: int, total_found: int}>
+     */
+    private function recoverCatalogAttempts(
+        array $calls,
+        array $fallbackCalls,
+        SilpoCartContextData $cart,
+        array $context,
+    ): array {
+        foreach ([$calls, $fallbackCalls] as $candidateCalls) {
+            if ($candidateCalls === []) {
+                continue;
+            }
+
+            try {
+                return $this->catalogEvidence($candidateCalls, $cart, $context)['attempts'];
+            } catch (UnexpectedValueException) {
+                continue;
+            }
+        }
+
+        return [];
+    }
+
+    /** @param array<string, mixed> $context */
+    private function isAutomaticMode(array $context): bool
+    {
+        return data_get($context, 'mode') === 'auto';
     }
 
     /**
@@ -567,9 +767,15 @@ PROMPT;
                         || Str::lower($searchQueries[0]) !== Str::lower($needName))) {
                     throw new UnexpectedValueException('The first native MCP search did not use the prepared retailer-facing need identity.');
                 }
+            }
 
-                if ((int) data_get($arguments, 'limit', 30) > 30) {
-                    throw new UnexpectedValueException('Native MCP product search exceeded the Silpo result limit.');
+            if (in_array($tool, ['silpo_find_products_batch', 'silpo_get_products'], true)) {
+                $limit = (int) data_get($arguments, 'limit', 30);
+
+                if ($limit < 1 || $limit > 30) {
+                    throw new UnexpectedValueException(
+                        "Native MCP tool [{$tool}] must use limit between 1 and 30; received {$limit}.",
+                    );
                 }
             }
 
