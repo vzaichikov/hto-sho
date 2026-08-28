@@ -1,6 +1,7 @@
 ---
 paths:
   - 'app/{Jobs,Services}/**/*Cart*.php'
+  - 'app/{Jobs,Services}/**/*ShoppingPlan*.php'
 ---
 
 # Jobs Services
@@ -10,3 +11,6 @@ Agentic Silpo selection repairs must receive the exact local validation error, a
 
 ## Allow a bounded partial-stock fallback
 Prefer candidates that cover the full need and exhaust bounded exact, alias, role, and catalog alternatives first. If none can cover it, both orchestrated and agentic harnesses may stage the best safe positive-stock candidate capped to the purchasable remainder, with a visible shortage warning and enough_for_people=false. Never exceed stock or relax explicit allergen, identity, preparation-state, route, or availability conflicts.
+
+## Keep shopping plan items atomic
+Shopping-plan generation must emit one concrete, independently searchable product per item. Expand grouped names or lists such as Овочі (печериці, перець, кабачок) into separate items with a practical quantity split, and use minimum_distinct_products=1 for every atomic item. Existing saved plans remain readable.

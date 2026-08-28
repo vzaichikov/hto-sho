@@ -24,7 +24,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | .agents/skills/hto-sho-local-qa/** | .ai/rules/hto-sho-local-qa.md |
 | app/Http/Controllers/EventJournalController.php | .ai/rules/http-controllers.md |
 | app/{Jobs,Services,Http/Controllers}/**/*Cart*.php | .ai/rules/jobs-services-http-controllers.md |
-| app/{Jobs,Services}/**/*Cart*.php | .ai/rules/jobs-services.md |
+| app/{Jobs,Services}/**/*Cart*.php, app/{Jobs,Services}/**/*ShoppingPlan*.php | .ai/rules/jobs-services.md |
 | app/Jobs/** | .ai/rules/jobs.md |
 | {resources/views/events/**,resources/js/app.js,config/goose_analysis_phrases.php} | .ai/rules/js.md |
 | {vite.config.js,resources/views/components/layouts/**} | .ai/rules/layouts.md |

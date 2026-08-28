@@ -76,8 +76,12 @@ class EventShoppingPlanJobTest extends TestCase
                 && str_contains($instructions, 'перенеси кожну назву, кількість та одиницю без перерахунку')
                 && str_contains($instructions, 'одноразовий посуд, пакети для сміття')
                 && str_contains($instructions, 'додавай їх у розумній кількості як оцінку')
-                && str_contains($instructions, 'визначай складену потребу за змістом, а не за конкретними словами')
-                && str_contains($instructions, 'minimum_distinct_products не може бути 1')
+                && str_contains($instructions, 'один item — одна конкретна товарна позиція')
+                && str_contains($instructions, 'не групуй різні товари під спільною назвою')
+                && str_contains($instructions, 'замість «Овочі (печериці, перець, кабачок)»')
+                && str_contains($instructions, 'окремі «Печериці», «Перець» і «Кабачок»')
+                && str_contains($instructions, 'minimum_distinct_products=1 для кожного такого конкретного item')
+                && ! str_contains($instructions, 'minimum_distinct_products не може бути 1')
                 && str_contains($instructions, 'якщо названо хліб, залиш хліб')
                 && str_contains($instructions, 'алергії та жорсткі обмеження — критичні факти');
         });
@@ -294,7 +298,7 @@ class EventShoppingPlanJobTest extends TestCase
         $this->assertTrue(collect($event->shopping_plan['items'])->firstWhere('name', 'Пакети для сміття')['optional']);
         Http::assertSent(fn (Request $request): bool => str_contains(
             $request['instructions'],
-            'кожен елемент структурованого shopping_requirements перенеси до items',
+            'кожен елемент структурованого shopping_requirements, який називає один конкретний товар',
         ));
     }
 
