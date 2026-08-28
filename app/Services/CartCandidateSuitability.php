@@ -303,6 +303,7 @@ final class CartCandidateSuitability
         return [
             'selectable' => $this->allowsOllamaCandidate($need, $candidate, $allowPartialStock)
                 && (data_get($need, 'requires_positive_evidence') !== true
+                    || $this->isClearlySimpleFood($need, $candidate)
                     || $safety === CartProductEvidence::SAFETY_VERIFIED),
             'match' => $match,
             'safety' => $safety,

@@ -1,8 +1,4 @@
 @php
-    $json = fn (mixed $payload): string => json_encode(
-        $payload,
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
-    ) ?: '{}';
     $kindClasses = [
         'action' => 'bg-green-soft text-green-dark',
         'question' => 'bg-yellow text-ink',
@@ -88,18 +84,23 @@
                                         </div>
                                     @endif
 
-                                    @foreach ([
-                                        'Payload запиту' => $entry->request_payload,
-                                        'Payload відповіді' => $entry->response_payload,
-                                        'Метадані' => $entry->metadata,
-                                    ] as $payloadLabel => $payload)
-                                        @if ($payload !== null)
-                                            <details class="mt-3 rounded-2xl border border-ink/15 bg-canvas">
-                                                <summary class="cursor-pointer px-4 py-3 text-sm font-extrabold focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green">{{ $payloadLabel }}</summary>
-                                                <pre class="max-h-[38rem] overflow-auto border-t border-ink/10 p-4 text-xs leading-5"><code>{{ $json($payload) }}</code></pre>
-                                            </details>
-                                        @endif
-                                    @endforeach
+                                    @php
+                                        $payloadBytes = (int) $entry->request_payload_bytes
+                                            + (int) $entry->response_payload_bytes
+                                            + (int) $entry->metadata_bytes;
+                                    @endphp
+                                    @if ($entry->has_request_payload || $entry->has_response_payload || $entry->has_metadata)
+                                        <details
+                                            class="mt-3 rounded-2xl border border-ink/15 bg-canvas"
+                                            data-harness-entry-payload
+                                            data-url="{{ route('events.journal.entries.payload', [$event, $run, $entry]) }}"
+                                        >
+                                            <summary class="cursor-pointer px-4 py-3 text-sm font-extrabold focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green">
+                                                Payload · {{ max(1, (int) ceil($payloadBytes / 1024)) }} КБ
+                                            </summary>
+                                            <pre class="max-h-[38rem] overflow-auto border-t border-ink/10 p-4 text-xs leading-5"><code data-harness-entry-payload-content>Відкрийте, щоб завантажити.</code></pre>
+                                        </details>
+                                    @endif
                                 </li>
                             @endforeach
                         </ol>

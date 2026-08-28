@@ -2703,7 +2703,7 @@ class EventCartRunTest extends TestCase
             'category' => 'food',
             'quantity' => 1,
             'unit' => 'упаковка',
-            'inspected_products' => ['sauce-1'],
+            'inspected_products' => ['sauce-1', 'sauce-old-2', 'sauce-old-3'],
             'inspected_details' => [$details],
         ];
         $run = EventCartRun::factory()->for($event)->create([
@@ -2720,7 +2720,15 @@ class EventCartRunTest extends TestCase
                 'plan_snapshot' => $event->shopping_plan,
                 'needs' => [$need],
                 'current_need_index' => 0,
-                'last_candidates' => [$candidate],
+                'last_candidates' => [
+                    $candidate,
+                    [
+                        ...$candidate,
+                        'product_id' => 'sauce-2',
+                        'name' => 'Соус томатний інший',
+                        'slug' => 'sous-tomatnyi-inshyi',
+                    ],
+                ],
                 'last_details' => null,
             ],
             'staged_items' => [],
@@ -2945,6 +2953,64 @@ class EventCartRunTest extends TestCase
         $retryStep = $run->steps()->where('kind', 'retry')->latest('sequence')->firstOrFail();
         $this->assertSame('вода', data_get($retryStep->context, 'query'));
         $this->assertStringContainsString('вода', $retryStep->message);
+    }
+
+    public function test_invalid_product_ids_cannot_cycle_one_need_indefinitely(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->readyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'invalid_decision_count' => 3,
+            'search_queries' => ['вода питна', 'вода негазована'],
+            'attempts' => [['query' => 'вода питна', 'total_found' => 1]],
+        ];
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Deciding,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 0,
+                'last_candidates' => [$this->waterProduct()],
+            ],
+            'staged_items' => [],
+        ]);
+        $decision = new CartAgentDecisionData(
+            action: 'select',
+            selectedProductId: 'outside-current-candidates',
+            query: null,
+            quantity: 2,
+            reason: 'Застарілий ідентифікатор.',
+            question: null,
+            audit: $this->audit([], ['water'], false),
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(
+                new CartAgentPreparationData([]),
+                [$decision],
+                $this->audit([], ['water'], false),
+            ),
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunStatus::Running, $run->status);
+        $this->assertSame(CartRunPhase::Auditing, $run->phase);
+        $this->assertSame(4, data_get($run->state, 'needs.0.invalid_decision_count'));
+        $this->assertSame('skipped', data_get($run->state, 'needs.0.status'));
     }
 
     public function test_model_rejected_catalog_candidate_is_not_silently_selected(): void

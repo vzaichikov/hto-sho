@@ -1858,3 +1858,42 @@ if (workspace) {
     window.setInterval(updateAnalysisElapsed, 1000);
     window.setInterval(pollStatus, 2000);
 }
+
+document.querySelectorAll('[data-harness-entry-payload]').forEach((details) => {
+    details.addEventListener('toggle', async () => {
+        if (! details.open || details.dataset.loaded === 'true' || details.dataset.loading === 'true') {
+            return;
+        }
+
+        const content = details.querySelector('[data-harness-entry-payload-content]');
+        details.dataset.loading = 'true';
+        content.textContent = 'Завантажую…';
+
+        try {
+            const response = await fetch(details.dataset.url, {
+                headers: { Accept: 'application/json' },
+                credentials: 'same-origin',
+            });
+
+            if (! response.ok) {
+                throw new Error('Payload request failed.');
+            }
+
+            const payload = await response.json();
+            const labels = {
+                request_payload: 'PAYLOAD ЗАПИТУ',
+                response_payload: 'PAYLOAD ВІДПОВІДІ',
+                metadata: 'МЕТАДАНІ',
+            };
+            content.textContent = Object.entries(labels)
+                .filter(([key]) => payload[key] !== null)
+                .map(([key, label]) => `${label}\n${JSON.stringify(payload[key], null, 2)}`)
+                .join('\n\n');
+            details.dataset.loaded = 'true';
+        } catch {
+            content.textContent = 'Не вдалося завантажити payload. Закрийте й відкрийте ще раз.';
+        } finally {
+            delete details.dataset.loading;
+        }
+    });
+});

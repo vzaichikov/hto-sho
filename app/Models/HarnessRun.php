@@ -57,6 +57,27 @@ class HarnessRun extends Model
         return $this->hasMany(HarnessEntry::class);
     }
 
+    public function scopeVisibleInJournalFor(Builder $query, Event $event): void
+    {
+        $imageCorrelationIds = $event->sources()
+            ->whereNotNull('image_extraction_id')
+            ->pluck('image_extraction_id')
+            ->map(fn (int $imageExtractionId): string => 'image-'.$imageExtractionId)
+            ->all();
+
+        $query->where(function (Builder $visibleQuery) use ($event, $imageCorrelationIds): void {
+            $visibleQuery->whereBelongsTo($event);
+
+            if ($imageCorrelationIds !== []) {
+                $visibleQuery->orWhere(function (Builder $imageQuery) use ($imageCorrelationIds): void {
+                    $imageQuery
+                        ->where('type', HarnessRunType::ImageExtraction)
+                        ->whereIn('correlation_id', $imageCorrelationIds);
+                });
+            }
+        });
+    }
+
     public function cartRun(): HasOne
     {
         return $this->hasOne(EventCartRun::class);

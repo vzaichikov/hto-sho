@@ -19,7 +19,7 @@ class HarnessJournalTest extends TestCase
 {
     use DatabaseTransactions;
 
-    public function test_owner_can_read_grouped_journal_and_payloads_are_the_only_collapsible_content(): void
+    public function test_owner_can_read_grouped_journal_and_load_payloads_lazily(): void
     {
         $owner = User::factory()->create();
         $event = Event::factory()->for($owner)->create();
@@ -28,7 +28,7 @@ class HarnessJournalTest extends TestCase
             'status' => HarnessRunStatus::Completed,
             'correlation_id' => 'analysis-210',
         ]);
-        HarnessEntry::factory()->for($run, 'run')->create([
+        $entry = HarnessEntry::factory()->for($run, 'run')->create([
             'sequence' => 1,
             'kind' => HarnessEntryKind::Llm,
             'title' => 'Синтез контексту події',
@@ -46,12 +46,18 @@ class HarnessJournalTest extends TestCase
             ->assertSee('Журнал Гуся')
             ->assertSee('Синтез контексту події')
             ->assertSee('https://api.openai.test/responses')
-            ->assertSee('Payload запиту')
-            ->assertSee('Payload відповіді')
-            ->assertSee('test-model')
-            ->assertSee('Готово')
+            ->assertSee('Payload ·')
+            ->assertSee('data-harness-entry-payload', false)
+            ->assertDontSee('test-model')
+            ->assertDontSee('Готово')
             ->assertSee('Зберігання: 90 днів');
-        $this->assertSame(2, substr_count($response->getContent(), '<details'));
+        $this->assertSame(1, substr_count($response->getContent(), '<details'));
+
+        $this->actingAs($owner)
+            ->get(route('events.journal.entries.payload', [$event, $run, $entry]))
+            ->assertOk()
+            ->assertJsonPath('request_payload.model', 'test-model')
+            ->assertJsonPath('response_payload.answer', 'Готово');
     }
 
     public function test_journal_is_owner_only_paginated_and_filterable_by_run_type(): void
@@ -101,13 +107,15 @@ class HarnessJournalTest extends TestCase
             'type' => HarnessRunType::ImageExtraction,
             'correlation_id' => 'image-'.$extraction->id,
         ]);
-        HarnessEntry::factory()->for($reusedRun, 'run')->create([
+        $reusedEntry = HarnessEntry::factory()->for($reusedRun, 'run')->create([
             'title' => 'OCR та класифікація зображення',
+            'request_payload' => ['model' => 'ocr-model'],
         ]);
-        HarnessRun::factory()->for($originalEvent)->create([
+        $unrelatedRun = HarnessRun::factory()->for($originalEvent)->create([
             'type' => HarnessRunType::ImageExtraction,
             'correlation_id' => 'image-unrelated',
         ]);
+        $unrelatedEntry = HarnessEntry::factory()->for($unrelatedRun, 'run')->create();
 
         $this->actingAs($owner)
             ->get(route('events.journal.index', [
@@ -118,5 +126,14 @@ class HarnessJournalTest extends TestCase
             ->assertSee('image-'.$extraction->id)
             ->assertSee('OCR та класифікація зображення')
             ->assertDontSee('image-unrelated');
+
+        $this->actingAs($owner)
+            ->get(route('events.journal.entries.payload', [$currentEvent, $reusedRun, $reusedEntry]))
+            ->assertOk()
+            ->assertJsonPath('request_payload.model', 'ocr-model');
+
+        $this->actingAs($owner)
+            ->get(route('events.journal.entries.payload', [$currentEvent, $unrelatedRun, $unrelatedEntry]))
+            ->assertNotFound();
     }
 }

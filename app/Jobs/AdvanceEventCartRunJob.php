@@ -30,6 +30,8 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
+    private const MAX_INVALID_DECISIONS_PER_NEED = 4;
+
     public int $timeout = 80;
 
     public int $tries = 3;
@@ -1010,6 +1012,19 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 return;
             }
 
+            if ($invalidDecisionCount >= self::MAX_INVALID_DECISIONS_PER_NEED) {
+                $this->resolveUnmatched(
+                    $run,
+                    $state,
+                    $currentIndex,
+                    $need,
+                    $statuses,
+                    'Модель кілька разів не змогла вибрати товар із поточного набору.',
+                );
+
+                return;
+            }
+
             $fallbackQuery = $candidateSuitability->nextSearchQuery(
                 data_get($state, "needs.{$currentIndex}", $need),
             );
@@ -1430,12 +1445,14 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ) + 1;
         }
 
-        $state['last_candidates'] = collect(data_get($state, 'last_candidates', []))
-            ->reject(fn (array $candidate): bool => data_get($candidate, 'product_id') === $decision->selectedProductId
-                || ($this->usesOllamaProvider()
-                    && $inspectedProducts->contains(data_get($candidate, 'product_id'))))
-            ->values()
-            ->all();
+        $state['last_candidates'] = $inspectedProducts->count() >= 3
+            ? []
+            : collect(data_get($state, 'last_candidates', []))
+                ->reject(fn (array $candidate): bool => data_get($candidate, 'product_id') === $decision->selectedProductId
+                    || ($this->usesOllamaProvider()
+                        && $inspectedProducts->contains(data_get($candidate, 'product_id'))))
+                ->values()
+                ->all();
         $state['last_details'] = null;
 
         if ($state['last_candidates'] !== []) {

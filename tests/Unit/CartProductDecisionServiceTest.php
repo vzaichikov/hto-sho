@@ -257,6 +257,7 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertSame('gemma4:31b', $modelForRequest->invoke($service, 'cart_agent_search_intent'));
         $this->assertSame('gemma4:31b', $modelForRequest->invoke($service, 'cart_agent_decision'));
         $this->assertSame('gemma4:31b', $modelForRequest->invoke($service, 'cart_agent_decision_repair'));
+        $this->assertSame('qwen3.5:397b', $modelForRequest->invoke($service, 'cart_agent_evidence_requirements'));
     }
 
     public function test_both_providers_get_the_short_catalog_query_rule_while_ollama_keeps_extra_language_guidance(): void
@@ -284,7 +285,7 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertSame('', $decisionGuidance->invoke($service));
     }
 
-    public function test_ollama_classifies_positive_evidence_in_a_separate_lexical_request(): void
+    public function test_ollama_classifies_positive_evidence_with_the_primary_semantic_model(): void
     {
         config([
             'services.ai.provider' => 'ollama',
@@ -316,11 +317,97 @@ class CartProductDecisionServiceTest extends TestCase
 
         $this->assertTrue(data_get($classified->needs, '0.requires_positive_evidence'));
         $this->assertFalse(data_get($classified->needs, '1.requires_positive_evidence'));
-        Http::assertSent(fn ($request): bool => data_get($request->data(), 'model') === 'gemma4:31b'
+        Http::assertSent(fn ($request): bool => data_get($request->data(), 'model') === 'qwen3.5:397b'
             && str_contains(
                 (string) data_get($request->data(), 'messages.0.content.0.text'),
                 'cart_agent_evidence_requirements',
+            )
+            && str_contains(
+                (string) data_get($request->data(), 'messages.0.content.0.text'),
+                'очевидно однокомпонентного сирого мʼяса',
             ));
+    }
+
+    public function test_decision_uses_short_current_batch_aliases_and_restores_the_catalog_id(): void
+    {
+        config([
+            'services.ai.provider' => 'openai',
+            'services.ai.api_key' => 'test-key',
+            'services.ai.model' => 'test-model',
+        ]);
+        Http::fake([
+            '*' => Http::response($this->openAiDecisionResponse([
+                'action' => 'select',
+                'selected_product_id' => 'current_candidate_02',
+                'quantity' => 2,
+                'reason' => 'Другий кандидат відповідає потребі.',
+            ])),
+        ]);
+        $currentProductId = 'b97f5216-c9d8-40e6-96b2-8bf0ea5212d3';
+        $staleProductId = 'a1359182-4b0c-468f-8be1-c67ec6df9078';
+
+        $decision = app(CartProductDecisionService::class)->decide([
+            'current_need' => [
+                'key' => 'n_01',
+                'attempts' => [],
+                'inspected_products' => [$staleProductId, $currentProductId],
+                'inspected_details' => [
+                    ['product_id' => $staleProductId, 'name' => 'Старий товар'],
+                    ['product_id' => $currentProductId, 'name' => 'Поточний товар'],
+                ],
+            ],
+            'all_needs' => [['key' => 'n_01']],
+            'candidates' => [
+                ['product_id' => '767d880a-d500-436d-bc8a-07587287a7f6', 'name' => 'Перший товар'],
+                ['product_id' => $currentProductId, 'name' => 'Поточний товар'],
+            ],
+            'inspected_details' => [
+                ['product_id' => $staleProductId, 'name' => 'Старий товар'],
+                ['product_id' => $currentProductId, 'name' => 'Поточний товар'],
+            ],
+            'staged_items' => [['product_id' => $staleProductId, 'name' => 'Вже вибрано']],
+        ]);
+
+        $this->assertSame($currentProductId, $decision->selectedProductId);
+        $requestData = (string) data_get(Http::recorded()[0][0]->data(), 'input.0.content.0.text');
+        $this->assertStringContainsString('current_candidate_01', $requestData);
+        $this->assertStringContainsString('current_candidate_02', $requestData);
+        $this->assertStringContainsString('staged_product_01', $requestData);
+        $this->assertStringNotContainsString($currentProductId, $requestData);
+        $this->assertStringNotContainsString($staleProductId, $requestData);
+    }
+
+    public function test_decision_repairs_a_product_id_outside_the_current_candidate_batch(): void
+    {
+        config([
+            'services.ai.provider' => 'openai',
+            'services.ai.api_key' => 'test-key',
+            'services.ai.model' => 'test-model',
+        ]);
+        $currentProductId = 'a18527e9-6e82-4f4a-858f-df79a37691aa';
+        Http::fakeSequence()
+            ->push($this->openAiDecisionResponse([
+                'action' => 'select',
+                'selected_product_id' => 'stale-product-id',
+                'quantity' => 1,
+            ]))
+            ->push($this->openAiDecisionResponse([
+                'action' => 'select',
+                'selected_product_id' => 'current_candidate_01',
+                'quantity' => 1,
+            ]));
+
+        $decision = app(CartProductDecisionService::class)->decide([
+            'current_need' => ['key' => 'n_01', 'attempts' => []],
+            'all_needs' => [['key' => 'n_01']],
+            'candidates' => [['product_id' => $currentProductId, 'name' => 'Поточний товар']],
+        ]);
+
+        $this->assertSame($currentProductId, $decision->selectedProductId);
+        Http::assertSentCount(2);
+        $repairData = (string) data_get(Http::recorded()[1][0]->data(), 'input.0.content.0.text');
+        $this->assertStringContainsString('must belong to the current candidates', $repairData);
+        $this->assertStringContainsString('current_candidate_01', $repairData);
     }
 
     public function test_preparation_batches_large_plans_without_renumbering_source_indexes(): void
@@ -611,8 +698,9 @@ class CartProductDecisionServiceTest extends TestCase
             (string) data_get($repairRequest, 'instructions'),
         );
         $repairData = (string) data_get($repairRequest, 'input.0.content.0.text');
-        $this->assertStringContainsString('Agent selected no catalog product.', $repairData);
-        $this->assertStringContainsString('sauce-1', $repairData);
+        $this->assertStringContainsString('must belong to the current candidates', $repairData);
+        $this->assertStringContainsString('current_candidate_01', $repairData);
+        $this->assertStringNotContainsString('sauce-1', $repairData);
     }
 
     public function test_final_audit_scopes_personal_restrictions_to_the_intended_consumer(): void

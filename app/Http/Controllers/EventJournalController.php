@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\HarnessRunType;
 use App\Models\Event;
 use App\Models\HarnessRun;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -18,26 +17,32 @@ class EventJournalController extends Controller
         Gate::authorize('view', $event);
 
         $selectedType = HarnessRunType::tryFrom($request->string('type')->toString());
-        $imageCorrelationIds = $event->sources()
-            ->whereNotNull('image_extraction_id')
-            ->pluck('image_extraction_id')
-            ->map(fn (int $imageExtractionId): string => 'image-'.$imageExtractionId)
-            ->all();
         $runs = HarnessRun::query()
-            ->where(function (Builder $query) use ($event, $imageCorrelationIds): void {
-                $query->whereBelongsTo($event);
-
-                if ($imageCorrelationIds !== []) {
-                    $query->orWhere(function (Builder $imageQuery) use ($imageCorrelationIds): void {
-                        $imageQuery
-                            ->where('type', HarnessRunType::ImageExtraction)
-                            ->whereIn('correlation_id', $imageCorrelationIds);
-                    });
-                }
-            })
+            ->visibleInJournalFor($event)
             ->when($selectedType, fn ($query) => $query->where('type', $selectedType))
             ->with(['entries' => function (Relation $query): void {
-                $query->oldest('sequence');
+                $query
+                    ->select([
+                        'id',
+                        'harness_run_id',
+                        'sequence',
+                        'kind',
+                        'status',
+                        'title',
+                        'message',
+                        'method',
+                        'endpoint',
+                        'status_code',
+                        'duration_ms',
+                        'created_at',
+                    ])
+                    ->selectRaw('request_payload IS NOT NULL AS has_request_payload')
+                    ->selectRaw('response_payload IS NOT NULL AS has_response_payload')
+                    ->selectRaw('metadata IS NOT NULL AS has_metadata')
+                    ->selectRaw('LENGTH(request_payload) AS request_payload_bytes')
+                    ->selectRaw('LENGTH(response_payload) AS response_payload_bytes')
+                    ->selectRaw('LENGTH(metadata) AS metadata_bytes')
+                    ->oldest('sequence');
             }])
             ->latest('id')
             ->paginate(10)

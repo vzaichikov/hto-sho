@@ -154,6 +154,32 @@ class CartCandidateSuitabilityTest extends TestCase
         $this->assertSame(CartProductEvidence::SAFETY_VERIFIED, $withDetails['safety']);
     }
 
+    public function test_ollama_does_not_require_unrelated_allergen_proof_for_plain_raw_meat(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $evidence = $suitability->ollamaEvidence(
+            [
+                'name' => 'Стегно куряче охолоджене',
+                'note' => 'Без маринаду чи приправ.',
+                'quantity' => 1.5,
+                'unit' => 'кг',
+                'requires_positive_evidence' => true,
+            ],
+            [
+                'name' => 'Куряче стегно домашнє охолоджене',
+                'available' => true,
+                'weighted' => true,
+                'stock' => 5,
+            ],
+            ['summary' => 'В одного учасника алергія на арахіс.'],
+            CartProductEvidence::SAFETY_UNVERIFIED,
+        );
+
+        $this->assertTrue($evidence['selectable']);
+        $this->assertSame(CartProductEvidence::SAFETY_NOT_REQUIRED, $evidence['safety']);
+        $this->assertNull($evidence['review_note']);
+    }
+
     public function test_retailer_facing_raw_pork_identity_rejects_prepared_catalog_forms(): void
     {
         $suitability = new CartCandidateSuitability;

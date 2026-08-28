@@ -8,6 +8,7 @@ use App\Http\Controllers\EventAnswerController;
 use App\Http\Controllers\EventCartRunController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\EventJournalController;
+use App\Http\Controllers\EventJournalEntryPayloadController;
 use App\Http\Controllers\EventPlanCorrectionController;
 use App\Http\Controllers\EventSourceController;
 use App\Http\Controllers\EventSourceInclusionController;
@@ -63,6 +64,10 @@ Route::middleware('auth')->group(function (): void {
         ->name('events.answers.store');
     Route::get('/events/{event}/journal', EventJournalController::class)
         ->name('events.journal.index');
+    Route::get(
+        '/events/{event}/journal/{harnessRun}/entries/{harnessEntry}/payload',
+        EventJournalEntryPayloadController::class,
+    )->name('events.journal.entries.payload');
     Route::post('/events/{event}/plan-corrections', EventPlanCorrectionController::class)
         ->name('events.plan-corrections.store');
     Route::get('/events/{event}/status', EventStatusController::class)
