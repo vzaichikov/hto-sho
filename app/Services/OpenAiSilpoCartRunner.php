@@ -315,13 +315,15 @@ final class OpenAiSilpoCartRunner implements AgenticSilpoCartRunner
 Обовʼязковий порядок:
 1. Перший MCP call завжди silpo_find_products_batch з підготовленою retailer-facing current_need.name без перефразування, products має рівно один рядок, route/timeslot копіюй дослівно з catalog_context. Вихідну роль у меню збережено в current_need.note та shopping_plan — не повертай її в пошуковий рядок.
 2. Оціни весь результат окремо від пошуку: query доводить лише товарну ідентичність, а current_need.note, purpose та shopping_plan використовуй після отримання SKU для перевірки фізичного стану й придатності до майбутнього використання. Якщо точний придатний товар є, обери його й не шукай рольову заміну.
-3. Лише за нульового або непридатного результату спочатку спробуй ще не використані current_need.search_queries у переданому порядку, потім власні незалежні позитивні запити, category/set browsing або replacements. Після першого точного call один silpo_find_products_batch може містити до 6 лексичних варіантів, але всі вони мають стосуватися лише current_need.
+3. Лише за нульового або непридатного результату спочатку спробуй ще не використані current_need.search_queries у переданому порядку. Після двох близьких точних форм переходь до найкоротшої переданої назви головного товару або товарної сімʼї, а не перебирай відмінки тих самих слів. Після вичерпання переданих запитів дозволено не більше двох власних незалежних позитивних текстових запитів; далі переходь до category/set browsing або replacements. Після першого точного call один silpo_find_products_batch може містити до 6 лексичних варіантів, але всі вони мають стосуватися лише current_need.
 4. Для кожного silpo_find_products_batch і silpo_get_products передавай цілий limit від 1 до 30. Ніколи не використовуй limit понад 30.
 5. Для очевидно однокомпонентного сирого немаринованого мʼяса, цілого свіжого плоду/овочу та звичайної води не шукай доказ відсутності неповʼязаного алергену й став safety_evidence=not_required, якщо каталог прямо не показує конфлікт або may-contain.
 6. Для складених чи оброблених продуктів викликай silpo_get_product_details для вже знайденого slug. Явний конфлікт або may-contain відхиляй. Якщо склад чи алергени не розкрито, але товарна ідентичність доведена й конфлікту немає, став safety_evidence=unverified та обирай товар із видимим попередженням; сама відсутність даних не є причиною skip.
 7. Спочатку шукай товар, що покриває повну кількість. Якщо такого немає, вичерпай current_need.search_queries і практичні альтернативи; лише після цього можна обрати придатний товар із додатним, але недостатнім залишком. Застосунок сам обмежить quantity доступним максимумом і додасть попередження.
 8. Не вигадуй ID, ціну, залишок, фасування, безпеку чи доступність. Вибери один product_id лише з MCP output цієї сесії. Якщо придатного немає навіть частково, action=ask в assisted mode або action=skip в automatic mode.
 9. Не викликай cart/account mutation tools; вони не надані.
+
+Обовʼязкова фізична форма не є побажанням. Якщо current_need прямо вимагає форму без кісток, назва або перевірені деталі candidate мусять позитивно доводити безкісткову форму; збіг виду мʼяса чи відрубу цього не замінює. Після вичерпання точного відрубу можна обрати як видиму рольову заміну інший сирий відруб або форму того самого виду, що вже має потрібну фізичну форму й практично підходить для current_need.note. Не обирай форму з кістками лише тому, що її назва ближча до точного відрубу.
 
 quantity — повна бажана абсолютна кількість товару; застосунок перерахує її за планом і фасуванням та, лише після вичерпання повних альтернатив, безпечно обмежить до доступного stock. is_replacement=true лише для видимої рольової заміни. Поверни лише JSON за схемою.
 PROMPT;
@@ -662,6 +664,12 @@ PROMPT;
         if ($requiresFreshOrUnprepared && $isPrepared) {
             return "Selected product [{$productName}] has a preparation-state conflict with need [{$needName}]: "
                 ."the need requires a fresh or unprepared product, but the product is marked as prepared. {$retryGuidance}";
+        }
+
+        if (! $this->candidateSuitability->preservesRequiredPhysicalForm($need, $candidate)) {
+            return "Selected product [{$productName}] has a physical-form conflict with need [{$needName}]: "
+                .'the need explicitly requires a boneless form, but the product evidence does not prove it. '
+                ."Search a broader product family and choose a raw same-species product whose name or inspected details prove the required form. {$retryGuidance}";
         }
 
         return "Selected product [{$productName}] does not satisfy the identity, preparation-state, or safety constraints "

@@ -55,9 +55,12 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertStringContainsString('розділяй discovery та suitability', $productFirstPrompt);
         $this->assertStringContainsString('використовуються тільки після отримання кандидатів', $productFirstPrompt);
         $this->assertStringContainsString('не за фіксованою таблицею відповідностей', $productFirstPrompt);
+        $this->assertStringContainsString('серед перших трьох search_queries', $productFirstPrompt);
+        $this->assertStringContainsString('а не витрачай список на відмінки', $productFirstPrompt);
         $this->assertStringNotContainsString('name зберігає повну людську назву потреби', $productFirstPrompt);
         $this->assertStringContainsString('розділяй discovery та suitability', $productFirstRepairPrompt);
         $this->assertStringContainsString('не PHP-таблиці відповідностей', $productFirstRepairPrompt);
+        $this->assertStringContainsString('серед перших трьох search_queries', $productFirstRepairPrompt);
     }
 
     public function test_v1_uses_the_llm_food_identity_as_the_first_catalog_query(): void
@@ -256,7 +259,7 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertSame('gemma4:31b', $modelForRequest->invoke($service, 'cart_agent_decision_repair'));
     }
 
-    public function test_ollama_adds_generic_catalog_language_guidance_without_changing_openai_prompts(): void
+    public function test_both_providers_get_the_short_catalog_query_rule_while_ollama_keeps_extra_language_guidance(): void
     {
         $service = app(CartProductDecisionService::class);
         $reflection = new ReflectionClass($service);
@@ -266,7 +269,7 @@ class CartProductDecisionServiceTest extends TestCase
         config(['services.ai.provider' => 'ollama']);
         $ollamaPrompt = $preparationPrompt->invoke($service, [], ['items' => []]);
 
-        $this->assertStringContainsString('найкоротший самостійний каталожний головний іменник', $ollamaPrompt);
+        $this->assertStringContainsString('найкоротшу природну каталожну назву', $ollamaPrompt);
         $this->assertStringContainsString('іншого граматичного числа', $ollamaPrompt);
         $this->assertStringContainsString('іншу абетку, транслітерацію', $decisionGuidance->invoke($service));
         $this->assertStringContainsString('самостійно перечитай product_constraints', $decisionGuidance->invoke($service));
@@ -277,6 +280,7 @@ class CartProductDecisionServiceTest extends TestCase
         $openAiPrompt = $preparationPrompt->invoke($service, [], ['items' => []]);
 
         $this->assertStringNotContainsString('ДОДАТКОВА САМОПЕРЕВІРКА ДЛЯ OLLAMA', $openAiPrompt);
+        $this->assertStringContainsString('найкоротшу природну каталожну назву', $openAiPrompt);
         $this->assertSame('', $decisionGuidance->invoke($service));
     }
 

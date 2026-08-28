@@ -45,6 +45,10 @@ final class CartCandidateSuitability
             : '';
         $candidateEvidenceText = $this->text([$candidateText, $detailText]);
 
+        if (! $this->preservesRequiredPhysicalForm($need, $candidate)) {
+            return false;
+        }
+
         if (! $this->preservesRequiredPreparationState($need, $candidateText)) {
             return false;
         }
@@ -376,8 +380,47 @@ final class CartCandidateSuitability
             data_get($candidate, 'slug'),
         ]);
 
-        return $this->preservesRequiredPreparationState($need, $candidateText)
-            && $this->sharesNeedIdentityTerm($need, $candidateText);
+        if (! $this->preservesRequiredPhysicalForm($need, $candidate)
+            || ! $this->preservesRequiredPreparationState($need, $candidateText)) {
+            return false;
+        }
+
+        if (! $this->requiresBonelessForm($need)) {
+            return $this->sharesNeedIdentityTerm($need, $candidateText);
+        }
+
+        $ignoredPhysicalRoots = ['кіст', 'bone', 'безк', 'охол', 'chil', 'cool'];
+        $needRoots = array_values(array_diff(
+            $this->catalogRoots($this->needIdentityText($need)),
+            $ignoredPhysicalRoots,
+        ));
+        $candidateRoots = array_values(array_diff(
+            $this->catalogRoots($candidateText),
+            $ignoredPhysicalRoots,
+        ));
+        $requiredMatches = min(2, count($needRoots));
+
+        return $requiredMatches === 0
+            || count(array_intersect($needRoots, $candidateRoots)) >= $requiredMatches;
+    }
+
+    /** @param array<string, mixed> $need @param array<string, mixed> $candidate */
+    public function preservesRequiredPhysicalForm(array $need, array $candidate): bool
+    {
+        if (! $this->requiresBonelessForm($need)) {
+            return true;
+        }
+
+        $candidateText = $this->text([
+            data_get($candidate, 'name'),
+            data_get($candidate, 'slug'),
+            $this->structuredText(data_get($candidate, 'details')),
+        ]);
+
+        return $this->containsAny($candidateText, [
+            'без кіст', 'безкіст', 'boneless', 'deboned', 'обвален',
+            'філе', 'filet', 'fillet', 'мʼякот', "м'якот",
+        ]);
     }
 
     /** @param array<string, mixed> $need @param array<int, array<string, mixed>> $candidates */
@@ -891,6 +934,14 @@ final class CartCandidateSuitability
             fn (array $markers): bool => ! $this->containsAny($candidateText, $markers)
                 || $this->containsAny($identityText, $markers),
         );
+    }
+
+    /** @param array<string, mixed> $need */
+    private function requiresBonelessForm(array $need): bool
+    {
+        return $this->containsAny($this->needIntentText($need), [
+            'без кіст', 'безкіст', 'boneless',
+        ]);
     }
 
     private function hasCompositeFoodMarkers(string $text): bool

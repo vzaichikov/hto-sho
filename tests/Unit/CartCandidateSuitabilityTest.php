@@ -1292,6 +1292,53 @@ class CartCandidateSuitabilityTest extends TestCase
         $this->assertNull($evidence['review_note']);
     }
 
+    public function test_boneless_meat_need_rejects_bone_in_cut_and_accepts_raw_boneless_role_fallback(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'Куряче стегно без кістки охолоджене',
+            'category' => 'food',
+            'quantity' => 1.4,
+            'unit' => 'кг',
+            'note' => 'Сире куряче мʼясо без кістки для порційних шматків.',
+            'search_queries' => [
+                'стегно куряче без кістки',
+                'філе стегна курячого',
+                'філе куряче',
+            ],
+        ];
+        $boneInThigh = [
+            'name' => 'Куряче стегно домашнє охолоджене',
+            'slug' => 'kuriache-stehno-domashnie-okholodzhene',
+            'weighted' => true,
+            'stock' => 2,
+        ];
+        $rawFillet = [
+            'name' => 'Філе куряче охолоджене',
+            'slug' => 'file-kuriache-okholodzhene',
+            'weighted' => true,
+            'stock' => 2,
+        ];
+        $bonelessThigh = [
+            'name' => 'Стегно куряче без кістки охолоджене',
+            'slug' => 'stehno-kuriache-bez-kistky-okholodzhene',
+            'weighted' => true,
+            'stock' => 2,
+        ];
+
+        $this->assertFalse($suitability->allows($need, $boneInThigh, [], []));
+        $this->assertFalse($suitability->isExactIdentityCandidate($need, $boneInThigh));
+        $this->assertTrue($suitability->allows($need, $rawFillet, [], []));
+        $this->assertFalse($suitability->isExactIdentityCandidate($need, $rawFillet));
+        $this->assertTrue($suitability->allows($need, $bonelessThigh, [], []));
+        $this->assertTrue($suitability->isExactIdentityCandidate($need, $bonelessThigh));
+        $this->assertFalse($suitability->allows($need, [
+            ...$rawFillet,
+            'name' => 'Філе куряче копчене',
+            'slug' => 'file-kuriache-kopchene',
+        ], [], []));
+    }
+
     public function test_processed_vegan_sausages_for_the_grill_can_be_staged_with_unverified_allergen_data(): void
     {
         $suitability = new CartCandidateSuitability;

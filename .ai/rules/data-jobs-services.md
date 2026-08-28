@@ -30,3 +30,6 @@ Exhaust exact catalog queries first. If the exact need is unavailable, let the L
 
 ## Skip unrelated allergen checks for obvious simple foods
 Treat clearly single-ingredient raw unseasoned meat, whole fresh produce, and plain water as safety_evidence=not_required for unrelated allergens unless catalog evidence explicitly discloses the allergen or may-contain cross-contact. Safety instructions and negated phrases such as "check marinade" or "not marinated" are not positive evidence that the product is composite. Processed, marinated, seasoned, or otherwise composite foods remain strict.
+
+## Bound lexical retries and preserve explicit physical form
+Prepare a short natural product-family or head-noun query among the first three declared aliases for both harness modes. In agentic selection, do not spend the tool budget on repeated inflections: after declared aliases allow at most two new text queries, then browse live catalog scopes or replacements. An explicitly required physical form such as boneless needs positive title/detail evidence; a same-species compatible form may be a visible role replacement after exact options are exhausted, but an incompatible closer-named cut must be rejected.

@@ -76,6 +76,14 @@ class OpenAiSilpoCartRunnerTest extends TestCase
                     (string) data_get($payload, 'instructions'),
                     'limit від 1 до 30',
                 )
+                && str_contains(
+                    (string) data_get($payload, 'instructions'),
+                    'не більше двох власних незалежних позитивних текстових запитів',
+                )
+                && str_contains(
+                    (string) data_get($payload, 'instructions'),
+                    'Не обирай форму з кістками',
+                )
                 && data_get($payload, 'tools.0.allowed_tools') === [
                     'silpo_find_products_batch',
                     'silpo_get_products',
@@ -147,6 +155,29 @@ class OpenAiSilpoCartRunnerTest extends TestCase
             'для шашлику',
             Str::lower((string) data_get($result->attempts, '0.query')),
         );
+    }
+
+    public function test_boneless_form_rejection_gives_the_model_specific_corrective_feedback(): void
+    {
+        $runner = app(OpenAiSilpoCartRunner::class);
+        $feedbackMethod = (new \ReflectionClass($runner))->getMethod('candidateSuitabilityFeedback');
+        $feedback = $feedbackMethod->invoke(
+            $runner,
+            [
+                'name' => 'Мʼясний відруб без кістки охолоджений',
+                'note' => 'Сирий продукт для порційних шматків.',
+            ],
+            [
+                'name' => 'Мʼясний відруб охолоджений',
+                'slug' => 'miasnyi-vidrub-okholodzhenyi',
+            ],
+            'Choose another observed product.',
+        );
+
+        $this->assertStringContainsString('physical-form conflict', $feedback);
+        $this->assertStringContainsString('explicitly requires a boneless form', $feedback);
+        $this->assertStringContainsString('Search a broader product family', $feedback);
+        $this->assertStringContainsString('Choose another observed product.', $feedback);
     }
 
     public function test_plain_chilled_chicken_normalizes_the_models_unverified_allergen_guess(): void
