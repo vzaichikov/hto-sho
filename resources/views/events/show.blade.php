@@ -62,6 +62,13 @@
             })
             ->values();
     }
+
+    $checkoutWebUrl = $hasCompletedCart
+        ? data_get($latestCartRun->state, 'verified_cart.checkout_web_url')
+        : null;
+    $checkoutMobileUrl = $hasCompletedCart
+        ? data_get($latestCartRun->state, 'verified_cart.checkout_mobile_url')
+        : null;
 @endphp
 
 <x-layouts.app :title="$event->title">
@@ -658,6 +665,22 @@
                             @endif
                         </section>
                     @endif
+
+                    @if ($checkoutWebUrl || $checkoutMobileUrl)
+                        <section class="mt-6 rounded-[24px] border-2 border-green bg-green-soft/20 p-5 sm:p-6" aria-labelledby="silpo-checkout-title">
+                            <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark">Гусь доніс кошик</p>
+                            <h3 class="mt-1 font-display text-3xl leading-[1.1]" id="silpo-checkout-title">Далі — у Сільпо</h3>
+                            <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">Товари вже на місці. Відкрийте кошик там, де зручніше, ще раз усе перегляньте — і лише тоді оформлюйте.</p>
+                            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                                @if ($checkoutMobileUrl)
+                                    <a class="rounded-2xl bg-green px-5 py-4 text-center font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="{{ $checkoutMobileUrl }}" target="_blank" rel="noopener noreferrer">Відкрити в застосунку Сільпо</a>
+                                @endif
+                                @if ($checkoutWebUrl)
+                                    <a class="rounded-2xl border-2 border-ink bg-paper px-5 py-4 text-center font-extrabold transition hover:-translate-y-0.5 hover:bg-yellow/35 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="{{ $checkoutWebUrl }}" target="_blank" rel="noopener noreferrer">Відкрити на сайті Сільпо</a>
+                                @endif
+                            </div>
+                        </section>
+                    @endif
                 @else
                     <p class="mt-4 text-base leading-7 text-muted">Гусь ще не ходив між прилавками для цієї події.</p>
                 @endif
@@ -806,6 +829,16 @@
                                 <p class="font-display text-3xl" data-silpo-confirm-title>Останній людський погляд</p>
                                 <p class="mt-2 text-sm leading-6 text-muted" data-silpo-confirm-copy>Перевірте реальні товари Сільпо, рольові заміни, знаки питання щодо паковання, кількості й суму. До цього підтвердження Гусь нічого в кошик не записує.</p>
                                 <button class="mt-4 w-full rounded-2xl bg-green px-5 py-4 font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="button" data-silpo-confirm>Підтверджую товари — додати в кошик</button>
+                            </div>
+
+                            <div class="mt-5 hidden rounded-[22px] border-2 border-green bg-green-soft/20 p-5" data-silpo-checkout>
+                                <p class="text-xs font-extrabold uppercase tracking-[0.15em] text-green-dark">Гусь доніс кошик</p>
+                                <p class="mt-1 font-display text-3xl leading-[1.1]">Далі — у Сільпо</p>
+                                <p class="mt-2 text-sm leading-6 text-muted">Відкрийте готовий кошик у застосунку або на сайті й перевірте його перед оформленням.</p>
+                                <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                                    <a class="rounded-2xl bg-green px-5 py-4 text-center font-extrabold text-white shadow-[4px_4px_0_#20201D] transition hover:-translate-y-0.5 hover:bg-green-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="#" target="_blank" rel="noopener noreferrer" data-silpo-checkout-mobile>Відкрити в застосунку Сільпо</a>
+                                    <a class="rounded-2xl border-2 border-ink bg-paper px-5 py-4 text-center font-extrabold transition hover:-translate-y-0.5 hover:bg-yellow/35 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="#" target="_blank" rel="noopener noreferrer" data-silpo-checkout-web>Відкрити на сайті Сільпо</a>
+                                </div>
                             </div>
 
                             <div class="mt-5 hidden rounded-[22px] border border-orange/30 bg-yellow/30 p-4" data-silpo-warnings>

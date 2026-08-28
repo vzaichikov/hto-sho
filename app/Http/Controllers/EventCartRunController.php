@@ -149,6 +149,10 @@ class EventCartRunController extends Controller
             'warnings' => $cartRun->warnings ?? [],
             'estimated_total' => $cartRun->estimated_total,
             'actual_total' => $cartRun->actual_total,
+            'checkout_urls' => [
+                'web' => data_get($cartRun->state, 'verified_cart.checkout_web_url'),
+                'mobile' => data_get($cartRun->state, 'verified_cart.checkout_mobile_url'),
+            ],
             'validations' => $validationPresenter->present(
                 data_get($cartRun->state, 'verified_cart.validations', data_get($cartRun->cart_context, 'validations', [])),
             ),

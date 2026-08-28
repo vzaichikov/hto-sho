@@ -74,6 +74,7 @@ class HarnessPayloadSanitizerTest extends TestCase
                 'address' => ['street' => 'Private street', 'latitude' => '50.1'],
                 'phone' => '+380000000000',
                 'checkoutWebLink' => 'https://shop.example/private-cart',
+                'checkoutMobileLink' => 'https://shop.example/private-cart-mobile',
                 'calculation' => [
                     'totalAfterDiscounts' => 123.45,
                     'loyalty' => ['bonusAvailable' => 100],
@@ -91,6 +92,7 @@ class HarnessPayloadSanitizerTest extends TestCase
         $this->assertSame('[REDACTED]', $payload['cart']['address']);
         $this->assertSame('[REDACTED]', $payload['cart']['phone']);
         $this->assertSame('[REDACTED]', $payload['cart']['checkoutWebLink']);
+        $this->assertSame('[REDACTED]', $payload['cart']['checkoutMobileLink']);
         $this->assertSame('[REDACTED]', $payload['cart']['calculation']['loyalty']);
         $this->assertSame(123.45, $payload['cart']['calculation']['totalAfterDiscounts']);
         $this->assertSame('Вода', $payload['cart']['shipments'][0]['products'][0]['name']);

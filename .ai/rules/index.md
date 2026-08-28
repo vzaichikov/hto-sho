@@ -5,6 +5,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | Applies to | Rule file |
 | --- | --- |
 | app/{Actions,Data,Jobs,Models,Services}/** | .ai/rules/actions-data-jobs-models-services.md |
+| app/{Actions,Data,Jobs}/**/*Cart*.php | .ai/rules/actions-data-jobs.md |
 | app/{Actions,Data,Services}/**/*Silpo*.php | .ai/rules/actions-data-services.md |
 | app/{Actions,Jobs,Http/Controllers}/**/*Cart*.php | .ai/rules/actions-jobs-http-controllers.md |
 | app/{Actions,Jobs,Services}/** | .ai/rules/actions-jobs-services.md |
@@ -16,6 +17,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | resources/views/{components,events}/** | .ai/rules/componentsevents.md |
 | app/{Contracts,Data,Jobs,Services}/**/*Cart*.php | .ai/rules/contracts-data-jobs-services.md |
 | app/{Actions,Jobs,Services,Http/Controllers}/**/*Cart*.php | .ai/rules/controllers.md |
+| app/{Data,Jobs,Services,Http/Controllers}/**/*Cart*.php | .ai/rules/data-jobs-services-http-controllers.md |
 | app/{Data,Jobs,Services}/**, app/{Data,Jobs,Services}/**/*Cart*.php, app/{Data,Jobs,Services}/**/*.php | .ai/rules/data-jobs-services.md |
 | {resources/css/**,resources/views/components/**,resources/views/events/**} | .ai/rules/events.md |
 | tests/{Feature,Live,Fixtures,Support}/**/*AiProductLogic* | .ai/rules/feature-live-fixtures-support.md |

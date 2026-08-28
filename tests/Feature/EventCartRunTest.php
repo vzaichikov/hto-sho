@@ -454,7 +454,7 @@ class EventCartRunTest extends TestCase
 
         $run = EventCartRun::query()->whereBelongsTo($event)->sole();
         $this->assertSame(CartRunStatus::Running, $run->status);
-        $this->assertSame(CartRunPhase::Preparing, $run->phase);
+        $this->assertSame(CartRunPhase::Searching, $run->phase);
         $this->assertSame(CartHarnessMode::Orchestrated, $run->harness_mode);
         $this->assertSame($event->silpoCartResets()->sole()->id, $run->silpo_cart_reset_id);
         $this->assertSame(1, $gateway->clearWrites);
@@ -462,11 +462,59 @@ class EventCartRunTest extends TestCase
         $this->assertSame($event->state_version, $run->plan_state_version);
         $this->assertSame('voda-5087', data_get($run->state, 'catalog_scopes.categories.0.slug'));
         $this->assertSame('dlia-lehkoi-vecheri', data_get($run->state, 'catalog_scopes.sets.0.slug'));
-        $this->assertCount(2, $run->steps);
+        $this->assertSame('Вода питна', data_get($run->state, 'needs.0.name'));
+        $this->assertSame('Вода питна', data_get($run->state, 'needs.0.search_query'));
+        $this->assertFalse(data_get($run->state, 'needs.0.retailer_identity_prepared'));
+        $this->assertCount(1, $run->steps);
         $this->assertSame(CartSyncStatus::Syncing, $event->refresh()->cart_sync_status);
         Queue::assertPushed(
             AdvanceEventCartRunJob::class,
             fn (AdvanceEventCartRunJob $job): bool => $job->runId === $run->id && $job->expectedCursor === 0,
+        );
+    }
+
+    public function test_orchestrated_preparing_run_uses_the_approved_plan_without_ai_preparation(): void
+    {
+        [, $event] = $this->eventWithPlan();
+        $cart = $this->emptyReadyCart();
+        $run = EventCartRun::factory()->for($event)->create([
+            'phase' => CartRunPhase::Preparing,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [],
+                'current_need_index' => 0,
+            ],
+        ]);
+        $agent = new FakeCartAgent(
+            new CartAgentPreparationData([$this->waterNeed()]),
+            [],
+            $this->audit([], ['water'], false),
+        );
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            $agent,
+            new FakeCartGateway($cart),
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+
+        $run->refresh();
+        $this->assertSame(0, $agent->preparationCalls);
+        $this->assertSame(CartRunPhase::Searching, $run->phase);
+        $this->assertSame('Вода питна', data_get($run->state, 'needs.0.name'));
+        $this->assertSame('Вода питна', data_get($run->state, 'needs.0.search_query'));
+        $this->assertFalse(data_get($run->state, 'needs.0.retailer_identity_prepared'));
+        $this->assertCount(0, $run->steps);
+        Queue::assertPushed(
+            AdvanceEventCartRunJob::class,
+            fn (AdvanceEventCartRunJob $job): bool => $job->runId === $run->id
+                && $job->expectedCursor === 1,
         );
     }
 
@@ -925,6 +973,8 @@ class EventCartRunTest extends TestCase
             slot: $cart->slot,
             totalAfterDiscounts: 60,
             verifiedFulfilmentFingerprint: $cart->verifiedFulfilmentFingerprint,
+            checkoutWebUrl: 'https://silpo.test/checkout/web',
+            checkoutMobileUrl: 'https://silpo.test/checkout/mobile',
         );
         $audit = $this->audit(['water'], [], true);
         $runner = new FakeAgenticSilpoCartRunner(
@@ -971,6 +1021,8 @@ class EventCartRunTest extends TestCase
         $this->assertSame('water-1', data_get($runner->commitProducts, '0.0.productId'));
         $this->assertSame(2.0, data_get($runner->commitProducts, '0.0.quantity'));
         $this->assertFalse(data_get($runner->commitProducts, '0.0.addQuantity'));
+        $this->assertSame('https://silpo.test/checkout/web', data_get($run->state, 'verified_cart.checkout_web_url'));
+        $this->assertSame('https://silpo.test/checkout/mobile', data_get($run->state, 'verified_cart.checkout_mobile_url'));
     }
 
     public function test_owner_can_review_the_current_route_and_confirm_a_found_flat_home_address(): void
@@ -1918,7 +1970,7 @@ class EventCartRunTest extends TestCase
         [$owner, $event] = $this->eventWithPlan();
         SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
         $gateway = new FakeCartGateway($this->readyCart());
-        $gateway->searchResults['вода питна'] = [[
+        $gateway->searchResults['Вода питна'] = [[
             ...$this->waterProduct(),
             'id' => 'water-overage',
             'name' => 'Вода негазована 3 л',
@@ -1934,9 +1986,9 @@ class EventCartRunTest extends TestCase
                 quantity: 2,
                 reason: 'Безпечний і доступний варіант.',
                 question: null,
-                audit: $this->audit(covered: ['water'], remaining: [], complete: true),
+                audit: $this->audit(covered: ['n_01'], remaining: [], complete: true),
             )],
-            audit: $this->audit(covered: ['water'], remaining: [], complete: true),
+            audit: $this->audit(covered: ['n_01'], remaining: [], complete: true),
         );
         $this->app->instance(SilpoCartGateway::class, $gateway);
 
@@ -1961,22 +2013,12 @@ class EventCartRunTest extends TestCase
             new CartCandidateSuitability,
         );
         $run->refresh();
-        $this->assertSame(CartRunPhase::Searching, $run->phase);
-
-        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
-            $agent,
-            $gateway,
-            $quantities,
-            $statuses,
-            new CartCandidateSuitability,
-        );
-        $run->refresh();
-        $this->assertSame(['вода питна'], $gateway->searchQueries);
+        $this->assertSame(['Вода питна'], $gateway->searchQueries);
         $this->assertSame(CartRunPhase::Deciding, $run->phase);
         $this->assertSame('water-1', data_get($run->state, 'last_candidates.0.product_id'));
         $searchStep = $run->steps()->where('kind', 'searching')->latest('sequence')->firstOrFail();
-        $this->assertSame('вода питна', data_get($searchStep->context, 'query'));
-        $this->assertStringContainsString('вода питна', $searchStep->message);
+        $this->assertSame('Вода питна', data_get($searchStep->context, 'query'));
+        $this->assertStringContainsString('Вода питна', $searchStep->message);
 
         (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
             $agent,
@@ -4466,11 +4508,13 @@ class EventCartRunTest extends TestCase
     public function test_silpo_tab_shows_verified_products_from_the_completed_cart(): void
     {
         [$owner, $event] = $this->eventWithPlan();
-        EventCartRun::factory()->for($event)->create([
+        $run = EventCartRun::factory()->for($event)->create([
             'status' => CartRunStatus::Synced,
             'phase' => CartRunPhase::Finished,
             'state' => [
                 'verified_cart' => [
+                    'checkout_web_url' => 'https://silpo.test/checkout/web',
+                    'checkout_mobile_url' => 'https://silpo.test/checkout/mobile',
                     'items' => [[
                         'product_id' => 'water-1',
                         'name' => 'Вода Моршинська негазована',
@@ -4514,9 +4558,19 @@ class EventCartRunTest extends TestCase
             ->assertSee('https://images.silpo.ua/v2/products/water.png', escape: false)
             ->assertSee('2 × 28,50 ₴')
             ->assertSee('57,00 ₴')
+            ->assertSee('Відкрити в застосунку Сільпо')
+            ->assertSee('https://silpo.test/checkout/mobile', escape: false)
+            ->assertSee('Відкрити на сайті Сільпо')
+            ->assertSee('https://silpo.test/checkout/web', escape: false)
             ->assertSee('Зібрати кошик наново')
             ->assertDontSee('Шоколад з особистого кошика')
             ->assertDontSee('2 позицій від Гуся');
+
+        $this->actingAs($owner)
+            ->getJson(route('events.cart-runs.show', [$event, $run]))
+            ->assertOk()
+            ->assertJsonPath('checkout_urls.web', 'https://silpo.test/checkout/web')
+            ->assertJsonPath('checkout_urls.mobile', 'https://silpo.test/checkout/mobile');
     }
 
     public function test_cart_run_endpoints_are_owner_scoped_and_runs_cannot_cross_events(): void
@@ -4816,6 +4870,8 @@ class EventCartRunTest extends TestCase
 
 final class FakeCartAgent implements CartProductAgent
 {
+    public int $preparationCalls = 0;
+
     /** @var array<int, CartAgentSearchIntentData> */
     public array $searchIntents = [];
 
@@ -4837,6 +4893,8 @@ final class FakeCartAgent implements CartProductAgent
         array $shoppingPlan,
         ?HarnessRun $harnessRun = null,
     ): CartAgentPreparationData {
+        $this->preparationCalls++;
+
         return $this->preparation;
     }
 

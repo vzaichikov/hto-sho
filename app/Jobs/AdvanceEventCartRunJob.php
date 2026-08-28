@@ -11,6 +11,7 @@ use App\Contracts\CartProductAgent;
 use App\Contracts\SilpoCartGateway;
 use App\Data\CartAgentAuditData;
 use App\Data\CartAgentDecisionData;
+use App\Data\CartAgentPreparationData;
 use App\Data\SilpoCartContextData;
 use App\Models\EventCartRun;
 use App\Services\CartCandidateSuitability;
@@ -79,7 +80,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
         }
 
         match ($run->phase) {
-            CartRunPhase::Preparing => $this->prepare($run, $agent, $statuses),
+            CartRunPhase::Preparing => $this->prepare($run, $statuses),
             CartRunPhase::Searching => $this->search($run, $agent, $silpo, $quantities, $statuses, $candidateSuitability),
             CartRunPhase::Inspecting => $this->inspect($run, $silpo, $statuses),
             CartRunPhase::Deciding => $this->decide($run, $agent, $quantities, $statuses, $candidateSuitability),
@@ -125,7 +126,6 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
 
     private function prepare(
         EventCartRun $run,
-        CartProductAgent $agent,
         GooseCartStatusService $statuses,
     ): void {
         $state = $run->state;
@@ -138,12 +138,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $preparation = $agent->prepare(
-            $this->agentEventContext(data_get($state, 'event_context', []), $plan),
-            $plan,
-            $run->harnessRun,
-        );
-        $state['needs'] = $preparation->needs;
+        $state['needs'] = CartAgentPreparationData::fromPlanItems($planItems)->needs;
         $state['current_need_index'] = 0;
 
         $this->transition(
@@ -152,7 +147,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 'phase' => CartRunPhase::Searching,
                 'state' => $state,
             ],
-            [['kind' => 'planning']],
+            [],
         );
     }
 

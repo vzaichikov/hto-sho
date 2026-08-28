@@ -1202,6 +1202,22 @@ if (silpoDialog instanceof HTMLDialogElement) {
             ? 'Гусь залишив рівно той набір, який ви вже підтвердили. Перед повтором він перевірить маршрут і не допустить сторонні товари.'
             : 'Перевірте реальні товари Сільпо, рольові заміни, знаки питання щодо паковання, кількості й суму. До цього підтвердження Гусь нічого в кошик не записує.';
 
+        const checkout = runPanel.querySelector('[data-silpo-checkout]');
+        const checkoutUrls = payload.checkout_urls ?? {};
+        const checkoutMobileUrl = typeof checkoutUrls.mobile === 'string' && checkoutUrls.mobile.startsWith('https://')
+            ? checkoutUrls.mobile
+            : null;
+        const checkoutWebUrl = typeof checkoutUrls.web === 'string' && checkoutUrls.web.startsWith('https://')
+            ? checkoutUrls.web
+            : null;
+        const checkoutMobile = checkout.querySelector('[data-silpo-checkout-mobile]');
+        const checkoutWeb = checkout.querySelector('[data-silpo-checkout-web]');
+        checkout.classList.toggle('hidden', ! payload.terminal || (! checkoutMobileUrl && ! checkoutWebUrl));
+        checkoutMobile.classList.toggle('hidden', ! checkoutMobileUrl);
+        checkoutWeb.classList.toggle('hidden', ! checkoutWebUrl);
+        checkoutMobile.href = checkoutMobileUrl ?? '#';
+        checkoutWeb.href = checkoutWebUrl ?? '#';
+
         const warnings = [...(payload.warnings ?? [])];
 
         if (payload.error) {

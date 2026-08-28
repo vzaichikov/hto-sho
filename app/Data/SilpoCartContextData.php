@@ -3,6 +3,7 @@
 namespace App\Data;
 
 use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 final readonly class SilpoCartContextData
@@ -24,6 +25,8 @@ final readonly class SilpoCartContextData
         public array $slot,
         public ?float $totalAfterDiscounts,
         public ?string $verifiedFulfilmentFingerprint = null,
+        public ?string $checkoutWebUrl = null,
+        public ?string $checkoutMobileUrl = null,
     ) {}
 
     /**
@@ -117,6 +120,8 @@ final readonly class SilpoCartContextData
                 'slot_start' => $slotStart,
                 'slot_end' => $slotEnd,
             ]),
+            checkoutWebUrl: self::checkoutUrl(Arr::get($payload, 'checkoutWebLink')),
+            checkoutMobileUrl: self::checkoutUrl(Arr::get($payload, 'checkoutMobileLink')),
         );
     }
 
@@ -139,6 +144,8 @@ final readonly class SilpoCartContextData
             verifiedFulfilmentFingerprint: is_string(Arr::get($context, 'fulfilment_fingerprint'))
                 ? Arr::get($context, 'fulfilment_fingerprint')
                 : null,
+            checkoutWebUrl: self::checkoutUrl(Arr::get($context, 'checkout_web_url')),
+            checkoutMobileUrl: self::checkoutUrl(Arr::get($context, 'checkout_mobile_url')),
         );
     }
 
@@ -157,7 +164,18 @@ final readonly class SilpoCartContextData
             'slot' => $this->slot,
             'total_after_discounts' => $this->totalAfterDiscounts,
             'fulfilment_fingerprint' => $this->verifiedFulfilmentFingerprint,
+            'checkout_web_url' => $this->checkoutWebUrl,
+            'checkout_mobile_url' => $this->checkoutMobileUrl,
         ];
+    }
+
+    private static function checkoutUrl(mixed $value): ?string
+    {
+        if (! is_string($value) || filter_var($value, FILTER_VALIDATE_URL) === false) {
+            return null;
+        }
+
+        return Str::startsWith(Str::lower($value), 'https://') ? $value : null;
     }
 
     public function fingerprint(): string

@@ -166,6 +166,39 @@ class McpSilpoCartGatewayTest extends TestCase
         $this->assertSame(4, $commitArguments['products'][0]['quantity']);
     }
 
+    public function test_cart_context_captures_and_round_trips_both_checkout_links(): void
+    {
+        $context = SilpoCartContextData::fromMcp('cart-1', [
+            'cart' => [
+                'deliveryType' => 'DeliveryHome',
+                'timeslot' => [
+                    'start' => '2026-08-29T10:00:00Z',
+                    'end' => '2026-08-29T11:00:00Z',
+                ],
+                'address' => ['addressType' => 'delivery'],
+                'shipments' => [[
+                    'companyId' => 'company-1',
+                    'branchId' => 'branch-1',
+                    'products' => [],
+                ]],
+                'calculation' => [
+                    'validations' => [],
+                    'totalAfterDiscounts' => 0,
+                ],
+            ],
+            'checkoutWebLink' => 'https://silpo.test/checkout/web',
+            'checkoutMobileLink' => 'https://silpo.test/checkout/mobile',
+        ], [
+            'start' => '2026-08-29T10:00:00Z',
+            'end' => '2026-08-29T11:00:00Z',
+        ]);
+
+        $restored = SilpoCartContextData::fromRunContext($context->toRunContext());
+
+        $this->assertSame('https://silpo.test/checkout/web', $restored->checkoutWebUrl);
+        $this->assertSame('https://silpo.test/checkout/mobile', $restored->checkoutMobileUrl);
+    }
+
     public function test_text_search_defaults_to_and_caps_results_at_thirty(): void
     {
         $gateway = $this->app->make(McpSilpoCartGateway::class);

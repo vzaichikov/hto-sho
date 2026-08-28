@@ -10,6 +10,42 @@ use UnexpectedValueException;
 
 class CartAgentPreparationDataTest extends TestCase
 {
+    public function test_it_projects_the_approved_plan_without_ai_preparation(): void
+    {
+        $preparation = CartAgentPreparationData::fromPlanItems([
+            [
+                'name' => '  Вода питна  ',
+                'category' => 'water',
+                'quantity' => 4,
+                'unit' => 'л',
+                'note' => 'По літру на людину.',
+                'optional' => false,
+                'minimum_distinct_products' => 1,
+            ],
+            [
+                'name' => 'Овочі для гриля',
+                'category' => 'food',
+                'quantity' => 3,
+                'unit' => 'кг',
+                'note' => 'Потрібен асортимент.',
+                'optional' => true,
+                'minimum_distinct_products' => 2,
+            ],
+        ]);
+
+        $this->assertSame(['n_01', 'n_02', 'n_03'], array_column($preparation->needs, 'key'));
+        $this->assertSame([0, 1, 1], array_column($preparation->needs, 'source_index'));
+        $this->assertSame(
+            ['Вода питна', 'Овочі для гриля', 'Овочі для гриля'],
+            array_column($preparation->needs, 'name'),
+        );
+        $this->assertSame([4.0, 1.5, 1.5], array_column($preparation->needs, 'quantity'));
+        $this->assertSame([1, 1, 2], array_column($preparation->needs, 'distinct_product_position'));
+        $this->assertSame([false, true, true], array_column($preparation->needs, 'optional'));
+        $this->assertSame('Вода питна', data_get($preparation->needs, '0.search_query'));
+        $this->assertFalse(data_get($preparation->needs, '0.retailer_identity_prepared'));
+    }
+
     public function test_it_replaces_model_authored_keys_with_stable_opaque_keys(): void
     {
         $preparation = CartAgentPreparationData::from([

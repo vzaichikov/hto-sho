@@ -12,6 +12,62 @@ final readonly class CartAgentPreparationData
     /** @param array<int, array<string, mixed>> $needs */
     public function __construct(public array $needs) {}
 
+    /** @param array<int, array<string, mixed>> $planItems */
+    public static function fromPlanItems(array $planItems): self
+    {
+        $needs = collect($planItems)
+            ->flatMap(function (array $planItem, int $sourceIndex): array {
+                $distinctProductCount = max(1, min(
+                    3,
+                    (int) data_get($planItem, 'minimum_distinct_products', 1),
+                ));
+                $remainingQuantity = (float) data_get($planItem, 'quantity', 0);
+
+                return collect(range(1, $distinctProductCount))
+                    ->map(function (int $position) use (
+                        $distinctProductCount,
+                        $planItem,
+                        &$remainingQuantity,
+                        $sourceIndex,
+                    ): array {
+                        $quantity = $position === $distinctProductCount
+                            ? $remainingQuantity
+                            : (float) data_get($planItem, 'quantity', 0) / $distinctProductCount;
+                        $remainingQuantity -= $quantity;
+                        $name = Str::squish((string) data_get($planItem, 'name'));
+
+                        return [
+                            'source_index' => $sourceIndex,
+                            'name' => $name,
+                            'category' => (string) data_get($planItem, 'category', 'other'),
+                            'quantity' => $quantity,
+                            'unit' => (string) data_get($planItem, 'unit'),
+                            'note' => (string) data_get($planItem, 'note', ''),
+                            'optional' => (bool) data_get($planItem, 'optional', false),
+                            'minimum_distinct_products' => $distinctProductCount,
+                            'distinct_product_position' => $position,
+                            'search_query' => $name,
+                            'search_queries' => [],
+                            'retailer_identity_prepared' => false,
+                            'status' => 'pending',
+                            'attempts' => [],
+                            'inspected_products' => [],
+                            'selected_item' => null,
+                            'human_answer' => null,
+                        ];
+                    })
+                    ->all();
+            })
+            ->values()
+            ->map(fn (array $need, int $index): array => [
+                ...$need,
+                'key' => sprintf('n_%02d', $index + 1),
+            ])
+            ->all();
+
+        return new self($needs);
+    }
+
     /**
      * @param  array<string, mixed>  $payload
      * @param  array<int, array<string, mixed>>  $planItems

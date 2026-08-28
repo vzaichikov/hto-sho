@@ -63,7 +63,7 @@ class CartProductDecisionServiceTest extends TestCase
         $this->assertStringContainsString('серед перших трьох search_queries', $productFirstRepairPrompt);
     }
 
-    public function test_v1_uses_the_llm_food_identity_as_the_first_catalog_query(): void
+    public function test_ai_preparation_uses_the_llm_food_identity_as_the_first_catalog_query(): void
     {
         config([
             'services.ai.provider' => 'openai',

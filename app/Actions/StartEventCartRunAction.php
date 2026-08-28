@@ -8,6 +8,7 @@ use App\CartRunPhase;
 use App\CartRunStatus;
 use App\CartSyncStatus;
 use App\Contracts\SilpoCartGateway;
+use App\Data\CartAgentPreparationData;
 use App\Data\ConfirmedSilpoFulfilmentData;
 use App\Exceptions\SilpoCartUnavailableException;
 use App\HarnessEntryKind;
@@ -172,13 +173,20 @@ final class StartEventCartRunAction
                 return $activeRun;
             }
 
+            $planItems = data_get($lockedEvent->shopping_plan, 'items', []);
+            $startsWithCatalogSearch = $harnessMode === CartHarnessMode::Orchestrated
+                && is_array($planItems)
+                && $planItems !== [];
+            $needs = $startsWithCatalogSearch
+                ? CartAgentPreparationData::fromPlanItems($planItems)->needs
+                : [];
             $run = $lockedEvent->cartRuns()->create([
                 'silpo_cart_reset_id' => $lockedReset->id,
                 'harness_run_id' => $harnessRun->id,
                 'mode' => $mode,
                 'harness_mode' => $harnessMode,
                 'status' => CartRunStatus::Running,
-                'phase' => CartRunPhase::Preparing,
+                'phase' => $startsWithCatalogSearch ? CartRunPhase::Searching : CartRunPhase::Preparing,
                 'plan_state_version' => $lockedEvent->state_version,
                 'cursor' => 0,
                 'cart_id' => $cart->cartId,
@@ -187,7 +195,7 @@ final class StartEventCartRunAction
                 'state' => [
                     'event_context' => $lockedEvent->state,
                     'plan_snapshot' => $lockedEvent->shopping_plan,
-                    'needs' => [],
+                    'needs' => $needs,
                     'catalog_scopes' => $catalogScopes,
                     'current_need_index' => 0,
                     'last_candidates' => [],
@@ -201,7 +209,10 @@ final class StartEventCartRunAction
             ]);
 
             $this->statuses->append($run, 'preflight');
-            $this->statuses->append($run, 'planning');
+
+            if ($harnessMode === CartHarnessMode::Agentic) {
+                $this->statuses->append($run, 'planning');
+            }
             $lockedReset->update([
                 'status' => SilpoCartResetStatus::Consumed,
                 'consumed_at' => now(),
