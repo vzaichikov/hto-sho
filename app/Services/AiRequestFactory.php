@@ -16,7 +16,7 @@ final class AiRequestFactory
         $apiKey = $provider === 'ollama'
             ? (string) config('services.ai.providers.ollama.api_key')
             : (string) config('services.ai.api_key');
-        $timeoutSeconds ??= (int) config('services.ai.request_timeout', 60);
+        $timeoutSeconds ??= (int) config('services.ai.request_timeout', 180);
 
         if (! is_string($baseUrl) || $baseUrl === '') {
             throw new InvalidArgumentException("Unsupported AI provider [{$provider}].");

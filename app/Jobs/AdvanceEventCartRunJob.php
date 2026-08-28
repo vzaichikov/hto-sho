@@ -33,7 +33,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
 
     private const MAX_INVALID_DECISIONS_PER_NEED = 4;
 
-    public int $timeout = 80;
+    public int $timeout = 200;
 
     public int $tries = 3;
 

@@ -10,6 +10,7 @@ Before planning or editing, find the row whose globs match the file's path and r
 | app/{Actions,Jobs,Http/Controllers}/**/*Cart*.php | .ai/rules/actions-jobs-http-controllers.md |
 | app/{Actions,Jobs,Services}/** | .ai/rules/actions-jobs-services.md |
 | tests/Fixtures/AiProductLogic/** | .ai/rules/ai-product-logic.md |
+| {app/Jobs/**/*Cart*.php,app/Services/AiRequestFactory.php,config/services.php} | .ai/rules/app-jobs-services-2.md |
 | {app/{Jobs,Services}/**/*Cart*.php,config/goose_cart_phrases.php} | .ai/rules/app-jobs-services.md |
 | {app,config,database,resources,routes,tests}/** | .ai/rules/appconfigdatabaseresourcesroutestests.md |
 | {bootstrap/app.php,.env,keys.env,.gitignore} | .ai/rules/bootstrap.md |

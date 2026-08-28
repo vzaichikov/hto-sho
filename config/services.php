@@ -59,7 +59,7 @@ return [
         'model' => env('AI_MODEL', 'gpt-5.4-mini'),
         'lexical_model' => env('AI_LEXICAL_MODEL'),
         'api_key' => env('AI_API_KEY'),
-        'request_timeout' => (int) env('AI_REQUEST_TIMEOUT', 60),
+        'request_timeout' => (int) env('AI_REQUEST_TIMEOUT', 180),
         'image_request_timeout' => (int) env('AI_IMAGE_REQUEST_TIMEOUT', 150),
         'context_request_timeout' => (int) env('AI_CONTEXT_REQUEST_TIMEOUT', 180),
         'providers' => [

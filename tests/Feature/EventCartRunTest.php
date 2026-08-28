@@ -66,8 +66,9 @@ class EventCartRunTest extends TestCase
         Queue::fake();
     }
 
-    public function test_ollama_cart_job_timeout_does_not_change_the_openai_timeout(): void
+    public function test_cart_job_timeout_budget_covers_the_provider_request_timeout(): void
     {
+        config(['services.ai.request_timeout' => 180]);
         $openAiJob = new AdvanceEventCartRunJob(1, 0);
 
         config([
@@ -77,8 +78,10 @@ class EventCartRunTest extends TestCase
 
         $ollamaJob = new AdvanceEventCartRunJob(1, 0);
 
-        $this->assertSame(80, $openAiJob->timeout);
+        $this->assertSame(200, $openAiJob->timeout);
+        $this->assertGreaterThan(config('services.ai.request_timeout'), $openAiJob->timeout);
         $this->assertSame(900, $ollamaJob->timeout);
+        $this->assertGreaterThan(config('services.ai.request_timeout'), $ollamaJob->timeout);
     }
 
     public function test_missing_cart_stops_before_a_run_and_tells_the_user_to_prepare_silpo(): void
