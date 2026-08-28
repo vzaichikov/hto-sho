@@ -18,3 +18,6 @@ For every OpenAI-compatible LLM request, keep task, safety, and output-format in
 
 ## Keep synthesized shopping requirements atomic
 Context synthesis must emit one independently searchable product per shopping_requirements item. Split explicitly named grouped lists, keep the product identity alone in name, and move audience or purpose qualifiers such as for a participant into constraints. Do not invent a decomposition when the source names only a broad need.
+
+## Limit Goose questions to menu and headcount
+Event synthesis may ask only about menu choices, food or drink safety, a specific food contribution, or a genuinely unknown total participant count. Never ask for product, portion, weight, volume, or package amounts; the shopping planner estimates them from headcount. Never ask logistics or roster names when total headcount is known, and repair must remove legacy out-of-scope questions even when they have a key.

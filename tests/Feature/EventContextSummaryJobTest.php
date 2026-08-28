@@ -405,6 +405,9 @@ class EventContextSummaryJobTest extends TestCase
         Http::assertSentCount(2);
         $repairPrompt = (string) data_get(Http::recorded()[1][0]->data(), 'instructions');
         $this->assertStringContainsString('не перетворена на відмову їсти чи пити', $repairPrompt);
+        $this->assertStringContainsString('unresolved_questions містить лише питання про вибір меню', $repairPrompt);
+        $this->assertStringContainsString('питання про кількість порцій, страв, кілограмів, літрів, упаковок', $repairPrompt);
+        $this->assertStringContainsString('Нефудове або логістичне питання видали', $repairPrompt);
     }
 
     public function test_one_bounded_repair_restores_an_omitted_tentative_contribution_need(): void
@@ -747,7 +750,13 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertStringContainsString('не додавай механічно до constraints кожної спільної покупки', $systemPrompt);
         $this->assertStringContainsString('Пізніша агрегована кількість для всієї групи не стирає person-level атрибуцію', $systemPrompt);
         $this->assertStringContainsString('якщо товар лишився у shopping_requirements або summary, але зникло відоме авторство бажання', $systemPrompt);
-        $this->assertStringContainsString('додай unresolved question про імена решти 3', $systemPrompt);
+        $this->assertStringContainsString('не питай імена решти', $systemPrompt);
+        $this->assertStringContainsString('Дозволено питати лише про саме меню та закупівлю їжі чи напоїв', $systemPrompt);
+        $this->assertStringContainsString('Ніколи не питай, скільки потрібно порцій, страв, кілограмів, літрів, упаковок', $systemPrompt);
+        $this->assertStringContainsString('потрібні обсяги самостійно розрахує наступний етап планування', $systemPrompt);
+        $this->assertStringContainsString('як дістатися до місця', $systemPrompt);
+        $this->assertStringContainsString('не додавай її до unresolved_questions', $systemPrompt);
+        $this->assertStringContainsString('не повертай старе open-питання поза дозволеною областю', $systemPrompt);
         $this->assertStringContainsString('Скорочене формулювання не скасовує відомих деталей', $systemPrompt);
         $this->assertIsInt($laterPosition);
         $this->assertIsInt($olderPosition);
