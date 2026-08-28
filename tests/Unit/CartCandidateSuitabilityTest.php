@@ -529,6 +529,22 @@ class CartCandidateSuitabilityTest extends TestCase
         ));
     }
 
+    public function test_fresh_produce_rejects_generic_frozen_and_crunch_preparation_markers(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = ['name' => 'Картопля свіжа', 'note' => 'Запекти цілою після покупки'];
+        $freshCandidate = ['name' => 'Картопля молода'];
+        $frozenCandidate = ['name' => 'Картопля заморожена для фрі'];
+        $crunchCandidate = ['name' => 'Картопля super crunch'];
+
+        $this->assertTrue($suitability->allows($need, $freshCandidate, [], []));
+        $this->assertTrue($suitability->isExactIdentityCandidate($need, $freshCandidate));
+        $this->assertFalse($suitability->allows($need, $frozenCandidate, [], []));
+        $this->assertFalse($suitability->isExactIdentityCandidate($need, $frozenCandidate));
+        $this->assertFalse($suitability->allows($need, $crunchCandidate, [], []));
+        $this->assertFalse($suitability->isExactIdentityCandidate($need, $crunchCandidate));
+    }
+
     public function test_grill_pepper_identity_prefers_a_suitable_pepper_over_chilli_and_carrot(): void
     {
         $suitability = new CartCandidateSuitability;

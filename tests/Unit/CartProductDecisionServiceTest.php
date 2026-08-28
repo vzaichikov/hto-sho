@@ -52,8 +52,11 @@ class CartProductDecisionServiceTest extends TestCase
 
         $this->assertStringContainsString('конкретну куповану харчову ідентичність', $productFirstPrompt);
         $this->assertStringContainsString('ДО пошуку використай кулінарні знання', $productFirstPrompt);
+        $this->assertStringContainsString('розділяй discovery та suitability', $productFirstPrompt);
+        $this->assertStringContainsString('використовуються тільки після отримання кандидатів', $productFirstPrompt);
         $this->assertStringContainsString('не за фіксованою таблицею відповідностей', $productFirstPrompt);
         $this->assertStringNotContainsString('name зберігає повну людську назву потреби', $productFirstPrompt);
+        $this->assertStringContainsString('розділяй discovery та suitability', $productFirstRepairPrompt);
         $this->assertStringContainsString('не PHP-таблиці відповідностей', $productFirstRepairPrompt);
     }
 

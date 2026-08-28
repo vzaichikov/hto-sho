@@ -70,6 +70,10 @@ class OpenAiSilpoCartRunnerTest extends TestCase
                 )
                 && str_contains(
                     (string) data_get($payload, 'instructions'),
+                    'query доводить лише товарну ідентичність',
+                )
+                && str_contains(
+                    (string) data_get($payload, 'instructions'),
                     'limit від 1 до 30',
                 )
                 && data_get($payload, 'tools.0.allowed_tools') === [
@@ -573,6 +577,42 @@ class OpenAiSilpoCartRunnerTest extends TestCase
             ['Вода негазована', 'вода питна', 'вода без газу'],
             collect($result->attempts)->pluck('query')->all(),
         );
+    }
+
+    public function test_extra_read_only_search_after_an_exact_candidate_does_not_discard_that_selection(): void
+    {
+        $response = $this->selectionResponse('water-1');
+        $extraCall = $response['output'][1];
+        $extraArguments = json_decode(
+            (string) $extraCall['arguments'],
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $extraArguments['products'] = ['вода питна'];
+        $extraCall['arguments'] = json_encode($extraArguments, JSON_THROW_ON_ERROR);
+        $extraCall['output'] = json_encode([
+            'success' => true,
+            'queries' => [[
+                'query' => 'вода питна',
+                'products' => [],
+            ]],
+        ], JSON_THROW_ON_ERROR);
+        array_splice($response['output'], 2, 0, [$extraCall]);
+        Http::fake(['*' => Http::response($response)]);
+
+        $result = app(OpenAiSilpoCartRunner::class)->selectNeed(
+            'silpo-secret-token',
+            $this->cart(),
+            $this->selectionContext(),
+        );
+
+        $this->assertSame('water-1', data_get($result->selectedItem, 'product_id'));
+        $this->assertSame(2, $result->toolCallCount);
+        $this->assertSame(
+            ['Вода негазована', 'вода питна'],
+            collect($result->attempts)->pluck('query')->all(),
+        );
+        Http::assertSentCount(1);
     }
 
     public function test_commit_waits_for_exact_approval_then_performs_one_write_and_readback(): void

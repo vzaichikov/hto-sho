@@ -225,7 +225,10 @@ class EventManagementTest extends TestCase
             ->get(route('events.index'))
             ->assertOk()
             ->assertSee('Пікнік')
-            ->assertSee('Очікується людей');
+            ->assertSee('Очікується людей')
+            ->assertSee('action="'.route('events.destroy', $event).'"', escape: false)
+            ->assertSee('value="DELETE"', escape: false)
+            ->assertSee('Видалити подію «Пікнік» разом з усіма її матеріалами?');
     }
 
     public function test_user_cannot_view_or_change_another_users_event(): void
@@ -339,7 +342,8 @@ class EventManagementTest extends TestCase
 
         $this->actingAs($user)
             ->delete(route('events.destroy', $event))
-            ->assertRedirect(route('events.index'));
+            ->assertRedirect(route('events.index'))
+            ->assertSessionHas('success', 'Подію та всі її матеріали видалено.');
 
         $this->assertDatabaseMissing('events', ['id' => $event->id]);
         $this->assertDatabaseMissing('event_sources', ['id' => $source->id]);

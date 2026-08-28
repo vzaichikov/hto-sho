@@ -42,26 +42,36 @@
                         $participantCount = $event->people_count ?? count($event->state['participants'] ?? []);
                         $shownTotal = $event->estimated_total ?? $event->budget_amount;
                     @endphp
-                    <a class="group flex min-h-60 flex-col rounded-[26px] border-2 border-ink/10 bg-paper p-5 shadow-[3px_4px_0_rgba(32,32,29,0.08)] transition hover:-translate-y-1 hover:border-ink hover:shadow-[5px_6px_0_#F24B35]" href="{{ route('events.show', $event) }}">
-                        <div class="flex items-start justify-between gap-4">
-                            <div class="grid size-11 -rotate-3 place-items-center rounded-[45%] bg-yellow font-display text-xl transition group-hover:rotate-0">{{ $loop->iteration }}</div>
-                            <x-status-badge :status="$event->status" />
-                        </div>
-                        <h3 class="mt-6 font-display text-2xl leading-[1.15] tracking-tight transition group-hover:text-orange-dark">{{ $event->title }}</h3>
-                        <p class="mt-1 text-sm text-muted">Оновлено {{ $event->updated_at->diffForHumans() }} · матеріалів: {{ $event->sources_count }}</p>
+                    <article class="group flex min-h-60 flex-col rounded-[26px] border-2 border-ink/10 bg-paper p-5 shadow-[3px_4px_0_rgba(32,32,29,0.08)] transition hover:-translate-y-1 hover:border-ink hover:shadow-[5px_6px_0_#F24B35]">
+                        <a class="flex flex-1 flex-col rounded-xl focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="{{ route('events.show', $event) }}">
+                            <div class="flex items-start justify-between gap-4">
+                                <div class="grid size-11 -rotate-3 place-items-center rounded-[45%] bg-yellow font-display text-xl transition group-hover:rotate-0">{{ $loop->iteration }}</div>
+                                <x-status-badge :status="$event->status" />
+                            </div>
+                            <h3 class="mt-6 font-display text-2xl leading-[1.15] tracking-tight transition group-hover:text-orange-dark">{{ $event->title }}</h3>
+                            <p class="mt-1 text-sm text-muted">Оновлено {{ $event->updated_at->diffForHumans() }} · матеріалів: {{ $event->sources_count }}</p>
 
-                        <div class="mt-auto flex items-end justify-between border-t border-ink/10 pt-5">
-                            <div>
-                                <p class="text-xs font-semibold text-muted">Очікується людей</p>
-                                <p class="mt-0.5 font-bold">{{ $participantCount ?: '—' }}</p>
+                            <div class="mt-auto flex items-end justify-between pt-5">
+                                <div>
+                                    <p class="text-xs font-semibold text-muted">Очікується людей</p>
+                                    <p class="mt-0.5 font-bold">{{ $participantCount ?: '—' }}</p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-xs font-semibold text-muted">{{ $event->estimated_total ? 'Орієнтовно' : 'Бюджет' }}</p>
+                                    <p class="mt-0.5 font-bold">{{ $shownTotal ? \Illuminate\Support\Number::currency($shownTotal, in: $event->currency, locale: 'uk') : '—' }}</p>
+                                </div>
                             </div>
-                            <div class="text-right">
-                                <p class="text-xs font-semibold text-muted">{{ $event->estimated_total ? 'Орієнтовно' : 'Бюджет' }}</p>
-                                <p class="mt-0.5 font-bold">{{ $shownTotal ? \Illuminate\Support\Number::currency($shownTotal, in: $event->currency, locale: 'uk') : '—' }}</p>
-                            </div>
+                        </a>
+
+                        <div class="mt-4 flex items-center justify-between gap-4 border-t border-ink/10 pt-4">
+                            <a class="text-sm font-extrabold text-orange-dark focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" href="{{ route('events.show', $event) }}">Відкрити план <span aria-hidden="true">→</span></a>
+                            <form method="POST" action="{{ route('events.destroy', $event) }}" data-confirm="Видалити подію «{{ $event->title }}» разом з усіма її матеріалами?">
+                                @csrf
+                                @method('DELETE')
+                                <button class="rounded-lg px-2 py-1 text-xs font-bold text-orange-dark transition hover:bg-orange/10 hover:text-beet focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-green" type="submit" aria-label="Видалити подію «{{ $event->title }}»">Видалити</button>
+                            </form>
                         </div>
-                        <span class="mt-4 text-sm font-extrabold text-orange-dark">Відкрити план <span aria-hidden="true">→</span></span>
-                    </a>
+                    </article>
                 @endforeach
             </div>
 

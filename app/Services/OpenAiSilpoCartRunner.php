@@ -314,7 +314,7 @@ final class OpenAiSilpoCartRunner implements AgenticSilpoCartRunner
 
 Обовʼязковий порядок:
 1. Перший MCP call завжди silpo_find_products_batch з підготовленою retailer-facing current_need.name без перефразування, products має рівно один рядок, route/timeslot копіюй дослівно з catalog_context. Вихідну роль у меню збережено в current_need.note та shopping_plan — не повертай її в пошуковий рядок.
-2. Оціни весь результат. Якщо точний придатний товар є, не шукай рольову заміну.
+2. Оціни весь результат окремо від пошуку: query доводить лише товарну ідентичність, а current_need.note, purpose та shopping_plan використовуй після отримання SKU для перевірки фізичного стану й придатності до майбутнього використання. Якщо точний придатний товар є, обери його й не шукай рольову заміну.
 3. Лише за нульового або непридатного результату спочатку спробуй ще не використані current_need.search_queries у переданому порядку, потім власні незалежні позитивні запити, category/set browsing або replacements. Після першого точного call один silpo_find_products_batch може містити до 6 лексичних варіантів, але всі вони мають стосуватися лише current_need.
 4. Для кожного silpo_find_products_batch і silpo_get_products передавай цілий limit від 1 до 30. Ніколи не використовуй limit понад 30.
 5. Для очевидно однокомпонентного сирого немаринованого мʼяса, цілого свіжого плоду/овочу та звичайної води не шукай доказ відсутності неповʼязаного алергену й став safety_evidence=not_required, якщо каталог прямо не показує конфлікт або may-contain.
@@ -655,7 +655,8 @@ PROMPT;
         ]);
         $isPrepared = Str::contains($candidateText, [
             'гриль', 'готов', 'варен', 'запечен', 'смажен', 'маринован', 'копчен',
-            'grill', 'cooked', 'prepared', 'marinated', 'smoked',
+            'заморож', 'фрі', 'хрустк', 'grill', 'cooked', 'prepared', 'marinated', 'smoked',
+            'frozen', 'fries', 'crunch', 'crispy',
         ]);
 
         if ($requiresFreshOrUnprepared && $isPrepared) {
@@ -806,12 +807,6 @@ PROMPT;
             $arguments = $this->arguments($call);
             $this->assertCatalogRouteArguments($tool, $arguments, $cart);
             $searchQueries = [];
-
-            if ($index > 0
-                && $tool !== 'silpo_get_product_details'
-                && $this->hasProvenExactCandidate($candidates->all(), $cart, $context)) {
-                throw new UnexpectedValueException('Model continued catalog discovery after an exact viable product was already proven.');
-            }
 
             if ($tool === 'silpo_find_products_batch') {
                 $queries = data_get($arguments, 'products');

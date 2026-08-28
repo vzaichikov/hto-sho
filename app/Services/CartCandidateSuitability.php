@@ -157,17 +157,7 @@ final class CartCandidateSuitability
             || $this->containsAny($needText, [
                 'свіж', 'сирий', 'сира', 'сире', 'охолодж', 'салатні лист', 'листя салат', 'зелень',
             ]))
-            && ($this->containsAny($candidateText, [
-                'маринован', 'солон', 'малосоль', 'квашен', 'кімчі', 'стерилізован',
-                'консервован', 'фарширован', 'в олії', 'по-корейськи', 'соус', 'ікра', 'гриль',
-                'олад', 'дерун', 'котлет', 'млинц', 'рагу', 'закуск', 'салат з', 'салат овочев', 'по-',
-                'смажен', 'тушкован', 'запечен', 'варен', 'відварен', 'готов', 'напівфабрикат',
-                'сушен', 'вʼялен', "в'ялен", 'суміш', 'асорті', 'пюре', 'порош', 'сублімован',
-                'нарізан',
-                'мелен', 'духмян', 'приправа', 'спеці', 'гостр', 'прянощ',
-                'лечо',
-                'з томат', 'з часник', 'з сир', 'з овоч', 'в аджиц',
-            ]) || preg_match('/(?:^|[\s-])різан/u', $candidateText) === 1)) {
+            && $this->hasProcessedOrPreservedFoodMarkers($candidateText)) {
             return false;
         }
 
@@ -867,6 +857,13 @@ final class CartCandidateSuitability
     {
         $identityText = $this->needIdentityText($need);
         $intentText = $this->needIntentText($need);
+        $requiresUnpreparedProduce = $this->isProduceNeed($identityText)
+            && ! $this->hasProcessedOrPreservedFoodMarkers($identityText);
+
+        if ($requiresUnpreparedProduce && $this->hasProcessedOrPreservedFoodMarkers($candidateText)) {
+            return false;
+        }
+
         $requiresUnpreparedMeat = $this->isRawMeat($identityText)
             && ! $this->hasCompositeFoodMarkers($identityText)
             && ($this->containsAny($identityText, [
@@ -902,8 +899,23 @@ final class CartCandidateSuitability
             'ковбас', 'сосиск', 'sausage', 'маринован', 'маринад', 'seasoned', 'приправлен',
             'панірован', 'breaded', 'coated', 'фарширован', 'начин', 'filled', 'фарш', 'minced',
             'копчен', 'smoked', 'варен', 'cooked', 'запечен', 'смажен', 'готов', 'напівфабрикат',
+            'заморож', 'фрі', 'хрустк', 'frozen', 'fries', 'crunch', 'crispy',
             'чіпс', 'чипс', 'chips', 'соус', 'sauce', 'суміш', 'mix', 'приправа', 'спеці',
         ]);
+    }
+
+    private function hasProcessedOrPreservedFoodMarkers(string $text): bool
+    {
+        return $this->containsAny($text, [
+            'маринован', 'солон', 'малосоль', 'квашен', 'кімчі', 'стерилізован',
+            'консервован', 'фарширован', 'в олії', 'по-корейськи', 'соус', 'ікра', 'гриль',
+            'олад', 'дерун', 'котлет', 'млинц', 'рагу', 'закуск', 'салат з', 'салат овочев', 'по-',
+            'смажен', 'тушкован', 'запечен', 'варен', 'відварен', 'готов', 'напівфабрикат',
+            'заморож', 'фрі', 'хрустк', 'frozen', 'fries', 'crunch', 'crispy',
+            'сушен', 'вʼялен', "в'ялен", 'суміш', 'асорті', 'пюре', 'порош', 'сублімован',
+            'нарізан', 'мелен', 'духмян', 'приправа', 'спеці', 'гостр', 'прянощ',
+            'лечо', 'з томат', 'з часник', 'з сир', 'з овоч', 'в аджиц',
+        ]) || preg_match('/(?:^|[\s-])різан/u', $text) === 1;
     }
 
     private function isLeafySaladNeed(string $needText): bool
