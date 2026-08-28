@@ -26,8 +26,12 @@ final class CartQuantityCalculator
      * @param  array<string, mixed>  $need
      * @param  array<string, mixed>  $product
      */
-    public function quantityFor(array $need, array $product, float $modelQuantity): float
-    {
+    public function quantityFor(
+        array $need,
+        array $product,
+        float $modelQuantity,
+        bool $allowPartialStock = false,
+    ): float {
         $step = max((float) data_get($product, 'step', 1), 0.001);
         $stock = (float) data_get($product, 'stock', 0);
 
@@ -35,14 +39,54 @@ final class CartQuantityCalculator
             throw new UnexpectedValueException('Selected product is out of stock.');
         }
 
-        $quantity = $this->quantityFromPack($need, $product) ?? $modelQuantity;
-        $quantity = ceil(($quantity - 0.0000001) / $step) * $step;
+        $quantity = $this->requiredQuantityFor($need, $product, $modelQuantity);
+
+        if ($quantity > $stock + 0.0001 && $allowPartialStock) {
+            $quantity = floor(($stock + 0.0001) / $step) * $step;
+        }
 
         if ($quantity <= 0 || $quantity > $stock + 0.0001) {
             throw new UnexpectedValueException('Selected product quantity is not available.');
         }
 
         return round($quantity, 3);
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $product
+     */
+    public function requiredQuantityFor(array $need, array $product, float $modelQuantity): float
+    {
+        $step = max((float) data_get($product, 'step', 1), 0.001);
+        $quantity = $this->quantityFromPack($need, $product) ?? $modelQuantity;
+
+        return round(ceil(($quantity - 0.0000001) / $step) * $step, 3);
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $product
+     */
+    public function partialStockNote(
+        array $need,
+        array $product,
+        float $modelQuantity,
+        float $selectedQuantity,
+    ): ?string {
+        $requiredQuantity = $this->requiredQuantityFor($need, $product, $modelQuantity);
+
+        if ($selectedQuantity + 0.0001 >= $requiredQuantity) {
+            return null;
+        }
+
+        $requestedAmount = $this->formatAmount((float) data_get($need, 'quantity'));
+        $requestedUnit = Str::squish((string) data_get($need, 'unit'));
+        $availableAmount = $this->formatAmount($selectedQuantity);
+        $availableUnit = data_get($product, 'weighted') === true ? 'кг' : 'шт.';
+        $requested = trim("{$requestedAmount} {$requestedUnit}");
+
+        return "⚠️ Залишок у Сільпо не покриває всю потребу «{$requested}»: Гусь додав доступний максимум {$availableAmount} {$availableUnit} після вичерпання повних альтернатив.";
     }
 
     /** @param array<string, mixed> $product */

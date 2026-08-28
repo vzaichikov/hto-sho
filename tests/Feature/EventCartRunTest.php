@@ -615,6 +615,289 @@ class EventCartRunTest extends TestCase
         $this->assertCount(1, $runner->selectionContexts);
     }
 
+    public function test_orchestrated_harness_prefers_a_full_stock_alternative_over_a_remembered_partial_candidate(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->emptyReadyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'parsley',
+            'name' => 'Петрушка свіжа',
+            'category' => 'food',
+            'quantity' => 3,
+            'unit' => 'пучки',
+            'note' => 'Свіжа зелень.',
+            'search_query' => 'Петрушка свіжа',
+            'search_queries' => ['Петрушка свіжа', 'зелень свіжа'],
+            'retailer_identity_prepared' => true,
+        ];
+        $partial = [
+            ...$this->waterProduct(),
+            'id' => 'parsley-partial',
+            'name' => 'Петрушка фасована',
+            'slug' => 'petrushka-fasovana',
+            'stock' => 1,
+            'displayRatio' => '50 г',
+        ];
+        $full = [
+            ...$partial,
+            'id' => 'parsley-full',
+            'name' => 'Петрушка кучерява фасована',
+            'slug' => 'petrushka-kucheriava-fasovana',
+            'stock' => 10,
+        ];
+        $gateway = new FakeCartGateway($cart);
+        $gateway->searchResults = [
+            'Петрушка свіжа' => [$partial],
+            'зелень свіжа' => [$full],
+        ];
+        $decision = new CartAgentDecisionData(
+            action: 'select',
+            selectedProductId: 'parsley-full',
+            query: null,
+            quantity: 3,
+            reason: 'Повний залишок знайдено другим точним запитом.',
+            question: null,
+            audit: $this->audit(['parsley'], [], true),
+        );
+        $agent = new FakeCartAgent(
+            new CartAgentPreparationData([]),
+            [$decision],
+            $this->audit(['parsley'], [], true),
+        );
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Searching,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'catalog_scopes' => ['categories' => [], 'sets' => []],
+                'needs' => [$need],
+                'current_need_index' => 0,
+                'last_candidates' => [],
+                'last_details' => null,
+            ],
+            'staged_items' => [],
+        ]);
+
+        (new AdvanceEventCartRunJob($run->id, 0))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Searching, $run->phase);
+        $this->assertSame('зелень свіжа', data_get($run->state, 'needs.0.search_query'));
+        $this->assertSame('parsley-partial', data_get($run->state, 'needs.0.partial_stock_candidates.0.product_id'));
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+        $run->refresh();
+        $this->assertSame(CartRunPhase::Deciding, $run->phase);
+        $this->assertSame('parsley-full', data_get($run->state, 'last_candidates.0.product_id'));
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+        $run->refresh();
+        $this->assertSame('parsley-full', data_get($run->staged_items, '0.product_id'));
+        $this->assertFalse(data_get($run->staged_items, '0.partial_stock'));
+        $this->assertEquals(3.0, data_get($run->staged_items, '0.quantity'));
+    }
+
+    public function test_orchestrated_harness_stages_the_available_maximum_after_full_alternatives_are_exhausted(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->emptyReadyCart();
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'parsley',
+            'name' => 'Петрушка свіжа',
+            'category' => 'food',
+            'quantity' => 3,
+            'unit' => 'пучки',
+            'note' => 'Свіжа зелень.',
+            'search_query' => 'Петрушка свіжа',
+            'search_queries' => ['Петрушка свіжа'],
+            'retailer_identity_prepared' => true,
+        ];
+        $partial = [
+            ...$this->waterProduct(),
+            'id' => 'parsley-partial',
+            'name' => 'Петрушка фасована',
+            'slug' => 'petrushka-fasovana',
+            'stock' => 1,
+            'displayRatio' => '50 г',
+        ];
+        $gateway = new FakeCartGateway($cart);
+        $gateway->searchResults = ['Петрушка свіжа' => [$partial]];
+        $skip = new CartAgentDecisionData(
+            action: 'skip',
+            selectedProductId: null,
+            query: null,
+            quantity: null,
+            reason: 'Повного залишку немає.',
+            question: null,
+            audit: $this->audit([], ['parsley'], false),
+            candidateMatchesRequiredProduct: false,
+        );
+        $select = new CartAgentDecisionData(
+            action: 'select',
+            selectedProductId: 'parsley-partial',
+            query: null,
+            quantity: 3,
+            reason: 'Після вичерпання альтернатив беремо доступний максимум.',
+            question: null,
+            audit: $this->audit(['parsley'], [], true),
+        );
+        $agent = new FakeCartAgent(
+            new CartAgentPreparationData([]),
+            [$skip, $select],
+            $this->audit(['parsley'], [], true),
+        );
+        $run = EventCartRun::factory()->for($event)->create([
+            'mode' => CartRunMode::Auto,
+            'phase' => CartRunPhase::Searching,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'catalog_scopes' => ['categories' => [], 'sets' => []],
+                'needs' => [$need],
+                'current_need_index' => 0,
+                'last_candidates' => [],
+                'last_details' => null,
+            ],
+            'staged_items' => [],
+        ]);
+
+        foreach (range(1, 3) as $step) {
+            (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+                $agent,
+                $gateway,
+                new CartQuantityCalculator,
+                new GooseCartStatusService,
+                new CartCandidateSuitability,
+            );
+            $run->refresh();
+        }
+
+        $this->assertSame(CartRunPhase::Auditing, $run->phase);
+        $this->assertSame('parsley-partial', data_get($run->staged_items, '0.product_id'));
+        $this->assertEquals(1.0, data_get($run->staged_items, '0.quantity'));
+        $this->assertTrue(data_get($run->staged_items, '0.partial_stock'));
+        $this->assertStringContainsString(
+            'після вичерпання повних альтернатив',
+            (string) data_get($run->staged_items, '0.review_note'),
+        );
+        $this->assertTrue(data_get($run->state, 'needs.0.partial_stock_fallback_done'));
+
+        (new AdvanceEventCartRunJob($run->id, $run->cursor))->handle(
+            $agent,
+            $gateway,
+            new CartQuantityCalculator,
+            new GooseCartStatusService,
+            new CartCandidateSuitability,
+        );
+        $run->refresh();
+        $this->assertSame(CartRunStatus::WaitingForConfirmation, $run->status);
+        $this->assertFalse(data_get($run->state, 'final_audit.enough_for_people'));
+        $this->assertStringContainsString(
+            'Залишок у Сільпо не покриває всю потребу',
+            implode(' ', $run->warnings ?? []),
+        );
+    }
+
+    public function test_agentic_audit_keeps_partial_stock_covered_but_not_enough_for_people(): void
+    {
+        [$owner, $event] = $this->eventWithPlan();
+        SilpoConnection::factory()->for($owner)->create(['access_token' => 'test-token']);
+        $cart = $this->emptyReadyCart();
+        $reviewNote = '⚠️ Залишок у Сільпо не покриває всю потребу «3 пучки»: Гусь додав доступний максимум 1 шт. після вичерпання повних альтернатив.';
+        $selectedItem = [
+            'need_key' => 'parsley',
+            'need_name' => 'Петрушка свіжа',
+            'product_id' => 'parsley-partial',
+            'company_id' => 'company-1',
+            'branch_id' => 'branch-1',
+            'name' => 'Петрушка фасована',
+            'quantity' => 1,
+            'requested_quantity' => 3,
+            'partial_stock' => true,
+            'price' => 45,
+            'step' => 1,
+            'stock' => 1,
+            'estimated_total' => 45,
+            'review_note' => $reviewNote,
+        ];
+        $need = [
+            ...$this->waterNeed(),
+            'key' => 'parsley',
+            'name' => 'Петрушка свіжа',
+            'status' => 'selected',
+            'selected_item' => $selectedItem,
+        ];
+        $audit = $this->audit(['parsley'], [], true);
+        $runner = new FakeAgenticSilpoCartRunner(
+            new AgenticCartNeedResultData(null, [], [], null, $audit, 0),
+            $audit,
+            $cart,
+        );
+        $run = EventCartRun::factory()->for($event)->create([
+            'harness_mode' => CartHarnessMode::Agentic,
+            'phase' => CartRunPhase::Auditing,
+            'status' => CartRunStatus::Running,
+            'cursor' => 0,
+            'plan_state_version' => $event->state_version,
+            'cart_id' => $cart->cartId,
+            'delivery_fingerprint' => $cart->fingerprint(),
+            'cart_context' => $cart->toRunContext(),
+            'state' => [
+                'event_context' => $event->state,
+                'plan_snapshot' => $event->shopping_plan,
+                'needs' => [$need],
+                'current_need_index' => 1,
+            ],
+            'staged_items' => [$selectedItem],
+        ]);
+
+        (new AdvanceAgenticEventCartRunJob($run->id, 0))->handle(
+            new FakeCartAgent(new CartAgentPreparationData([]), [], $audit),
+            $runner,
+            new GooseCartStatusService,
+        );
+
+        $run->refresh();
+        $this->assertSame(CartRunStatus::WaitingForConfirmation, $run->status);
+        $this->assertTrue(data_get($run->state, 'final_audit.complete'));
+        $this->assertFalse(data_get($run->state, 'final_audit.enough_for_people'));
+        $this->assertStringContainsString($reviewNote, implode(' ', $run->warnings ?? []));
+    }
+
     public function test_agentic_commit_uses_model_write_and_readback_then_reuses_deterministic_verification(): void
     {
         [, $event] = $this->eventWithPlan();

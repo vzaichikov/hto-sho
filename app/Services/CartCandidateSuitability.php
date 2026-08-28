@@ -21,6 +21,7 @@ final class CartCandidateSuitability
         array $candidate,
         array $eventContext,
         array $shoppingPlan,
+        bool $allowPartialStock = false,
     ): bool {
         $needIdentityText = $this->needIdentityText($need);
         $needText = $this->needIntentText($need);
@@ -104,7 +105,7 @@ final class CartCandidateSuitability
             }
         }
 
-        if (! $this->hasSufficientStock($need, $candidate)) {
+        if (! $allowPartialStock && ! $this->hasSufficientStock($need, $candidate)) {
             return false;
         }
 
@@ -154,7 +155,7 @@ final class CartCandidateSuitability
 
         if (($this->isProduceNeed($needIdentityText)
             || $this->containsAny($needText, [
-                'свіж', 'для грил', 'на мангал', 'для мангал', 'салатні лист', 'листя салат', 'зелень',
+                'свіж', 'сирий', 'сира', 'сире', 'охолодж', 'салатні лист', 'листя салат', 'зелень',
             ]))
             && ($this->containsAny($candidateText, [
                 'маринован', 'солон', 'малосоль', 'квашен', 'кімчі', 'стерилізован',
@@ -251,10 +252,13 @@ final class CartCandidateSuitability
      * @param  array<string, mixed>  $need
      * @param  array<string, mixed>  $candidate
      */
-    public function allowsOllamaCandidate(array $need, array $candidate): bool
-    {
+    public function allowsOllamaCandidate(
+        array $need,
+        array $candidate,
+        bool $allowPartialStock = false,
+    ): bool {
         return data_get($candidate, 'available') !== false
-            && $this->hasSufficientStock($need, $candidate);
+            && ($allowPartialStock || $this->hasSufficientStock($need, $candidate));
     }
 
     /**
@@ -269,6 +273,7 @@ final class CartCandidateSuitability
         array $eventContext,
         ?string $modelSafetyEvidence = null,
         bool $modelReplacement = false,
+        bool $allowPartialStock = false,
     ): array {
         $match = ! $modelReplacement
             ? CartProductEvidence::MATCH_EXACT
@@ -302,7 +307,7 @@ final class CartCandidateSuitability
         }
 
         return [
-            'selectable' => $this->allowsOllamaCandidate($need, $candidate)
+            'selectable' => $this->allowsOllamaCandidate($need, $candidate, $allowPartialStock)
                 && (data_get($need, 'requires_positive_evidence') !== true
                     || $safety === CartProductEvidence::SAFETY_VERIFIED),
             'match' => $match,
@@ -325,8 +330,15 @@ final class CartCandidateSuitability
         array $shoppingPlan,
         ?string $modelSafetyEvidence = null,
         bool $modelReplacement = false,
+        bool $allowPartialStock = false,
     ): array {
-        $selectable = $this->allows($need, $candidate, $eventContext, $shoppingPlan);
+        $selectable = $this->allows(
+            $need,
+            $candidate,
+            $eventContext,
+            $shoppingPlan,
+            $allowPartialStock,
+        );
         $match = ! $modelReplacement
             ? CartProductEvidence::MATCH_EXACT
             : CartProductEvidence::MATCH_SAME_ROLE;
@@ -845,7 +857,7 @@ final class CartCandidateSuitability
     private function isRawMeat(string $text): bool
     {
         return $this->containsAny($text, [
-            'свин', 'pork', 'ялов', 'beef', 'теля', 'veal', 'курят', 'курин', 'chicken',
+            'свин', 'pork', 'ялов', 'beef', 'теля', 'veal', 'курят', 'куряч', 'курин', 'chicken',
             'індич', 'turkey', 'баранин', 'lamb', 'мʼяс', "м'яс", 'meat',
         ]);
     }

@@ -1249,4 +1249,65 @@ class CartCandidateSuitabilityTest extends TestCase
             $this->assertStringContainsString('❓', (string) $evidence['review_note']);
         }
     }
+
+    public function test_plain_chilled_chicken_thigh_ignores_an_unrelated_peanut_warning(): void
+    {
+        $evidence = (new CartCandidateSuitability)->evidence(
+            [
+                'name' => 'Стегно куряче охолоджене',
+                'category' => 'food',
+                'quantity' => 1.5,
+                'unit' => 'кг',
+                'note' => 'Сирі немариновані курячі стегна; склад і сліди арахісу перевірити.',
+            ],
+            [
+                'name' => 'Куряче стегно домашнє Petit Ja охолоджене',
+                'slug' => 'kuriache-stehno-domashnie-petit-ja-okholodzhene',
+                'stock' => 3.5,
+                'weighted' => true,
+            ],
+            ['summary' => 'Сильна алергія на арахіс.'],
+            [],
+            CartProductEvidence::SAFETY_UNVERIFIED,
+        );
+
+        $this->assertTrue($evidence['selectable']);
+        $this->assertSame(CartProductEvidence::SAFETY_NOT_REQUIRED, $evidence['safety']);
+        $this->assertNull($evidence['review_note']);
+    }
+
+    public function test_processed_vegan_sausages_for_the_grill_can_be_staged_with_unverified_allergen_data(): void
+    {
+        $suitability = new CartCandidateSuitability;
+        $need = [
+            'name' => 'Ковбаски рослинні веганські',
+            'category' => 'food',
+            'quantity' => 1,
+            'unit' => 'пачка',
+            'note' => 'Рослинна їжа для гриля; перевірити склад і попередження про арахіс.',
+        ];
+        $candidate = [
+            'name' => 'Сосиски Prema Веганоси рослинні варено-копчені',
+            'slug' => 'sosysky-prema-veganosy-roslynni-vareno-kopcheni',
+            'stock' => 4,
+            'details' => ['attributes' => ['Маса' => '300 г']],
+        ];
+        $context = ['summary' => 'Спільний стіл без арахісу.'];
+
+        $this->assertTrue($suitability->allows($need, $candidate, $context, []));
+        $evidence = $suitability->evidence(
+            $need,
+            $candidate,
+            $context,
+            [],
+            CartProductEvidence::SAFETY_UNVERIFIED,
+        );
+        $this->assertTrue($evidence['selectable']);
+        $this->assertSame(CartProductEvidence::SAFETY_UNVERIFIED, $evidence['safety']);
+        $this->assertStringContainsString('❓', (string) $evidence['review_note']);
+        $this->assertFalse($suitability->allows($need, [
+            ...$candidate,
+            'details' => ['description' => 'Може містити арахіс.'],
+        ], $context, []));
+    }
 }

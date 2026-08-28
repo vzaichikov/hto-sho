@@ -477,12 +477,24 @@ class AdvanceAgenticEventCartRunJob implements ShouldBeUnique, ShouldQueue
     /** @param array<int, array<string, mixed>> $needs */
     private function normalizeCompletedAudit(array $needs, CartAgentAuditData $audit): CartAgentAuditData
     {
+        $partialStockNeeds = collect($needs)
+            ->filter(fn (array $need): bool => data_get($need, 'selected_item.partial_stock') === true);
+        $partialStockWarnings = $partialStockNeeds
+            ->pluck('selected_item.review_note')
+            ->filter(fn (mixed $warning): bool => is_string($warning) && filled($warning))
+            ->values()
+            ->all();
+        $hasPartialStock = $partialStockNeeds->isNotEmpty();
+
         return new CartAgentAuditData(
             complete: true,
             coveredNeedKeys: collect($needs)->pluck('key')->filter()->values()->all(),
             remainingNeedKeys: [],
-            enoughForPeople: true,
-            warnings: $audit->complete ? $audit->warnings : [],
+            enoughForPeople: ! $hasPartialStock,
+            warnings: array_values(array_unique([
+                ...($audit->complete ? $audit->warnings : []),
+                ...$partialStockWarnings,
+            ])),
             revisitNeedKey: null,
             revisitQuery: null,
             question: null,

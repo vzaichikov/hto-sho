@@ -317,12 +317,13 @@ final class OpenAiSilpoCartRunner implements AgenticSilpoCartRunner
 2. Оціни весь результат. Якщо точний придатний товар є, не шукай рольову заміну.
 3. Лише за нульового або непридатного результату спочатку спробуй ще не використані current_need.search_queries у переданому порядку, потім власні незалежні позитивні запити, category/set browsing або replacements. Після першого точного call один silpo_find_products_batch може містити до 6 лексичних варіантів, але всі вони мають стосуватися лише current_need.
 4. Для кожного silpo_find_products_batch і silpo_get_products передавай цілий limit від 1 до 30. Ніколи не використовуй limit понад 30.
-5. Для алергенів, складу, gluten-free чи іншої неочевидної безпеки викликай silpo_get_product_details для вже знайденого slug. Явний конфлікт або may-contain відхиляй; відсутність даних позначай safety_evidence=unverified.
-6. Не занижуй потребу до stock. Не вигадуй ID, ціну, залишок, фасування, безпеку чи доступність.
-7. Вибери один product_id лише з MCP output цієї сесії. Якщо придатного немає, action=ask в assisted mode або action=skip в automatic mode.
-8. Не викликай cart/account mutation tools; вони не надані.
+5. Для очевидно однокомпонентного сирого немаринованого мʼяса, цілого свіжого плоду/овочу та звичайної води не шукай доказ відсутності неповʼязаного алергену й став safety_evidence=not_required, якщо каталог прямо не показує конфлікт або may-contain.
+6. Для складених чи оброблених продуктів викликай silpo_get_product_details для вже знайденого slug. Явний конфлікт або may-contain відхиляй. Якщо склад чи алергени не розкрито, але товарна ідентичність доведена й конфлікту немає, став safety_evidence=unverified та обирай товар із видимим попередженням; сама відсутність даних не є причиною skip.
+7. Спочатку шукай товар, що покриває повну кількість. Якщо такого немає, вичерпай current_need.search_queries і практичні альтернативи; лише після цього можна обрати придатний товар із додатним, але недостатнім залишком. Застосунок сам обмежить quantity доступним максимумом і додасть попередження.
+8. Не вигадуй ID, ціну, залишок, фасування, безпеку чи доступність. Вибери один product_id лише з MCP output цієї сесії. Якщо придатного немає навіть частково, action=ask в assisted mode або action=skip в automatic mode.
+9. Не викликай cart/account mutation tools; вони не надані.
 
-quantity — бажана абсолютна кількість товару; застосунок перерахує її за планом, фасуванням, step і stock. is_replacement=true лише для видимої рольової заміни. Поверни лише JSON за схемою.
+quantity — повна бажана абсолютна кількість товару; застосунок перерахує її за планом і фасуванням та, лише після вичерпання повних альтернатив, безпечно обмежить до доступного stock. is_replacement=true лише для видимої рольової заміни. Поверни лише JSON за схемою.
 PROMPT;
     }
 
@@ -346,7 +347,7 @@ PROMPT;
         return <<<'PROMPT'
 Виконай фінальну структуровану перевірку staged-кошика «Хто Шо?» перед людським підтвердженням. Каталог уже перевірено через MCP, а локальні safety/stock/quantity правила застосовано.
 
-Кожен selected need вважай covered, якщо немає явного конфлікту в staged item. Видима role replacement або safety_evidence=unverified залишається covered із warning. Optional skipped need не робить кошик неповним. Обовʼязковий skipped/pending need лишається remaining. Не вигадуй нових needs і не змінюй keys. Якщо всі обовʼязкові needs covered, complete=true та enough_for_people=true. Поверни лише JSON за схемою.
+Кожен selected need вважай covered, якщо немає явного конфлікту в staged item. Видима role replacement або safety_evidence=unverified залишається covered із warning. partial_stock=true теж лишається covered, але вимагає warning про нестачу та enough_for_people=false. Optional skipped need не робить кошик неповним. Обовʼязковий skipped/pending need лишається remaining. Не вигадуй нових needs і не змінюй keys. Якщо всі обовʼязкові needs covered без partial_stock, complete=true та enough_for_people=true. Поверни лише JSON за схемою.
 PROMPT;
     }
 
@@ -412,12 +413,23 @@ PROMPT;
 
         $eventContext = data_get($context, 'event_context', []);
         $shoppingPlan = data_get($context, 'shopping_plan', []);
-        $this->assertSelectableCandidate($need, $candidate, $cart, $context);
-        $selectableCandidates = collect($evidence['candidates'])
+        $candidatePool = collect($evidence['candidates'])
             ->filter(fn (array $product): bool => data_get($product, 'available') === true
                 && (float) data_get($product, 'stock', 0) > 0
                 && data_get($product, 'company_id') === $cart->companyId
                 && data_get($product, 'branch_id') === $cart->branchId)
+            ->filter(fn (array $product): bool => $this->candidateSuitability->allows(
+                $need,
+                $product,
+                $eventContext,
+                $shoppingPlan,
+                true,
+            ))
+            ->reject(fn (array $product): bool => collect(data_get($context, 'staged_items', []))
+                ->contains('product_id', $product['product_id'])
+                && ! $this->candidateSuitability->allowsProductReuseForNeed($need, $product))
+            ->values();
+        $fullySelectableCandidates = $candidatePool
             ->filter(fn (array $product): bool => $this->candidateSuitability->allows(
                 $need,
                 $product,
@@ -429,10 +441,39 @@ PROMPT;
                 $product,
                 data_get($context, 'staged_items', []),
             ))
-            ->reject(fn (array $product): bool => collect(data_get($context, 'staged_items', []))
-                ->contains('product_id', $product['product_id'])
-                && ! $this->candidateSuitability->allowsProductReuseForNeed($need, $product))
             ->values();
+        $allowPartialStock = false;
+
+        if (! $candidatePool->contains('product_id', $decision->selectedProductId)) {
+            $this->assertSelectableCandidate($need, $candidate, $cart, $context, true);
+
+            throw new UnexpectedValueException('Model selected a product rejected by local safety, identity, or stock rules.');
+        }
+
+        if (! $fullySelectableCandidates->contains('product_id', $decision->selectedProductId)) {
+            $partialCandidateIsSelectable = $fullySelectableCandidates->isEmpty()
+                && $this->declaredSearchesAreExhausted($need, $evidence['attempts'])
+                && $this->hasPartialAggregateStockCapacity(
+                    $need,
+                    $candidate,
+                    data_get($context, 'staged_items', []),
+                );
+
+            if (! $partialCandidateIsSelectable) {
+                throw new UnexpectedValueException('Model selected a product rejected by local safety, identity, or stock rules. Full-stock alternatives must be exhausted before a partial-stock fallback.');
+            }
+
+            $allowPartialStock = true;
+        }
+
+        $this->assertSelectableCandidate($need, $candidate, $cart, $context, $allowPartialStock);
+        $selectableCandidates = $allowPartialStock
+            ? $candidatePool->filter(fn (array $product): bool => $this->hasPartialAggregateStockCapacity(
+                $need,
+                $product,
+                data_get($context, 'staged_items', []),
+            ))->values()
+            : $fullySelectableCandidates;
 
         if (! $selectableCandidates->contains('product_id', $decision->selectedProductId)) {
             throw new UnexpectedValueException('Model selected a product rejected by local safety, identity, or stock rules.');
@@ -456,16 +497,29 @@ PROMPT;
             $decision->safetyEvidence,
             $decision->isReplacement
                 && ! $this->candidateSuitability->isExactIdentityCandidate($need, $candidate),
+            $allowPartialStock,
         );
 
         if (! $selectionEvidence['selectable']) {
             throw new UnexpectedValueException('MCP evidence did not satisfy local product constraints.');
         }
 
-        $quantity = $this->quantities->quantityFor($need, $candidate, (float) $decision->quantity);
         $alreadyStagedQuantity = (float) collect(data_get($context, 'staged_items', []))
             ->where('product_id', data_get($candidate, 'product_id'))
             ->sum('quantity');
+        $availableCandidate = [
+            ...$candidate,
+            'stock' => max(0.0, (float) data_get($candidate, 'stock') - $alreadyStagedQuantity),
+        ];
+        $modelQuantity = (float) $decision->quantity;
+        $requestedQuantity = $this->quantities->requiredQuantityFor($need, $candidate, $modelQuantity);
+        $quantity = $this->quantities->quantityFor(
+            $need,
+            $availableCandidate,
+            $modelQuantity,
+            $allowPartialStock,
+        );
+        $isPartialStock = $quantity + 0.0001 < $requestedQuantity;
 
         if ($alreadyStagedQuantity + $quantity > (float) data_get($candidate, 'stock') + 0.0001) {
             throw new UnexpectedValueException('Aggregate selected quantity exceeds current Silpo stock.');
@@ -474,6 +528,7 @@ PROMPT;
         $reviewNote = collect([
             $selectionEvidence['review_note'],
             $this->quantities->packageRoundingNote($need, $candidate, $quantity),
+            $this->quantities->partialStockNote($need, $candidate, $modelQuantity, $quantity),
         ])->filter(fn (mixed $note): bool => is_string($note) && filled($note))->implode(' ');
         $selectedItem = [
             ...Arr::except($candidate, ['details']),
@@ -485,6 +540,8 @@ PROMPT;
             'safety_evidence' => $selectionEvidence['safety'],
             'selection_explanation' => $this->selectionExplanation($need, $candidate, $selectionEvidence),
             'review_note' => $reviewNote !== '' ? $reviewNote : null,
+            'partial_stock' => $isPartialStock,
+            'requested_quantity' => $isPartialStock ? $requestedQuantity : null,
             'source' => 'goose',
         ];
 
@@ -508,6 +565,7 @@ PROMPT;
         array $candidate,
         SilpoCartContextData $cart,
         array $context,
+        bool $allowPartialStock = false,
     ): void {
         $productName = Str::limit(Str::squish((string) data_get($candidate, 'name', 'selected product')), 160);
         $needName = Str::limit(Str::squish((string) data_get($need, 'name', 'current need')), 160);
@@ -538,17 +596,26 @@ PROMPT;
             $candidate,
             data_get($context, 'event_context', []),
             data_get($context, 'shopping_plan', []),
+            $allowPartialStock,
         )) {
             throw new UnexpectedValueException(
                 $this->candidateSuitabilityFeedback($need, $candidate, $retryGuidance),
             );
         }
 
-        if (! $this->hasAggregateStockCapacity(
-            $need,
-            $candidate,
-            data_get($context, 'staged_items', []),
-        )) {
+        $hasAcceptedStock = $allowPartialStock
+            ? $this->hasPartialAggregateStockCapacity(
+                $need,
+                $candidate,
+                data_get($context, 'staged_items', []),
+            )
+            : $this->hasAggregateStockCapacity(
+                $need,
+                $candidate,
+                data_get($context, 'staged_items', []),
+            );
+
+        if (! $hasAcceptedStock) {
             throw new UnexpectedValueException(
                 "Selected product [{$productName}] cannot cover the required aggregate quantity for need [{$needName}]. {$retryGuidance}",
             );
@@ -1091,6 +1158,71 @@ PROMPT;
             ->sum('quantity');
 
         return ((float) $alreadyStaged + $neededQuantity) <= ((float) data_get($product, 'stock') + 0.0001);
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $product
+     * @param  array<int, array<string, mixed>>  $stagedItems
+     */
+    private function hasPartialAggregateStockCapacity(
+        array $need,
+        array $product,
+        array $stagedItems,
+    ): bool {
+        if (! is_numeric(data_get($product, 'stock'))) {
+            return false;
+        }
+
+        $alreadyStaged = (float) collect($stagedItems)
+            ->where('product_id', data_get($product, 'product_id'))
+            ->sum('quantity');
+        $remainingStock = (float) data_get($product, 'stock') - $alreadyStaged;
+
+        if ($remainingStock <= 0) {
+            return false;
+        }
+
+        try {
+            $this->quantities->quantityFor(
+                $need,
+                [...$product, 'stock' => $remainingStock],
+                (float) data_get($need, 'quantity', 1),
+                true,
+            );
+        } catch (Throwable) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<int, array<string, mixed>>  $attempts
+     */
+    private function declaredSearchesAreExhausted(array $need, array $attempts): bool
+    {
+        $requiredQueries = collect([
+            data_get($need, 'name'),
+            data_get($need, 'search_query'),
+            ...data_get($need, 'search_queries', []),
+        ])
+            ->filter(fn (mixed $query): bool => is_string($query) && filled($query))
+            ->map(fn (string $query): string => $this->normalizedQueryIdentity($query))
+            ->unique();
+        $attemptedQueries = collect($attempts)
+            ->pluck('query')
+            ->filter(fn (mixed $query): bool => is_string($query) && filled($query))
+            ->map(fn (string $query): string => $this->normalizedQueryIdentity($query))
+            ->unique();
+
+        return $requiredQueries->diff($attemptedQueries)->isEmpty();
+    }
+
+    private function normalizedQueryIdentity(string $query): string
+    {
+        return Str::lower(Str::squish($this->quantities->normalizeSearchQuery($query)));
     }
 
     /**

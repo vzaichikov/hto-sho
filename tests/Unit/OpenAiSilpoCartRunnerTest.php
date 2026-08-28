@@ -145,6 +145,219 @@ class OpenAiSilpoCartRunnerTest extends TestCase
         );
     }
 
+    public function test_plain_chilled_chicken_normalizes_the_models_unverified_allergen_guess(): void
+    {
+        $context = $this->selectionContext();
+        $context['event_context'] = ['summary' => 'Сильна алергія на арахіс.'];
+        $context['current_need'] = [
+            ...$context['current_need'],
+            'name' => 'Стегно куряче охолоджене',
+            'category' => 'food',
+            'quantity' => 1.5,
+            'unit' => 'кг',
+            'note' => 'Сирі немариновані курячі стегна; перевірити сліди арахісу.',
+            'search_queries' => ['куряче стегно охолоджене'],
+        ];
+        $context['all_needs'] = [$context['current_need']];
+        $response = $this->selectionResponse('chicken-1');
+        $arguments = json_decode(
+            (string) data_get($response, 'output.1.arguments'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $arguments['products'] = ['Стегно куряче охолоджене'];
+        $response['output'][1]['arguments'] = json_encode($arguments, JSON_THROW_ON_ERROR);
+        $output = json_decode(
+            (string) data_get($response, 'output.1.output'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $output['queries'][0]['query'] = 'Стегно куряче охолоджене';
+        $output['queries'][0]['products'][0] = [
+            ...$output['queries'][0]['products'][0],
+            'id' => 'chicken-1',
+            'name' => 'Куряче стегно домашнє Petit Ja охолоджене',
+            'slug' => 'kuriache-stehno-domashnie-petit-ja-okholodzhene',
+            'price' => 249,
+            'stock' => 3.5,
+            'weighted' => true,
+            'step' => 0.1,
+            'displayRatio' => '1 кг',
+        ];
+        $response['output'][1]['output'] = json_encode($output, JSON_THROW_ON_ERROR);
+        $decision = $this->decision('chicken-1');
+        $decision['quantity'] = 1.5;
+        $decision['safety_evidence'] = 'unverified';
+        $decision['audit']['warnings'] = ['Перевірити паковання на арахіс.'];
+        $response['output'][3]['content'][0]['text'] = json_encode($decision, JSON_THROW_ON_ERROR);
+        Http::fake(['*' => Http::response($response)]);
+
+        $result = app(OpenAiSilpoCartRunner::class)->selectNeed(
+            'silpo-secret-token',
+            $this->cart(),
+            $context,
+        );
+
+        $this->assertSame('not_required', data_get($result->selectedItem, 'safety_evidence'));
+        $this->assertNull(data_get($result->selectedItem, 'review_note'));
+    }
+
+    public function test_processed_vegan_sausages_with_missing_details_are_staged_as_unverified(): void
+    {
+        $context = $this->selectionContext();
+        $context['event_context'] = ['summary' => 'Спільний стіл без арахісу.'];
+        $context['current_need'] = [
+            ...$context['current_need'],
+            'name' => 'Ковбаски рослинні веганські',
+            'category' => 'food',
+            'quantity' => 1,
+            'unit' => 'пачка',
+            'note' => 'Рослинна їжа для гриля; перевірити склад і попередження про арахіс.',
+            'search_queries' => ['веганські ковбаски'],
+        ];
+        $context['all_needs'] = [$context['current_need']];
+        $response = $this->selectionResponse('vegan-1');
+        $arguments = json_decode(
+            (string) data_get($response, 'output.1.arguments'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $arguments['products'] = ['Ковбаски рослинні веганські'];
+        $response['output'][1]['arguments'] = json_encode($arguments, JSON_THROW_ON_ERROR);
+        $output = json_decode(
+            (string) data_get($response, 'output.1.output'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $output['queries'][0]['query'] = 'Ковбаски рослинні веганські';
+        $output['queries'][0]['products'][0] = [
+            ...$output['queries'][0]['products'][0],
+            'id' => 'vegan-1',
+            'name' => 'Сосиски Prema Веганоси рослинні варено-копчені',
+            'slug' => 'sosysky-prema-veganosy-roslynni-vareno-kopcheni',
+            'price' => 169,
+            'stock' => 4,
+            'weighted' => false,
+            'step' => 1,
+            'displayRatio' => '300 г',
+        ];
+        $response['output'][1]['output'] = json_encode($output, JSON_THROW_ON_ERROR);
+        $detailsCall = [
+            'type' => 'mcp_call',
+            'server_label' => 'silpo',
+            'name' => 'silpo_get_product_details',
+            'status' => 'completed',
+            'arguments' => json_encode([
+                'branchId' => 'branch-1',
+                'slug' => 'sosysky-prema-veganosy-roslynni-vareno-kopcheni',
+                'deliveryType' => 'DeliveryHome',
+                'timeslotStart' => '2026-08-27T10:00:00+03:00',
+                'timeslotEnd' => '2026-08-27T11:00:00+03:00',
+            ], JSON_THROW_ON_ERROR),
+            'output' => json_encode([
+                'success' => true,
+                'product' => ['attributes' => ['Маса' => '300 г']],
+            ], JSON_THROW_ON_ERROR),
+        ];
+        array_splice($response['output'], 2, 0, [$detailsCall]);
+        $decision = $this->decision('vegan-1');
+        $decision['quantity'] = 1;
+        $decision['safety_evidence'] = 'unverified';
+        $response['output'][4]['content'][0]['text'] = json_encode($decision, JSON_THROW_ON_ERROR);
+        Http::fake(['*' => Http::response($response)]);
+
+        $result = app(OpenAiSilpoCartRunner::class)->selectNeed(
+            'silpo-secret-token',
+            $this->cart(),
+            $context,
+        );
+
+        $this->assertSame('vegan-1', data_get($result->selectedItem, 'product_id'));
+        $this->assertSame('unverified', data_get($result->selectedItem, 'safety_evidence'));
+        $this->assertStringContainsString('❓', (string) data_get($result->selectedItem, 'review_note'));
+    }
+
+    public function test_partial_stock_is_staged_only_after_all_declared_queries_are_exhausted(): void
+    {
+        $context = $this->selectionContext();
+        $context['current_need'] = [
+            ...$context['current_need'],
+            'name' => 'Петрушка свіжа',
+            'search_query' => 'Петрушка свіжа',
+            'category' => 'food',
+            'quantity' => 3,
+            'unit' => 'пучки',
+            'note' => 'Свіжа зелень.',
+            'search_queries' => ['петрушка свіжа', 'свіжа петрушка', 'петрушка зелень'],
+        ];
+        $context['all_needs'] = [$context['current_need']];
+        $response = $this->selectionResponse('parsley-1');
+        $arguments = json_decode(
+            (string) data_get($response, 'output.1.arguments'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $arguments['products'] = ['Петрушка свіжа'];
+        $response['output'][1]['arguments'] = json_encode($arguments, JSON_THROW_ON_ERROR);
+        $exactOutput = json_decode(
+            (string) data_get($response, 'output.1.output'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $product = [
+            ...$exactOutput['queries'][0]['products'][0],
+            'id' => 'parsley-1',
+            'name' => 'Петрушка фасована',
+            'slug' => 'petrushka-fasovana',
+            'price' => 45,
+            'stock' => 1,
+            'weighted' => false,
+            'step' => 1,
+            'displayRatio' => '50 г',
+        ];
+        $exactOutput['queries'][0] = ['query' => 'Петрушка свіжа', 'products' => []];
+        $response['output'][1]['output'] = json_encode($exactOutput, JSON_THROW_ON_ERROR);
+        $variantCall = $response['output'][1];
+        $variantArguments = json_decode(
+            (string) data_get($variantCall, 'arguments'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $variantArguments['products'] = ['петрушка свіжа', 'свіжа петрушка', 'петрушка зелень'];
+        $variantCall['arguments'] = json_encode($variantArguments, JSON_THROW_ON_ERROR);
+        $variantCall['output'] = json_encode([
+            'success' => true,
+            'queries' => [
+                ['query' => 'петрушка свіжа', 'products' => []],
+                ['query' => 'свіжа петрушка', 'products' => []],
+                ['query' => 'петрушка зелень', 'products' => [$product]],
+            ],
+        ], JSON_THROW_ON_ERROR);
+        array_splice($response['output'], 2, 0, [$variantCall]);
+        $decision = $this->decision('parsley-1');
+        $decision['quantity'] = 3;
+        $response['output'][4]['content'][0]['text'] = json_encode($decision, JSON_THROW_ON_ERROR);
+        Http::fake(['*' => Http::response($response)]);
+
+        $result = app(OpenAiSilpoCartRunner::class)->selectNeed(
+            'silpo-secret-token',
+            $this->cart(),
+            $context,
+        );
+
+        $this->assertSame(1.0, data_get($result->selectedItem, 'quantity'));
+        $this->assertTrue(data_get($result->selectedItem, 'partial_stock'));
+        $this->assertSame(3.0, data_get($result->selectedItem, 'requested_quantity'));
+        $this->assertStringContainsString(
+            'після вичерпання повних альтернатив',
+            (string) data_get($result->selectedItem, 'review_note'),
+        );
+        $this->assertStringContainsString(
+            'лише після цього можна обрати придатний товар із додатним, але недостатнім залишком',
+            (string) data_get(Http::recorded(), '0.0.instructions'),
+        );
+    }
+
     public function test_unseen_model_product_is_rejected_after_the_single_repair_continuation(): void
     {
         $repairResponse = $this->selectionResponse('still-invented');

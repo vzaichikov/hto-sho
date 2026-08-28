@@ -215,12 +215,25 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             30,
             harnessRun: $run->harnessRun,
         );
-        $candidates = collect($products)
+        $candidatePool = collect($products)
             ->map(fn (array $product): array => $this->candidate(
                 $product,
                 SilpoCartContextData::fromRunContext($run->cart_context),
             ))
             ->filter(fn (array $product): bool => $product['product_id'] !== '')
+            ->filter(fn (array $product): bool => $this->candidateIsAllowed(
+                $candidateSuitability,
+                $need,
+                $product,
+                data_get($state, 'event_context', []),
+                data_get($state, 'plan_snapshot', []),
+                true,
+            ))
+            ->reject(fn (array $product): bool => collect($run->staged_items ?? [])
+                ->contains('product_id', $product['product_id'])
+                && ! $candidateSuitability->allowsProductReuseForNeed($need, $product))
+            ->values();
+        $candidates = $candidatePool
             ->filter(fn (array $product): bool => $this->candidateIsAllowed(
                 $candidateSuitability,
                 $need,
@@ -234,15 +247,38 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 $run->staged_items ?? [],
                 $quantities,
             ))
-            ->reject(fn (array $product): bool => collect($run->staged_items ?? [])
-                ->contains('product_id', $product['product_id'])
-                && ! $candidateSuitability->allowsProductReuseForNeed($need, $product))
             ->sortBy(fn (array $product): array => [
                 $candidateSuitability->isExactIdentityCandidate($need, $product) ? 0 : 1,
                 ...$this->packageFitSortKey($need, $product, $quantities),
             ])
             ->values()
             ->all();
+        $partialStockCandidates = $candidatePool
+            ->reject(fn (array $product): bool => $this->hasAggregateStockCapacity(
+                $need,
+                $product,
+                $run->staged_items ?? [],
+                $quantities,
+            ))
+            ->filter(fn (array $product): bool => $this->hasPartialAggregateStockCapacity(
+                $need,
+                $product,
+                $run->staged_items ?? [],
+                $quantities,
+            ))
+            ->sortBy(fn (array $product): array => $this->partialStockSortKey(
+                $need,
+                $product,
+                $run->staged_items ?? [],
+                $quantities,
+                $candidateSuitability,
+            ))
+            ->values()
+            ->all();
+        $state['needs'][$currentIndex]['partial_stock_candidates'] = $this->mergePartialStockCandidates(
+            data_get($state, "needs.{$currentIndex}.partial_stock_candidates", []),
+            $partialStockCandidates,
+        );
         $state['needs'][$currentIndex]['attempts'][] = [
             'query' => $query,
             'total_found' => count($candidates),
@@ -373,7 +409,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             (int) config('silpo_catalog_search.catalog_scope_product_limit', 20),
             harnessRun: $run->harnessRun,
         );
-        $candidates = collect($products)
+        $candidatePool = collect($products)
             ->map(function (array $product) use ($cart, $scope): array {
                 $candidate = $this->candidate($product, $cart);
                 $candidate['catalog_scope'] = [
@@ -392,6 +428,19 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 $product,
                 data_get($state, 'event_context', []),
                 data_get($state, 'plan_snapshot', []),
+                true,
+            ))
+            ->reject(fn (array $product): bool => collect($run->staged_items ?? [])
+                ->contains('product_id', $product['product_id'])
+                && ! $candidateSuitability->allowsProductReuseForNeed($need, $product))
+            ->values();
+        $candidates = $candidatePool
+            ->filter(fn (array $product): bool => $this->candidateIsAllowed(
+                $candidateSuitability,
+                $need,
+                $product,
+                data_get($state, 'event_context', []),
+                data_get($state, 'plan_snapshot', []),
             ))
             ->filter(fn (array $product): bool => $this->hasAggregateStockCapacity(
                 $need,
@@ -399,12 +448,35 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 $run->staged_items ?? [],
                 $quantities,
             ))
-            ->reject(fn (array $product): bool => collect($run->staged_items ?? [])
-                ->contains('product_id', $product['product_id'])
-                && ! $candidateSuitability->allowsProductReuseForNeed($need, $product))
             ->sortBy(fn (array $product): array => $this->packageFitSortKey($need, $product, $quantities))
             ->values()
             ->all();
+        $partialStockCandidates = $candidatePool
+            ->reject(fn (array $product): bool => $this->hasAggregateStockCapacity(
+                $need,
+                $product,
+                $run->staged_items ?? [],
+                $quantities,
+            ))
+            ->filter(fn (array $product): bool => $this->hasPartialAggregateStockCapacity(
+                $need,
+                $product,
+                $run->staged_items ?? [],
+                $quantities,
+            ))
+            ->sortBy(fn (array $product): array => $this->partialStockSortKey(
+                $need,
+                $product,
+                $run->staged_items ?? [],
+                $quantities,
+                $candidateSuitability,
+            ))
+            ->values()
+            ->all();
+        $state['needs'][$currentIndex]['partial_stock_candidates'] = $this->mergePartialStockCandidates(
+            data_get($state, "needs.{$currentIndex}.partial_stock_candidates", []),
+            $partialStockCandidates,
+        );
         $state['needs'][$currentIndex]['browse_attempts'][] = [
             'type' => (string) data_get($scope, 'type'),
             'slug' => (string) data_get($scope, 'slug'),
@@ -489,6 +561,97 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ->sum('quantity');
 
         return ((float) $alreadyStaged + $neededQuantity) <= ((float) data_get($product, 'stock') + 0.0001);
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $product
+     * @param  array<int, array<string, mixed>>  $stagedItems
+     */
+    private function hasPartialAggregateStockCapacity(
+        array $need,
+        array $product,
+        array $stagedItems,
+        CartQuantityCalculator $quantities,
+    ): bool {
+        if (! is_numeric(data_get($product, 'stock'))) {
+            return false;
+        }
+
+        $alreadyStaged = (float) collect($stagedItems)
+            ->where('product_id', data_get($product, 'product_id'))
+            ->sum('quantity');
+        $remainingStock = (float) data_get($product, 'stock') - $alreadyStaged;
+
+        if ($remainingStock <= 0) {
+            return false;
+        }
+
+        try {
+            $quantities->quantityFor(
+                $need,
+                [...$product, 'stock' => $remainingStock],
+                (float) data_get($need, 'quantity', 1),
+                true,
+            );
+        } catch (Throwable) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $need
+     * @param  array<string, mixed>  $product
+     * @param  array<int, array<string, mixed>>  $stagedItems
+     * @return array{int, float, float}
+     */
+    private function partialStockSortKey(
+        array $need,
+        array $product,
+        array $stagedItems,
+        CartQuantityCalculator $quantities,
+        CartCandidateSuitability $candidateSuitability,
+    ): array {
+        $alreadyStaged = (float) collect($stagedItems)
+            ->where('product_id', data_get($product, 'product_id'))
+            ->sum('quantity');
+        $remainingStock = max(0.0, (float) data_get($product, 'stock') - $alreadyStaged);
+        $partialQuantity = 0.0;
+
+        try {
+            $partialQuantity = $quantities->quantityFor(
+                $need,
+                [...$product, 'stock' => $remainingStock],
+                (float) data_get($need, 'quantity', 1),
+                true,
+            );
+        } catch (Throwable) {
+            // Non-purchasable candidates remain last and are filtered before selection.
+        }
+
+        return [
+            $candidateSuitability->isExactIdentityCandidate($need, $product) ? 0 : 1,
+            -$partialQuantity,
+            $quantities->estimatedTotal($product, $partialQuantity),
+        ];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $remembered
+     * @param  array<int, array<string, mixed>>  $discovered
+     * @return array<int, array<string, mixed>>
+     */
+    private function mergePartialStockCandidates(array $remembered, array $discovered): array
+    {
+        return collect([...$remembered, ...$discovered])
+            ->filter(fn (mixed $candidate): bool => is_array($candidate)
+                && filled(data_get($candidate, 'product_id')))
+            ->unique('product_id')
+            ->take(20)
+            ->values()
+            ->all();
     }
 
     private function inspect(
@@ -728,13 +891,24 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             ->filter(fn (mixed $key): bool => is_string($key))
             ->values()
             ->all();
+        $partialStockNeeds = collect($needs)
+            ->filter(fn (array $need): bool => data_get($need, 'selected_item.partial_stock') === true);
+        $partialStockWarnings = $partialStockNeeds
+            ->pluck('selected_item.review_note')
+            ->filter(fn (mixed $warning): bool => is_string($warning) && filled($warning))
+            ->values()
+            ->all();
+        $hasPartialStock = $partialStockNeeds->isNotEmpty();
 
         return new CartAgentAuditData(
             complete: true,
             coveredNeedKeys: $coveredNeedKeys,
             remainingNeedKeys: [],
-            enoughForPeople: true,
-            warnings: $audit->complete ? $audit->warnings : [],
+            enoughForPeople: ! $hasPartialStock,
+            warnings: array_values(array_unique([
+                ...($audit->complete ? $audit->warnings : []),
+                ...$partialStockWarnings,
+            ])),
             revisitNeedKey: null,
             revisitQuery: null,
             question: null,
@@ -913,6 +1087,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
 
         $modelReplacement = $decision->isReplacement
             && ! $candidateSuitability->isExactIdentityCandidate($need, $candidate);
+        $allowPartialStock = data_get($need, 'partial_stock_fallback') === true;
         $evidence = $this->usesOllamaProvider()
             ? $candidateSuitability->ollamaEvidence(
                 $need,
@@ -920,6 +1095,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 data_get($state, 'event_context', []),
                 $decision->safetyEvidence,
                 $modelReplacement,
+                $allowPartialStock,
             )
             : $candidateSuitability->evidence(
                 $need,
@@ -928,6 +1104,7 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
                 data_get($state, 'plan_snapshot', []),
                 $decision->safetyEvidence,
                 $modelReplacement,
+                $allowPartialStock,
             );
 
         if (! $evidence['selectable']) {
@@ -986,10 +1163,26 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $quantity = $quantities->quantityFor($need, $candidate, (float) $decision->quantity);
+        $alreadyStagedQuantity = (float) collect($run->staged_items ?? [])
+            ->where('product_id', data_get($candidate, 'product_id'))
+            ->sum('quantity');
+        $availableCandidate = [
+            ...$candidate,
+            'stock' => max(0.0, (float) data_get($candidate, 'stock') - $alreadyStagedQuantity),
+        ];
+        $modelQuantity = (float) $decision->quantity;
+        $requestedQuantity = $quantities->requiredQuantityFor($need, $candidate, $modelQuantity);
+        $quantity = $quantities->quantityFor(
+            $need,
+            $availableCandidate,
+            $modelQuantity,
+            $allowPartialStock,
+        );
+        $isPartialStock = $quantity + 0.0001 < $requestedQuantity;
         $reviewNote = collect([
             $evidence['review_note'],
             $quantities->packageRoundingNote($need, $candidate, $quantity),
+            $quantities->partialStockNote($need, $candidate, $modelQuantity, $quantity),
         ])->filter(fn (mixed $note): bool => is_string($note) && filled($note))->implode(' ');
         $selectedItem = [
             ...$candidate,
@@ -1001,6 +1194,8 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             'safety_evidence' => $evidence['safety'],
             'selection_explanation' => $this->selectionExplanation($need, $candidate, $evidence),
             'review_note' => $reviewNote !== '' ? $reviewNote : null,
+            'partial_stock' => $isPartialStock,
+            'requested_quantity' => $isPartialStock ? $requestedQuantity : null,
             'source' => 'goose',
         ];
         $state['needs'][$currentIndex]['status'] = 'selected';
@@ -1059,12 +1254,19 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
         array $candidate,
         array $eventContext,
         array $shoppingPlan,
+        bool $allowPartialStock = false,
     ): bool {
         if ($this->usesOllamaProvider()) {
-            return $candidateSuitability->allowsOllamaCandidate($need, $candidate);
+            return $candidateSuitability->allowsOllamaCandidate($need, $candidate, $allowPartialStock);
         }
 
-        return $candidateSuitability->allows($need, $candidate, $eventContext, $shoppingPlan);
+        return $candidateSuitability->allows(
+            $need,
+            $candidate,
+            $eventContext,
+            $shoppingPlan,
+            $allowPartialStock,
+        );
     }
 
     private function usesOllamaProvider(): bool
@@ -1474,6 +1676,29 @@ class AdvanceEventCartRunJob implements ShouldBeUnique, ShouldQueue
             $state['needs'][$currentIndex]['similarity_adjudication'] = true;
             $state['needs'][$currentIndex]['similarity_adjudication_done'] = true;
             $state['last_candidates'] = $catalogCandidates;
+            $state['last_details'] = null;
+            $this->transition(
+                $run,
+                ['phase' => CartRunPhase::Deciding, 'state' => $state],
+                [['kind' => 'retry', 'product' => (string) data_get($currentNeed, 'name')]],
+            );
+
+            return;
+        }
+
+        $partialStockCandidates = collect(data_get($currentNeed, 'partial_stock_candidates', []))
+            ->filter(fn (mixed $candidate): bool => is_array($candidate)
+                && filled(data_get($candidate, 'product_id'))
+                && (float) data_get($candidate, 'stock', 0) > 0)
+            ->take(20)
+            ->values()
+            ->all();
+
+        if (data_get($currentNeed, 'partial_stock_fallback_done') !== true
+            && $partialStockCandidates !== []) {
+            $state['needs'][$currentIndex]['partial_stock_fallback'] = true;
+            $state['needs'][$currentIndex]['partial_stock_fallback_done'] = true;
+            $state['last_candidates'] = $partialStockCandidates;
             $state['last_details'] = null;
             $this->transition(
                 $run,

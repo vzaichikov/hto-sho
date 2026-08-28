@@ -113,4 +113,25 @@ class CartQuantityCalculatorTest extends TestCase
             10,
         );
     }
+
+    public function test_partial_stock_mode_caps_to_the_purchasable_remainder_with_a_warning(): void
+    {
+        $need = ['quantity' => 3, 'unit' => 'пучки'];
+        $product = [
+            'display_ratio' => '50 г',
+            'weighted' => false,
+            'step' => 1,
+            'stock' => 1,
+            'available' => true,
+        ];
+
+        $quantity = $this->calculator->quantityFor($need, $product, 3, true);
+
+        $this->assertSame(1.0, $quantity);
+        $this->assertSame(3.0, $this->calculator->requiredQuantityFor($need, $product, 3));
+        $this->assertSame(
+            '⚠️ Залишок у Сільпо не покриває всю потребу «3 пучки»: Гусь додав доступний максимум 1 шт. після вичерпання повних альтернатив.',
+            $this->calculator->partialStockNote($need, $product, 3, $quantity),
+        );
+    }
 }

@@ -185,6 +185,9 @@ class CommitEventCartRunJob implements ShouldBeUnique, ShouldQueue
         ]));
         $hasSynchronizationGap = $missingTargets !== []
             || $managedValidations !== []
+            || collect($run->staged_items ?? [])->contains(
+                fn (array $item): bool => data_get($item, 'partial_stock') === true,
+            )
             || collect($warnings)->contains(
                 fn (string $warning): bool => str_starts_with($warning, 'У Сільпо не вистачило повної кількості:'),
             );
