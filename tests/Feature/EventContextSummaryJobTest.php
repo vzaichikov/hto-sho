@@ -737,6 +737,11 @@ class EventContextSummaryJobTest extends TestCase
         $this->assertStringContainsString('додає ці brings лише Олі, ніколи Саші', $systemPrompt);
         $this->assertStringContainsString('повинна мати цю річ у participants.brings саме цієї людини', $systemPrompt);
         $this->assertStringContainsString('shopping_requirements є структурованим доказовим переліком', $systemPrompt);
+        $this->assertStringContainsString('Один елемент — одна конкретна товарна позиція', $systemPrompt);
+        $this->assertStringContainsString('Не групуй різні товари під спільною назвою', $systemPrompt);
+        $this->assertStringContainsString('створи чотири окремі вимоги з names «Перець», «Кабачок», «Печериці» та «Халумі»', $systemPrompt);
+        $this->assertStringContainsString('призначення для Ліди перенеси до constraints', $systemPrompt);
+        $this->assertStringContainsString('наприклад «салат» або «соуси», не вигадуй її склад', $systemPrompt);
         $this->assertStringContainsString('Якщо джерело назвало товар, але не назвало його кількість, quantity=null', $systemPrompt);
         $this->assertStringContainsString('перенеси до shopping_requirements кожну його позицію без винятків', $systemPrompt);
         $this->assertStringContainsString('не додавай механічно до constraints кожної спільної покупки', $systemPrompt);

@@ -334,6 +334,177 @@ class EventShoppingPlanJobTest extends TestCase
         );
     }
 
+    public function test_legacy_grouped_and_participant_qualified_requirements_are_covered_by_atomic_items(): void
+    {
+        $state = $this->currentEvent()->state;
+        $state['participants'][] = [
+            'name' => 'Ліда',
+            'status' => 'confirmed',
+            'preferences' => [],
+            'restrictions' => ['вегетаріанка'],
+            'allergies' => [],
+            'brings' => [],
+            'source_ids' => [],
+        ];
+        $state['shopping_requirements'] = [[
+            'name' => 'Салат',
+            'quantity' => null,
+            'unit' => null,
+            'constraints' => [],
+            'source_ids' => [],
+        ], [
+            'name' => 'Соуси',
+            'quantity' => null,
+            'unit' => null,
+            'constraints' => [],
+            'source_ids' => [],
+        ], [
+            'name' => 'Овочі для Ліди (перець, кабачок)',
+            'quantity' => null,
+            'unit' => null,
+            'constraints' => ['вегетаріанські'],
+            'source_ids' => [],
+        ], [
+            'name' => 'Печериці для Ліди',
+            'quantity' => null,
+            'unit' => null,
+            'constraints' => ['вегетаріанські'],
+            'source_ids' => [],
+        ], [
+            'name' => 'Халумі для Ліди',
+            'quantity' => null,
+            'unit' => null,
+            'constraints' => ['вегетаріанські'],
+            'source_ids' => [],
+        ]];
+        $event = $this->currentEvent(['state' => $state]);
+        $plan = $this->planPayload();
+        $plan['items'] = [[
+            'name' => 'Салат овочевий',
+            'category' => 'food',
+            'quantity' => 1.5,
+            'unit' => 'кг',
+            'note' => 'Готовий салат для гостей.',
+        ], [
+            'name' => 'Соуси для шашлику',
+            'category' => 'food',
+            'quantity' => 3,
+            'unit' => 'шт',
+            'note' => 'Кілька соусів до мʼяса.',
+        ], [
+            'name' => 'Перець болгарський',
+            'category' => 'food',
+            'quantity' => 0.5,
+            'unit' => 'кг',
+            'note' => 'Для Ліди, вегетаріанський.',
+            'optional' => true,
+        ], [
+            'name' => 'Кабачок',
+            'category' => 'food',
+            'quantity' => 0.5,
+            'unit' => 'кг',
+            'note' => 'Для Ліди, вегетаріанський.',
+        ], [
+            'name' => 'Печериці',
+            'category' => 'food',
+            'quantity' => 0.5,
+            'unit' => 'кг',
+            'note' => 'Для Ліди, вегетаріанські.',
+        ], [
+            'name' => 'Халумі',
+            'category' => 'food',
+            'quantity' => 0.3,
+            'unit' => 'кг',
+            'note' => 'Для Ліди, сир для гриля.',
+        ]];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse($plan)),
+        ]);
+
+        (new BuildEventShoppingPlanJob($event->id, 1))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+
+        $event->refresh();
+        $this->assertSame(PlanGenerationStatus::Ready, $event->plan_generation_status);
+        $this->assertSame(
+            ['Салат овочевий', 'Соуси для шашлику', 'Перець болгарський', 'Кабачок', 'Печериці', 'Халумі'],
+            collect($event->shopping_plan['items'])->pluck('name')->all(),
+        );
+        $this->assertFalse(collect($event->shopping_plan['items'])->firstWhere('name', 'Перець болгарський')['optional']);
+    }
+
+    public function test_a_grouped_explicit_requirement_still_rejects_an_omitted_atomic_item(): void
+    {
+        $state = $this->currentEvent()->state;
+        $state['shopping_requirements'] = [[
+            'name' => 'Овочі (перець, кабачок)',
+            'quantity' => null,
+            'unit' => null,
+            'constraints' => [],
+            'source_ids' => [],
+        ]];
+        $event = $this->currentEvent(['state' => $state]);
+        $plan = $this->planPayload();
+        $plan['items'] = [[
+            'name' => 'Перець болгарський',
+            'category' => 'food',
+            'quantity' => 1,
+            'unit' => 'кг',
+            'note' => 'Кабачок помилково пропущено.',
+        ]];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse($plan)),
+        ]);
+
+        $this->expectException(UnexpectedValueException::class);
+        $this->expectExceptionMessage('omitted an explicit shopping requirement');
+
+        (new BuildEventShoppingPlanJob($event->id, 1))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+    }
+
+    public function test_a_grouped_explicit_quantity_is_checked_across_atomic_items(): void
+    {
+        $state = $this->currentEvent()->state;
+        $state['shopping_requirements'] = [[
+            'name' => 'Овочі (перець, кабачок)',
+            'quantity' => 2,
+            'unit' => 'кг',
+            'constraints' => [],
+            'source_ids' => [],
+        ]];
+        $event = $this->currentEvent(['state' => $state]);
+        $plan = $this->planPayload();
+        $plan['items'] = [[
+            'name' => 'Перець',
+            'category' => 'food',
+            'quantity' => 0.8,
+            'unit' => 'кг',
+            'note' => 'Частина явної вимоги.',
+        ], [
+            'name' => 'Кабачок',
+            'category' => 'food',
+            'quantity' => 0.8,
+            'unit' => 'кг',
+            'note' => 'Частина явної вимоги.',
+        ]];
+        Http::fake([
+            'https://api.openai.com/v1/responses' => Http::response($this->openAiResponse($plan)),
+        ]);
+
+        $this->expectException(UnexpectedValueException::class);
+        $this->expectExceptionMessage('changed an explicit shopping quantity');
+
+        (new BuildEventShoppingPlanJob($event->id, 1))->handle(
+            $this->app->make(ContextAnalysisService::class),
+            $this->app->make(HarnessRecorder::class),
+        );
+    }
+
     public function test_plan_correction_uses_its_immutable_reference_plan(): void
     {
         $basePlan = $this->planPayload('Список, який бачив організатор.');

@@ -224,27 +224,151 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
     private function guardExplicitShoppingRequirements(array $plan, array $state): void
     {
         $items = collect($plan['items'] ?? []);
+        $participantNames = collect($state['participants'] ?? [])
+            ->pluck('name')
+            ->filter(fn (mixed $name): bool => is_string($name) && filled($name))
+            ->values()
+            ->all();
 
         foreach ($state['shopping_requirements'] ?? [] as $requirement) {
-            $name = Str::lower(Str::squish((string) ($requirement['name'] ?? '')));
-            $item = $items->first(fn (array $candidate): bool => Str::lower(
-                Str::squish((string) ($candidate['name'] ?? '')),
-            ) === $name);
+            $matchedItems = $this->shoppingRequirementItemIndexes($items, $requirement, $participantNames)
+                ->map(fn (int $index): array => $items->get($index));
 
-            if ($item === null) {
+            if ($matchedItems->isEmpty()) {
                 throw new UnexpectedValueException('Shopping plan omitted an explicit shopping requirement.');
             }
 
             if (($requirement['quantity'] ?? null) !== null
-                && abs((float) $item['quantity'] - (float) $requirement['quantity']) > 0.0001) {
+                && abs($matchedItems->sum(fn (array $item): float => (float) $item['quantity']) - (float) $requirement['quantity']) > 0.0001) {
                 throw new UnexpectedValueException('Shopping plan changed an explicit shopping quantity.');
             }
 
             if (($requirement['unit'] ?? null) !== null
-                && Str::lower(Str::squish((string) $item['unit'])) !== Str::lower(Str::squish((string) $requirement['unit']))) {
+                && $matchedItems->contains(fn (array $item): bool => Str::lower(
+                    Str::squish((string) $item['unit']),
+                ) !== Str::lower(Str::squish((string) $requirement['unit'])))) {
                 throw new UnexpectedValueException('Shopping plan changed an explicit shopping unit.');
             }
         }
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $items
+     * @param  array<string, mixed>  $requirement
+     * @param  array<int, string>  $participantNames
+     * @return Collection<int, int>
+     */
+    private function shoppingRequirementItemIndexes(
+        Collection $items,
+        array $requirement,
+        array $participantNames,
+    ): Collection {
+        $matchedIndexes = collect();
+        $requiredNames = $this->atomicShoppingRequirementNames(
+            (string) ($requirement['name'] ?? ''),
+            $participantNames,
+        );
+
+        foreach ($requiredNames as $requiredName) {
+            $matchedIndex = $items->search(fn (array $item, int $index): bool => ! $matchedIndexes->contains($index)
+                && $this->shoppingItemCoversRequirementName((string) ($item['name'] ?? ''), $requiredName));
+
+            if ($matchedIndex === false) {
+                return collect();
+            }
+
+            $matchedIndexes->push($matchedIndex);
+        }
+
+        return $matchedIndexes;
+    }
+
+    /**
+     * @param  array<int, string>  $participantNames
+     * @return Collection<int, string>
+     */
+    private function atomicShoppingRequirementNames(string $name, array $participantNames): Collection
+    {
+        preg_match_all('/\(([^()]*)\)/u', $name, $matches);
+
+        $listedNames = collect($matches[1] ?? [])
+            ->flatMap(fn (string $list): array => preg_split(
+                '/\s*(?:[,;\/]|(?<!\p{L})(?:і|й|та)(?!\p{L}))\s*/u',
+                $list,
+                -1,
+                PREG_SPLIT_NO_EMPTY,
+            ) ?: [])
+            ->map(fn (string $item): string => $this->withoutParticipantQualifier($item, $participantNames))
+            ->filter()
+            ->values();
+
+        if ($listedNames->count() > 1) {
+            return $listedNames;
+        }
+
+        return collect([$this->withoutParticipantQualifier($name, $participantNames)])
+            ->filter()
+            ->values();
+    }
+
+    /** @param array<int, string> $participantNames */
+    private function withoutParticipantQualifier(string $name, array $participantNames): string
+    {
+        $participantPrefixes = collect($participantNames)
+            ->map(fn (string $participantName): string => collect(
+                preg_split('/[^\p{L}]+/u', Str::lower($participantName), -1, PREG_SPLIT_NO_EMPTY) ?: [],
+            )->first() ?? '')
+            ->filter()
+            ->map(function (string $participantName): string {
+                $length = min(3, max(2, mb_strlen($participantName) - 1));
+
+                return mb_substr($participantName, 0, $length);
+            })
+            ->unique()
+            ->values();
+
+        if ($participantPrefixes->isEmpty()) {
+            return Str::squish($name);
+        }
+
+        $withoutQualifier = preg_replace_callback(
+            '/\s+для\s+([\p{L}]+)/iu',
+            function (array $matches) use ($participantPrefixes): string {
+                $qualifier = Str::lower($matches[1]);
+
+                return $participantPrefixes->contains(
+                    fn (string $prefix): bool => str_starts_with($qualifier, $prefix),
+                ) ? '' : $matches[0];
+            },
+            $name,
+        );
+
+        return Str::squish($withoutQualifier ?? $name);
+    }
+
+    private function shoppingItemCoversRequirementName(string $itemName, string $requirementName): bool
+    {
+        $normalizedItemName = Str::lower(Str::squish($itemName));
+        $normalizedRequirementName = Str::lower(Str::squish($requirementName));
+
+        if ($normalizedItemName === $normalizedRequirementName) {
+            return true;
+        }
+
+        $itemTokens = $this->shoppingIdentityTokens($normalizedItemName);
+        $requirementTokens = $this->shoppingIdentityTokens($normalizedRequirementName);
+
+        return $requirementTokens->isNotEmpty()
+            && $requirementTokens->diff($itemTokens)->isEmpty();
+    }
+
+    /** @return Collection<int, string> */
+    private function shoppingIdentityTokens(string $name): Collection
+    {
+        return collect(preg_split('/[^\p{L}\p{N}]+/u', Str::lower($name), -1, PREG_SPLIT_NO_EMPTY) ?: [])
+            ->reject(fn (string $token): bool => in_array($token, ['для', 'до', 'на', 'із', 'зі', 'та'], true))
+            ->unique()
+            ->values();
     }
 
     /**
@@ -254,20 +378,25 @@ class BuildEventShoppingPlanJob implements ShouldBeUnique, ShouldQueue
      */
     private function normalizeOptionalItems(array $plan, array $state): array
     {
-        $explicitRequirementNames = collect($state['shopping_requirements'] ?? [])
+        $items = collect($plan['items'] ?? []);
+        $participantNames = collect($state['participants'] ?? [])
             ->pluck('name')
             ->filter(fn (mixed $name): bool => is_string($name) && filled($name))
-            ->map(fn (string $name): string => Str::lower(Str::squish($name)));
+            ->values()
+            ->all();
+        $explicitRequirementIndexes = collect($state['shopping_requirements'] ?? [])
+            ->flatMap(fn (array $requirement): Collection => $this->shoppingRequirementItemIndexes(
+                $items,
+                $requirement,
+                $participantNames,
+            ))
+            ->unique();
 
-        $plan['items'] = collect($plan['items'] ?? [])
-            ->map(function (array $item) use ($explicitRequirementNames): array {
-                $isExplicitRequirement = $explicitRequirementNames->contains(
-                    Str::lower(Str::squish((string) data_get($item, 'name'))),
-                );
-
+        $plan['items'] = $items
+            ->map(function (array $item, int $index) use ($explicitRequirementIndexes): array {
                 return [
                     ...$item,
-                    'optional' => $isExplicitRequirement
+                    'optional' => $explicitRequirementIndexes->contains($index)
                         ? false
                         : (bool) data_get($item, 'optional', false),
                     'minimum_distinct_products' => (int) data_get(

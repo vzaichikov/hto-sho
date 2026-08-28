@@ -15,3 +15,6 @@ Configure AI through services.ai using AI_PROVIDER (openai or ollama), AI_MODEL,
 
 ## Separate LLM instructions from runtime user data
 For every OpenAI-compatible LLM request, keep task, safety, and output-format instructions in OpenAI `instructions` or an Ollama `system` message. Put only runtime JSON and images in the `user` message. Apply the same boundary to retries and repair prompts, and cover both provider payload shapes in tests.
+
+## Keep synthesized shopping requirements atomic
+Context synthesis must emit one independently searchable product per shopping_requirements item. Split explicitly named grouped lists, keep the product identity alone in name, and move audience or purpose qualifiers such as for a participant into constraints. Do not invent a decomposition when the source names only a broad need.

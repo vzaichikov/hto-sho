@@ -13,3 +13,6 @@ SummarizeEventContextJob releases while image sources are unfinished, and every 
 
 ## Prefer structured image timelines in event synthesis
 When an image extraction has a non-empty message_timeline, omit raw ocr_text from SummarizeEventContextJob evidence to avoid sending the same chat twice. Keep ocr_text only as a fallback for null or empty timelines; source_summary remains available.
+
+## Validate legacy grouped requirements atomically
+For saved grouped shopping requirements, require every explicitly named parenthesized product as its own plan item. Treat a qualifier for a known participant as purpose rather than product identity. Extra descriptive words may remain, but every atom must be present; preserve explicit units and compare explicit quantity against the sum of split items.
